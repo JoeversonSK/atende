@@ -1,0 +1,53 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { CheckCheck, ChevronDown, Ellipsis, MessageCircle, Paperclip, Plus, Search, Send, Settings, Smartphone, Users, X } from "lucide-react";
+
+type Message = { id: number; text: string; time: string; mine?: boolean };
+const initialMessages: Message[] = [
+  { id: 1, text: "Olá! Gostaria de saber mais sobre os serviços.", time: "09:41" },
+  { id: 2, text: "Olá, Ana! Claro. Posso te ajudar por aqui.", time: "09:42", mine: true },
+  { id: 3, text: "Vocês atendem empresas pequenas?", time: "09:43" },
+  { id: 4, text: "Sim! Temos soluções para cada etapa do seu negócio.", time: "09:44", mine: true },
+];
+const conversations = [
+  { name: "Ana Martins", initials: "AM", preview: "Vocês atendem empresas pequenas?", time: "09:43", unread: 2, tone: "bg-amber-200" },
+  { name: "João da Silva", initials: "JS", preview: "Perfeito, obrigado!", time: "09:12", tone: "bg-sky-200" },
+  { name: "Equipe Vendas", initials: "EV", preview: "Maria: reunião confirmada", time: "Ontem", tone: "bg-rose-200" },
+  { name: "Carla Ferreira", initials: "CF", preview: "Pode me enviar o catálogo?", time: "Ontem", tone: "bg-emerald-200" },
+];
+
+export default function Home() {
+  const [messages, setMessages] = useState(initialMessages);
+  const [draft, setDraft] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [showConnection, setShowConnection] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => conversations.filter((item) => item.name.toLowerCase().includes(search.toLowerCase())), [search]);
+  function sendMessage() { const text = draft.trim(); if (!text) return; setMessages((current) => [...current, { id: Date.now(), text, time: "agora", mine: true }]); setDraft(""); }
+
+  return <main className="min-h-screen bg-[#eef2f0] p-3 text-[#17312a] sm:p-5">
+    <section className="mx-auto flex min-h-[calc(100vh-24px)] max-w-[1540px] overflow-hidden rounded-[28px] border border-[#d8e3de] bg-[#fbfdfc] shadow-[0_24px_70px_rgba(29,63,51,.10)] sm:min-h-[calc(100vh-40px)]">
+      <aside className="hidden w-[88px] flex-col items-center border-r border-[#e1e9e5] bg-white py-6 lg:flex">
+        <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#1c7c62] text-white shadow-lg shadow-emerald-900/15"><MessageCircle size={23} /></div>
+        <nav className="mt-12 flex flex-1 flex-col gap-4" aria-label="Navegação principal"><button className="grid h-12 w-12 place-items-center rounded-2xl bg-[#e5f4ee] text-[#167557]" aria-label="Conversas"><MessageCircle size={21} /></button><button className="grid h-12 w-12 place-items-center rounded-2xl text-[#789187] hover:bg-[#f0f5f2]" aria-label="Contatos"><Users size={21} /></button><button className="grid h-12 w-12 place-items-center rounded-2xl text-[#789187] hover:bg-[#f0f5f2]" aria-label="Conexões"><Smartphone size={21} /></button></nav>
+        <button className="grid h-12 w-12 place-items-center rounded-2xl text-[#789187] hover:bg-[#f0f5f2]" aria-label="Configurações"><Settings size={21} /></button>
+      </aside>
+      <section className="flex min-w-0 flex-1 flex-col lg:flex-row">
+        <aside className="flex w-full shrink-0 flex-col border-b border-[#e1e9e5] bg-white lg:w-[355px] lg:border-b-0 lg:border-r">
+          <div className="flex items-center justify-between px-5 pb-4 pt-6"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#719187]">Inbox</p><h1 className="mt-1 text-2xl font-bold tracking-tight">Conversas</h1></div><button className="grid h-10 w-10 place-items-center rounded-xl bg-[#1c7c62] text-white" aria-label="Nova conversa"><Plus size={20} /></button></div>
+          <label className="mx-5 flex items-center gap-2 rounded-xl bg-[#f1f5f3] px-3 py-2.5 text-[#789187]"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#92a79e]" placeholder="Buscar conversa" /></label>
+          <div className="mt-4 flex gap-4 border-b border-[#edf1ef] px-5 text-sm font-semibold"><button className="border-b-2 border-[#1c7c62] pb-3 text-[#176d55]">Todas <span className="ml-1 rounded-full bg-[#e5f4ee] px-1.5 py-0.5 text-xs">4</span></button><button className="pb-3 text-[#8ba098]">Não lidas</button></div>
+          <div className="max-h-[280px] overflow-y-auto lg:max-h-none lg:flex-1">{filtered.map((conversation, index) => <button key={conversation.name} className={`flex w-full gap-3 px-5 py-4 text-left transition hover:bg-[#f5f9f7] ${index === 0 ? "bg-[#edf8f3]" : ""}`}><span className={`grid h-11 w-11 shrink-0 place-items-center rounded-full ${conversation.tone} text-xs font-extrabold text-[#31564a]`}>{conversation.initials}</span><span className="min-w-0 flex-1"><span className="flex justify-between gap-2"><strong className="truncate text-sm">{conversation.name}</strong><small className="shrink-0 text-xs text-[#8ba098]">{conversation.time}</small></span><span className="mt-1 flex items-center justify-between gap-2"><span className="truncate text-sm text-[#71877e]">{conversation.preview}</span>{conversation.unread && <b className="grid h-5 min-w-5 place-items-center rounded-full bg-[#1c7c62] px-1 text-[10px] text-white">{conversation.unread}</b>}</span></span></button>)}</div>
+        </aside>
+        <section className="flex min-h-[570px] min-w-0 flex-1 flex-col bg-[#f8fbf9]">
+          <header className="flex items-center justify-between border-b border-[#e1e9e5] bg-white px-5 py-4 sm:px-7"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-full bg-amber-200 text-xs font-extrabold text-[#31564a]">AM</span><div><h2 className="font-bold">Ana Martins</h2><p className="text-xs text-[#5d9e83]">● Online agora</p></div></div><button className="rounded-xl p-2 text-[#6f877e] hover:bg-[#f0f5f2]" aria-label="Mais opções"><Ellipsis /></button></header>
+          <div className="flex-1 space-y-5 overflow-y-auto bg-[radial-gradient(#dce9e3_1px,transparent_1px)] bg-[size:20px_20px] p-5 sm:p-8"><p className="mx-auto w-fit rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#799187] shadow-sm">Hoje</p>{messages.map((message) => <div key={message.id} className={`flex ${message.mine ? "justify-end" : "justify-start"}`}><div className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${message.mine ? "rounded-br-md bg-[#d9f5e8] text-[#174536]" : "rounded-bl-md bg-white text-[#29443b]"}`}><p>{message.text}</p><span className="mt-1 flex items-center justify-end gap-1 text-[11px] text-[#789187]">{message.time}{message.mine && <CheckCheck size={14} className="text-[#19886b]" />}</span></div></div>)}</div>
+          <div className="border-t border-[#e1e9e5] bg-white p-3 sm:px-6 sm:py-4"><div className="flex items-center gap-2 rounded-2xl border border-[#dce8e2] bg-[#fbfdfc] p-2"><button className="rounded-xl p-2 text-[#7b9288] hover:bg-[#edf5f1]" aria-label="Anexar arquivo"><Paperclip size={19} /></button><input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-[#9aaDa4]" placeholder="Escreva uma mensagem"/><button onClick={sendMessage} className="grid h-10 w-10 place-items-center rounded-xl bg-[#1c7c62] text-white transition hover:bg-[#16654f]" aria-label="Enviar mensagem"><Send size={18} /></button></div></div>
+        </section>
+        <aside className="hidden w-[300px] shrink-0 border-l border-[#e1e9e5] bg-white p-6 xl:block"><p className="text-xs font-bold uppercase tracking-[.16em] text-[#719187]">Sessão WhatsApp</p><div className="mt-5 rounded-2xl border border-[#d7e9df] bg-[#f3fbf7] p-4"><div className="flex items-start justify-between"><div className="grid h-10 w-10 place-items-center rounded-xl bg-white text-[#1c7c62]"><Smartphone size={19}/></div><span className={`rounded-full px-2 py-1 text-xs font-bold ${connected ? "bg-[#d9f5e8] text-[#197255]" : "bg-[#fff0d2] text-[#9b6812]"}`}>{connected ? "Conectado" : "Desconectado"}</span></div><h3 className="mt-5 font-bold">Meu WhatsApp</h3><p className="mt-1 text-sm leading-relaxed text-[#70867d]">{connected ? "Sessão ativa e pronta para receber mensagens." : "Conecte um número para iniciar os atendimentos."}</p><button onClick={() => setShowConnection(true)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#1c7c62] px-3 py-2.5 text-sm font-bold text-white hover:bg-[#16654f]">{connected ? "Gerenciar conexão" : "Conectar número"}<ChevronDown size={16}/></button></div><div className="mt-7"><h3 className="font-bold">Próximos passos</h3><ol className="mt-4 space-y-4 text-sm text-[#6f877e]"><li className="flex gap-3"><b className="grid h-5 w-5 place-items-center rounded-full bg-[#1c7c62] text-[11px] text-white">1</b> Crie uma sessão no OpenWA</li><li className="flex gap-3"><b className="grid h-5 w-5 place-items-center rounded-full border border-[#b9cbc3] text-[11px]">2</b> Leia o QR Code no celular</li><li className="flex gap-3"><b className="grid h-5 w-5 place-items-center rounded-full border border-[#b9cbc3] text-[11px]">3</b> Informe a URL do conector</li></ol></div></aside>
+      </section>
+    </section>
+    {showConnection && <div className="fixed inset-0 z-10 grid place-items-center bg-[#102d23]/30 p-4"><div role="dialog" aria-modal="true" className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#6b8f80]">Conectar WhatsApp</p><h2 className="mt-1 text-xl font-bold">Leia o QR Code</h2></div><button onClick={() => setShowConnection(false)} className="rounded-xl p-2 text-[#71877e] hover:bg-[#f0f5f2]" aria-label="Fechar"><X /></button></div><div className="mx-auto my-6 grid h-44 w-44 grid-cols-8 gap-1 border-8 border-white bg-white p-2 shadow-md">{Array.from({ length: 64 }, (_, index) => <span key={index} className={(index * 13 + index % 5) % 7 < 3 ? "bg-[#17312a]" : "bg-white"} />)}</div><p className="text-center text-sm leading-relaxed text-[#6f877e]">No WhatsApp, acesse <b>Dispositivos conectados</b> e leia o código acima.</p><button onClick={() => { setConnected(true); setShowConnection(false); }} className="mt-6 w-full rounded-xl bg-[#1c7c62] py-3 text-sm font-bold text-white">Simular conexão concluída</button><p className="mt-3 text-center text-xs text-[#8da198]">Na versão integrada, o QR Code será fornecido pelo OpenWA.</p></div></div>}
+  </main>;
+}
