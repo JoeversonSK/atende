@@ -1,0 +1,116 @@
+name: atende
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: atende-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      OPENWA_INTERNAL_URL: http://openwa:2785
+      DATABASE_URL: postgresql://atende:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}@postgres:5432/atende
+      REDIS_URL: redis://redis:6379
+      APP_SESSION_SECRET: ${APP_SESSION_SECRET:?Defina APP_SESSION_SECRET no arquivo .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      openwa:
+        condition: service_started
+    networks:
+      - atende-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: atende-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atende
+      POSTGRES_USER: atende
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+    volumes:
+      - atende-postgres:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atende -d atende"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - atende-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: atende-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - atende-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - atende-network
+
+  openwa:
+    build:
+      context: ./openwa
+      dockerfile: Dockerfile
+    container_name: atende-openwa
+    restart: unless-stopped
+    stop_grace_period: 45s
+    shm_size: 1gb
+    environment:
+      NODE_ENV: production
+      PORT: 2785
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: atende
+      DATABASE_USERNAME: atende
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+      POSTGRES_SCHEMA: openwa
+      DATABASE_SYNCHRONIZE: "false"
+      ENGINE_TYPE: whatsapp-web.js
+      SESSION_DATA_PATH: /app/data/sessions
+      PUPPETEER_HEADLESS: "true"
+      WWEBJS_AUTH_TIMEOUT_MS: "180000"
+      PUPPETEER_ARGS: --no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage
+      STORAGE_TYPE: local
+      STORAGE_LOCAL_PATH: /app/data/media
+      REDIS_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_ENABLED: "true"
+      API_MASTER_KEY: ${OPENWA_MASTER_KEY:?Defina OPENWA_MASTER_KEY no arquivo .env}
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      AUTO_START_SESSIONS: "true"
+      ATENDE_REQUIRE_OPERATOR: "true"
+    volumes:
+      - atende-openwa:/app/data
+    ports:
+      - "127.0.0.1:2785:2785"
+    expose:
+      - "2785"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - atende-network
+
+volumes:
+  atende-postgres:
+  atende-redis:
+  atende-openwa:
+
+networks:
+  atende-network:
+    driver: bridge

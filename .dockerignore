@@ -1,0 +1,12 @@
+node_modules
+dist
+.next
+.vinext
+.wrangler
+.sites-runtime
+.git
+.wrangler
+.sites-runtime
+openwa
+work/*.log
+npm-debug.log

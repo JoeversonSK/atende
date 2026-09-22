@@ -1,0 +1,18 @@
+const fs=require('node:fs');
+const assert=require('node:assert/strict');
+const ts=require('typescript');
+const React=require('react');
+const {renderToStaticMarkup}=require('react-dom/server');
+let index=0;
+const react={...React,useEffect(){},useState(initial){const value=index++===2?false:initial;return[value,()=>{}];}};
+const compiled=ts.transpileModule(fs.readFileSync('app/contact-profile.tsx','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText;
+const loaded={exports:{}};
+new Function('require','module','exports',compiled)(id=>id==='react'?react:require(id),loaded,loaded.exports);
+const html=renderToStaticMarkup(loaded.exports.ContactProfile({baseUrl:'http://localhost:3000',apiKey:'test',token:'test',sessionId:'test',chatId:'test',contactName:'Test',canEdit:true,dirtyRef:{current:false}}));
+assert.ok(html.includes('Prioridade'));
+assert.ok(html.includes('Dados do usuário'));
+assert.ok(html.includes('Notas'));
+assert.ok(!html.includes('Tipo de atendimento'));
+assert.ok(!html.includes('Eventos da agenda'));
+assert.ok(!html.includes('Presencial'));
+console.log('PASS: contact profile retains client data and priority, without appointment or service-type controls.');

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">Atende</title>
+  <desc id="desc">Central de atendimento multiusuário com WhatsApp e Docker</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#102b3a"/><stop offset="1" stop-color="#0e615c"/></linearGradient>
+    <filter id="shadow"><feDropShadow dx="0" dy="12" stdDeviation="18" flood-opacity=".22"/></filter>
+  </defs>
+  <rect width="1280" height="420" rx="28" fill="url(#bg)"/>
+  <circle cx="1110" cy="80" r="220" fill="#7ed9aa" opacity=".08"/><circle cx="80" cy="410" r="180" fill="#7ed9aa" opacity=".06"/>
+  <g transform="translate(90 88)">
+    <path d="M0 58C0 25.97 25.97 0 58 0s58 25.97 58 58-25.97 58-58 58c-9.6 0-18.65-2.33-26.64-6.46L4 116l7.35-25.17A57.72 57.72 0 0 1 0 58Z" fill="none" stroke="#8ee2b4" stroke-width="9" stroke-linejoin="round"/>
+    <path d="M34 57h48M34 39h32M34 75h39" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <text x="90" y="270" fill="#fff" font-family="Arial,Helvetica,sans-serif" font-size="76" font-weight="700">atende</text>
+  <text x="90" y="320" fill="#bcebd2" font-family="Arial,Helvetica,sans-serif" font-size="25" letter-spacing="1">CENTRAL DE ATENDIMENTO MULTIUSUÁRIO</text>
+  <g transform="translate(760 63)" filter="url(#shadow)">
+    <rect width="430" height="292" rx="22" fill="#f7faf9"/>
+    <rect width="430" height="54" rx="22" fill="#edf3f1"/><rect y="32" width="430" height="22" fill="#edf3f1"/>
+    <circle cx="30" cy="27" r="10" fill="#0d8f79"/><rect x="55" y="19" width="115" height="16" rx="8" fill="#b8c9c5"/>
+    <rect x="22" y="76" width="130" height="194" rx="13" fill="#e8efed"/>
+    <circle cx="48" cy="105" r="14" fill="#c2d7d1"/><rect x="70" y="96" width="61" height="8" rx="4" fill="#76948d"/><rect x="70" y="112" width="48" height="6" rx="3" fill="#b2c4c0"/>
+    <circle cx="48" cy="151" r="14" fill="#c2d7d1"/><rect x="70" y="142" width="53" height="8" rx="4" fill="#76948d"/><rect x="70" y="158" width="65" height="6" rx="3" fill="#b2c4c0"/>
+    <rect x="174" y="80" width="230" height="34" rx="10" fill="#fff" stroke="#dce6e3"/>
+    <rect x="190" y="136" width="112" height="38" rx="12" fill="#fff" stroke="#dce6e3"/><rect x="275" y="192" width="114" height="42" rx="12" fill="#d0f4dc"/>
+    <rect x="174" y="249" width="230" height="25" rx="12" fill="#fff" stroke="#dce6e3"/>
+  </g>
+</svg>
