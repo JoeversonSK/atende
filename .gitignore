@@ -28,8 +28,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Local secrets. Keep only the safe template in Git.
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -44,3 +45,11 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+*.tsbuildinfo
+
+# Vendored OpenWA build/runtime files
+/openwa/node_modules/
+/openwa/dist/
+/openwa/data/
+/openwa/.env
+/openwa/.git/
