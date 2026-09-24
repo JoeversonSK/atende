@@ -34,6 +34,8 @@ async function main(){
   await assert.rejects(()=>profiles.save('test',session,chat,{revision:1,data:{...data,tags:Array(101).fill('x')}}),e=>e.getStatus()===400);
   await assert.rejects(()=>profiles.save('wrong',session,chat,{revision:1,data}));
   await runner.query("INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_id,assignee_name,updated_at) VALUES ($1,$2,$3,$4,NOW()-INTERVAL '1 hour')",[session,chat,'qa-analyst','Test analyst']);
+  const assignedActivity=(await profiles.overview('test',session)).activity.find(a=>a.chatId===chat);
+  assert.equal(assignedActivity.queueSince,null);assert.equal(assignedActivity.assigneeId,'qa-analyst');assert.equal(assignedActivity.assigneeName,'Test analyst');
   const second=await profiles.save('test',session,chat,{revision:1,data:{...first.data,status:'closed',tags:[]}});
   assert.equal(second.revision,2);assert.equal(second.data.status,'closed');assert.equal(second.data.tags.length,0);
   assert.equal((await profiles.overview('test',session)).completed.reduce((n,c)=>n+c.count,0),1);

@@ -52,10 +52,12 @@ export class ContactProfileService implements OnModuleInit {
       MAX(timestamp) FILTER (WHERE direction='outgoing' AND status NOT IN ('failed','pending')) AS outgoing
       FROM openwa.messages WHERE "sessionId"=$1 GROUP BY "chatId"
     ) SELECT a."chatId",a.incoming,a.outgoing,
-      (SELECT MIN(m.timestamp) FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m.direction='incoming' AND m.timestamp>COALESCE(a.outgoing,0) AND m.timestamp>=COALESCE((SELECT (p.data->>'queueOpenedAt')::bigint FROM openwa.contact_profiles p WHERE p.session_id=$1 AND p.chat_id=a."chatId"),0)) AS "queueSince",
+      CASE WHEN owner.chat_id IS NOT NULL THEN NULL ELSE (SELECT MIN(m.timestamp) FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m.direction='incoming' AND m.timestamp>COALESCE(a.outgoing,0) AND m.timestamp>=COALESCE((SELECT (p.data->>'queueOpenedAt')::bigint FROM openwa.contact_profiles p WHERE p.session_id=$1 AND p.chat_id=a."chatId"),0)) END AS "queueSince",
       (SELECT MIN(m.timestamp) FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m.direction='outgoing' AND m.status NOT IN ('failed','pending') AND m.timestamp>COALESCE(a.incoming,0)) AS "waitingSince"
       ,(SELECT m."chatName" FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m."chatName" IS NOT NULL ORDER BY m.timestamp DESC NULLS LAST LIMIT 1) AS name
-      FROM activity a WHERE a."chatId" NOT LIKE '%@g.us' AND a."chatId" NOT LIKE '%@broadcast' AND a."chatId" NOT LIKE '%@newsletter'`,[session]);
+      ,owner.assignee_id AS "assigneeId",COALESCE(agent.display_name,owner.assignee_name) AS "assigneeName",owner.updated_at AS "assignedAt"
+      FROM activity a LEFT JOIN openwa.conversation_assignments owner ON owner.session_id=$1 AND owner.chat_id=a."chatId" LEFT JOIN openwa.operator_users agent ON agent.id=owner.assignee_id
+      WHERE a."chatId" NOT LIKE '%@g.us' AND a."chatId" NOT LIKE '%@broadcast' AND a."chatId" NOT LIKE '%@newsletter'`,[session]);
     const completed=await this.db.query(`SELECT c.assignee_id AS "assigneeId",COALESCE(u.display_name,c.assignee_name,'Sem responsável') AS "assigneeName",COUNT(*)::int AS count,SUM(c.duration_seconds)::bigint AS "totalSeconds" FROM openwa.support_completions c LEFT JOIN openwa.operator_users u ON u.id=c.assignee_id WHERE c.session_id=$1 AND (c.closed_at AT TIME ZONE 'America/Sao_Paulo')::date=(NOW() AT TIME ZONE 'America/Sao_Paulo')::date GROUP BY c.assignee_id,COALESCE(u.display_name,c.assignee_name,'Sem responsável')`,[session]);
     return {contacts,agents,activity,completed};
   }
