@@ -12,7 +12,7 @@ export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:P
  const profiles=new Map(overview.contacts.map(c=>[c.chatId,c.data]));
  const activity=new Map(overview.activity.map(c=>[c.chatId,c]));
  const rows=chats.filter(c=>!/@(g\.us|broadcast|newsletter)$/.test(c.id)).map(c=>{
-   const profile=profiles.get(c.id),a=activity.get(c.id),owner=owners[c.id];
+   const profile=profiles.get(c.id),a=activity.get(c.id),owner=owners[c.id]||(a?.assigneeId&&a.assigneeName?{assigneeId:a.assigneeId,assigneeName:a.assigneeName,updatedAt:a.assignedAt||undefined}:undefined);
    return {...c,name:profile?.name||c.name,owner,closed:profile?.status==="closed",type:profile?.serviceType||"remote",priority:profile?.priority||"normal",seconds:elapsed(Date.parse(owner?.updatedAt||""),now),queueSeconds:elapsed(Number(a?.queueSince)*1000,now),customerSeconds:Number(a?.outgoing)>Number(a?.incoming)?elapsed(Number(a?.waitingSince)*1000,now):null};
  });
  const active=rows.filter(r=>!r.closed&&r.owner),queue=rows.filter(r=>!r.closed&&!r.owner&&r.queueSeconds!==null).sort((a,b)=>(b.queueSeconds??-1)-(a.queueSeconds??-1));

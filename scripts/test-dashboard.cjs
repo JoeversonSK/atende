@@ -27,18 +27,21 @@ assert.equal((html.match(/Test analyst/g)||[]).length,3);
 assert.ok(!html.includes('board-footnote'));
 const timestamp=Date.now()/1000;
 const queueHtml=renderToStaticMarkup(React.createElement(TicketDashboard,{
- chats:[{id:'waiting@c.us',name:'Incoming awaiting reply'},{id:'empty@c.us',name:'No messages'},{id:'outgoing@c.us',name:'Only outgoing'},{id:'answered@c.us',name:'Already answered'},{id:'read@c.us',name:'Read but unanswered'},{id:'closed@c.us',name:'Closed incoming'},{id:'group@g.us',name:'Group incoming'}],
+ chats:[{id:'waiting@c.us',name:'Incoming awaiting reply'},{id:'empty@c.us',name:'No messages'},{id:'outgoing@c.us',name:'Only outgoing'},{id:'answered@c.us',name:'Already answered'},{id:'read@c.us',name:'Read but unanswered'},{id:'assigned@c.us',name:'Assigned incoming'},{id:'closed@c.us',name:'Closed incoming'},{id:'group@g.us',name:'Group incoming'}],
  owners:{},overview:{agents:[],contacts:[{chatId:'closed@c.us',data:{status:'closed'}}],activity:[
   {chatId:'waiting@c.us',incoming:String(timestamp-1000),outgoing:null,queueSince:String(timestamp-1000)},
   {chatId:'outgoing@c.us',incoming:null,outgoing:String(timestamp-300),queueSince:null},
   {chatId:'answered@c.us',incoming:String(timestamp-500),outgoing:String(timestamp-100),queueSince:null},
   {chatId:'read@c.us',incoming:String(timestamp-100),outgoing:null,queueSince:String(timestamp-100)},
+  {chatId:'assigned@c.us',incoming:String(timestamp-1200),outgoing:null,queueSince:null,assigneeId:'agent',assigneeName:'Assigned analyst',assignedAt:new Date(Date.now()-5000).toISOString()},
   {chatId:'closed@c.us',incoming:String(timestamp-100),queueSince:String(timestamp-100)},
   {chatId:'group@g.us',incoming:String(timestamp-100),queueSince:String(timestamp-100)}
  ]},onOpen:()=>{},onClose:()=>{}
 }));
 for(const name of ['Incoming awaiting reply','Read but unanswered'])assert.ok(queueHtml.includes(name),name);
 for(const name of ['No messages','Only outgoing','Already answered','Closed incoming','Group incoming'])assert.ok(!queueHtml.includes(name),name);
+assert.ok(queueHtml.includes('Assigned incoming'));
+assert.equal((queueHtml.match(/>Assigned incoming<\/button>/g)||[]).length,1);
 assert.ok(queueHtml.includes('<b>2</b><span>Na fila</span>'));
 assert.ok(queueHtml.includes('<b>1</b><span>Em alerta</span>'));
 assert.ok(queueHtml.indexOf('>Incoming awaiting reply</button>')<queueHtml.indexOf('>Read but unanswered</button>'));
