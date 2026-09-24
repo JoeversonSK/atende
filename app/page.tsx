@@ -12,7 +12,8 @@ import { Archive, ArrowLeft, CheckCheck, CircleAlert, Filter, LoaderCircle, Mess
 
 type Config = { baseUrl: string; apiKey: string; sessionId: string };
 type Chat = { id: string; name: string; phone?:string; last: string; time: string; unread: number };
-type Message = { id: string; body: string; time: string; mine: boolean; type: string; media?: { data: string; mimetype: string } };
+type MessageMedia = { data?: string; mimetype: string; filename?: string; omitted?: boolean };
+type Message = { id: string; body: string; time: string; mine: boolean; type: string; media?: MessageMedia };
 type MessageWithTimestamp = Message & { timestamp: number };
 type Account = { name: string; phone: string };
 type Assignment = { assigneeName: string; assigneeId?: string; updatedAt?: string };
@@ -75,9 +76,66 @@ function toMessage(value: Record<string, unknown>): MessageWithTimestamp {
   const date = timestamp ? new Date(timestamp) : null;
   const type = String(value.type || "").toLowerCase();
   const fallback = ({ sticker: "Figurinha", image: "Imagem", video: "Vídeo", audio: "Áudio", voice: "Mensagem de voz", document: "Documento", location: "Localização", contact: "Contato" } as Record<string, string>)[type] || "";
-  const mediaValue = value.media && typeof value.media === "object" ? value.media as Record<string, unknown> : null;
-  const media = mediaValue && typeof mediaValue.data === "string" && typeof mediaValue.mimetype === "string" ? { data: mediaValue.data, mimetype: mediaValue.mimetype } : undefined;
+  let metadata: Record<string, unknown> | null = null;
+  if (value.metadata && typeof value.metadata === "object") metadata = value.metadata as Record<string, unknown>;
+  else if (typeof value.metadata === "string") { try { metadata = JSON.parse(value.metadata) as Record<string, unknown>; } catch { /* Ignore invalid legacy metadata. */ } }
+  const mediaValue = value.media && typeof value.media === "object" ? value.media as Record<string, unknown> : metadata?.media && typeof metadata.media === "object" ? metadata.media as Record<string, unknown> : null;
+  const defaultMime = ({ sticker: "image/webp", image: "image/jpeg", video: "video/mp4", audio: "audio/mpeg", voice: "audio/ogg", document: "application/octet-stream" } as Record<string, string>)[type];
+  const media = mediaValue || (value.hasMedia === true && defaultMime) ? {
+    data: typeof mediaValue?.data === "string" ? mediaValue.data : undefined,
+    mimetype: typeof mediaValue?.mimetype === "string" ? mediaValue.mimetype : defaultMime || "application/octet-stream",
+    filename: typeof mediaValue?.filename === "string" ? mediaValue.filename : undefined,
+    omitted: mediaValue?.omitted === true,
+  } : undefined;
   return { id: String(value.waMessageId || value.id || value.messageId || eventId()), body: String(value.body || value.text || value.content || fallback), mine: Boolean(value.fromMe) || String(value.direction).toLowerCase() === "outgoing", time: messageDateTime(date), timestamp, type, media };
+}
+
+function mergeMessages(messages: MessageWithTimestamp[]) {
+  const merged = new Map<string, MessageWithTimestamp>();
+  for (const message of messages) {
+    const previous = merged.get(message.id);
+    merged.set(message.id, previous ? {
+      ...previous,
+      ...message,
+      media: message.media?.data ? message.media : previous.media?.data ? previous.media : message.media || previous.media,
+    } : message);
+  }
+  return [...merged.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+const mediaSource = (media: MessageMedia) => media.data
+  ? /^https?:\/\//i.test(media.data) ? media.data : `data:${media.mimetype};base64,${media.data}`
+  : "";
+
+function MessageAttachment({ message, config, chatId }: { message: Message; config: Config; chatId: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  const [source,setSource]=useState(message.media ? mediaSource(message.media) : "");
+  const [failed,setFailed]=useState(false);
+  const [retry,setRetry]=useState(0);
+  const media=message.media;
+  useEffect(()=>{
+    if(!media)return;
+    if(media.data){setSource(mediaSource(media));setFailed(false);return;}
+    const element=host.current;if(!element)return;
+    let active=true,objectUrl="";
+    const load=async()=>{
+      try{
+        const response=await request(config,`/sessions/${encodeURIComponent(config.sessionId)}/messages/${encodeURIComponent(chatId)}/${encodeURIComponent(message.id)}/media`);
+        if(!response.ok)throw new Error("Mídia indisponível");
+        objectUrl=URL.createObjectURL(await response.blob());
+        if(active){setSource(objectUrl);setFailed(false);}
+      }catch{if(active)setFailed(true);}
+    };
+    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){observer.disconnect();void load();}},{rootMargin:"300px"});
+    observer.observe(element);
+    return()=>{active=false;observer.disconnect();if(objectUrl)URL.revokeObjectURL(objectUrl);};
+  },[chatId,config,media,message.id,retry]);
+  if(!media)return null;
+  const visual=source&&(message.type==="image"||message.type==="sticker")?<img className="wa-media-image" src={source} alt={message.type==="sticker"?"Figurinha":"Imagem"}/>
+    :source&&message.type==="video"?<video className="wa-media-video" controls preload="metadata" src={source}/>
+    :source&&(message.type==="audio"||message.type==="voice")?<audio className="wa-media-audio" controls preload="metadata" src={source}/>
+    :source&&message.type==="document"?<a className="wa-document" href={source} download={media.filename||"arquivo"}>Baixar {media.filename||"documento"}</a>:null;
+  return <div ref={host} className="wa-media-container">{visual||<button className="wa-media-placeholder" onClick={()=>setRetry(value=>value+1)}>{failed?"Mídia indisponível · tentar novamente":"Carregando mídia…"}</button>}</div>;
 }
 
 export default function Home() {
@@ -220,14 +278,14 @@ export default function Home() {
 
   const refreshMessages = useCallback(async (chat: Chat, active = config, loadLiveHistory = false) => {
     if (!active.apiKey || !active.sessionId || !chat.id) return;
-    const localPath = `/sessions/${encodeURIComponent(active.sessionId)}/messages?chatId=${encodeURIComponent(chat.id)}&limit=100&inlineMedia=false`;
+    const localPath = `/sessions/${encodeURIComponent(active.sessionId)}/messages?chatId=${encodeURIComponent(chat.id)}&limit=100&inlineMedia=true`;
     const historyPath = `/sessions/${encodeURIComponent(active.sessionId)}/messages/${encodeURIComponent(chat.id)}/history?limit=2000&deep=true`;
     const response = await request(active, loadLiveHistory ? historyPath : localPath);
     if (!response.ok && loadLiveHistory) {
       const fallback = await request(active, localPath);
       if (!fallback.ok) throw new Error(errorMessage(await fallback.json().catch(() => null)));
       const data = await fallback.json();
-      const fallbackMessages = listFrom(data, "messages").map(toMessage).filter((message) => message.body).sort((a, b) => a.timestamp - b.timestamp);
+      const fallbackMessages = mergeMessages(listFrom(data, "messages").map(toMessage).filter((message) => message.body));
       historyCacheRef.current.set(chat.id, fallbackMessages);
       if(selectedRef.current?.id===chat.id)setMessages(fallbackMessages);
       setNotice("O histórico ao vivo não respondeu; exibindo as mensagens já salvas.");
@@ -238,7 +296,7 @@ export default function Home() {
     const applyRecords = (records: Record<string, unknown>[], replace = false) => {
       const incoming = records.map(toMessage).filter((message) => message.body);
       const combined = replace ? incoming : [...(historyCacheRef.current.get(chat.id)||[]), ...incoming];
-      const next = [...new Map(combined.map((message) => [message.id, message])).values()].sort((a, b) => a.timestamp - b.timestamp);
+      const next = mergeMessages(combined);
       historyCacheRef.current.set(chat.id, next);
       if(selectedRef.current?.id===chat.id)setMessages(next);
     };
@@ -600,7 +658,7 @@ export default function Home() {
       {syncWarning&&<p className="sync-warning" role="status">{syncWarning}</p>}<div className="wa-chat-list">{shownChats.length ? shownChats.map((chat) => <button key={chat.id} onClick={() => chooseChat(chat)} aria-pressed={selected?.id === chat.id} className={`wa-chat ${selected?.id === chat.id ? "selected" : ""} ${chat.unread ? "has-unread" : ""}`}><span className="wa-avatar wa-contact">{initials(chat.name)}</span><span className="wa-chat-copy"><span><b>{chat.name}</b><time className={chat.unread ? "unread-time" : ""}>{chat.time}</time></span><span><i>{chat.last}</i>{assignments[chat.id] && <span className="wa-owner-marker" title={`Atribuído para ${assignments[chat.id].assigneeName}`} aria-label={`Atribuído para ${assignments[chat.id].assigneeName}`}><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="7" r="4" /><path d="M4 21v-3a8 8 0 0 1 16 0v3Z" /></svg></span>}{chat.unread > 0 && <em>{chat.unread > 99 ? "99+" : chat.unread}</em>}</span><span className={`chat-owner-label ${assignments[chat.id] ? "assigned" : ""}`}><UserRound size={11}/>{assignments[chat.id]?.assigneeName || "Sem responsável"}</span></span></button>) : <div className="wa-list-empty"><MessageCircle size={28} /><p>{config.sessionId ? "Nenhuma conversa encontrada." : "Conecte o OpenWA para ver as conversas."}</p></div>}</div>
     </aside>
     <section className="wa-conversation">{selected ? <><header className="wa-conversation-header"><button className="wa-back" aria-label="Voltar às conversas" onClick={closeConversation}><ArrowLeft size={21} /></button><span className="wa-avatar wa-contact">{initials(selected.name)}</span><div className="wa-contact-title"><b>{selected.name}</b><small>{assignment ? `Em atendimento por ${assignment.assigneeName}` : connected ? "Sem atendente atribuído" : "aguardando conexão"}</small></div><div className="wa-top-actions">{(operator?.role==="admin"||operator?.canAssign)&&<button className="finish-ticket" onClick={()=>void finishTicket()} disabled={closingTickets.has(selected.id)||overview.contacts.some(c=>c.chatId===selected.id&&c.data.status==="closed")} title="Concluir atendimento e remover atribuição"><CheckCheck size={18}/><span>{closingTickets.has(selected.id)?"Encerrando…":overview.contacts.some(c=>c.chatId===selected.id&&c.data.status==="closed")?"Atendimento encerrado":"Encerrar atendimento"}</span></button>}<button className="profile-toggle" onClick={()=>setDetailsOpen(!detailsOpen)} aria-label="Mostrar ou ocultar perfil do contato" aria-expanded={detailsOpen}><PanelRight size={18}/><span>Perfil</span></button><button onClick={() => setConversationMenuOpen((open) => !open)} aria-label="Opções"><MoreVertical size={20} /></button>{conversationMenuOpen && <div className="wa-conversation-menu"><button onClick={() => { setConversationMenuOpen(false); setLoadingMessages(true); refreshMessages(selected, config, true).catch(() => undefined).finally(() => setLoadingMessages(false)); }}>Carregar histórico completo</button><button onClick={() => { setConversationMenuOpen(false); closeConversation(); }}>Fechar conversa</button></div>}</div></header>
-      <div className="wa-message-area"><p className="wa-encryption">Histórico da conversa · Atendimento da equipe</p>{loadingMessages ? <p className="wa-no-messages">Carregando mensagens…</p> : messages.length ? messages.map((message) => { const source = message.media ? `data:${message.media.mimetype};base64,${message.media.data}` : ""; const visual = message.media && (message.type === "image" || message.type === "sticker") ? <img className="wa-media-image" src={source} alt={message.type === "sticker" ? "Figurinha" : "Imagem recebida"} /> : message.media && message.type === "video" ? <video className="wa-media-video" controls preload="metadata" src={source} /> : message.media && (message.type === "audio" || message.type === "voice") ? <audio className="wa-media-audio" controls src={source} /> : message.media && message.type === "document" ? <a className="wa-document" href={source} download="arquivo">Baixar documento</a> : null; return <div key={message.id} className={`wa-message ${message.mine ? "mine" : ""}`}><article>{visual}{message.body && !(visual && ["Imagem", "Vídeo", "Áudio", "Mensagem de voz", "Figurinha", "Documento"].includes(message.body)) && <p>{message.body}</p>}<footer>{message.time}{message.mine && <CheckCheck size={15} />}</footer></article></div>; }) : <p className="wa-no-messages">Nenhuma mensagem nesta conversa ainda.</p>}<div ref={bottomRef} /></div>
+      <div className="wa-message-area"><p className="wa-encryption">Histórico da conversa · Atendimento da equipe</p>{loadingMessages ? <p className="wa-no-messages">Carregando mensagens…</p> : messages.length ? messages.map((message) => { const hasAttachment=Boolean(message.media); return <div key={message.id} className={`wa-message ${message.mine ? "mine" : ""}`}><article><MessageAttachment message={message} config={config} chatId={selected.id}/>{message.body && !(hasAttachment && ["Imagem", "Vídeo", "Áudio", "Mensagem de voz", "Figurinha", "Documento"].includes(message.body)) && <p>{message.body}</p>}<footer>{message.time}{message.mine && <CheckCheck size={15} />}</footer></article></div>; }) : <p className="wa-no-messages">Nenhuma mensagem nesta conversa ainda.</p>}<div ref={bottomRef} /></div>
       <footer className="wa-composer"><button onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Emojis"><Smile size={25} /></button><button onClick={() => fileInputRef.current?.click()} aria-label="Anexar arquivo"><Paperclip size={24} /></button><input ref={fileInputRef} className="wa-file-input" type="file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void sendMedia(file); event.currentTarget.value = ""; }} />{emojiOpen && <div className="wa-emojis">{emojis.map((emoji) => <button key={emoji} onClick={() => setDraft((value) => value + emoji)}>{emoji}</button>)}</div>}{recording ? <><span className="wa-recording-label">{recordingPaused ? "Pausado" : "Gravando áudio"}</span><button onClick={discardRecording} aria-label="Excluir gravação"><Trash2 size={21} /></button><button onClick={pauseOrResumeRecording} aria-label={recordingPaused ? "Retomar gravação" : "Pausar gravação"}>{recordingPaused ? <Play size={21} /> : <Pause size={21} />}</button><button className="wa-send" onClick={sendRecording} aria-label="Enviar áudio"><Send size={21} /></button></> : <><input disabled={busy} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} placeholder="Digite uma mensagem" />{draft.trim() ? <button className="wa-send" aria-label="Enviar mensagem" disabled={busy} onClick={sendMessage}><Send size={21} /></button> : <button aria-label="Gravar áudio" onClick={startRecording}><Mic size={24} /></button>}</>}</footer>
     </> : <div className="wa-welcome"><div className="welcome-symbol"><MessageCircle size={48} strokeWidth={1.5}/><span><CheckCheck size={20}/></span></div><span className="section-kicker">BEM-VINDO AO SEU ESPAÇO</span><h1>Cada conversa, mais próxima.</h1><p>Escolha um contato ao lado para continuar o atendimento.<br/>Sua equipe, suas conversas e os detalhes certos em um só lugar.</p><div className="welcome-stats"><article><Inbox size={20}/><strong>{chats.length}</strong><span>Conversas</span></article><article><Bell size={20}/><strong>{chats.filter(c=>c.unread>0).length}</strong><span>Não lidas</span></article><article><UserRound size={20}/><strong>{chats.filter(c=>assignments[c.id]?.assigneeId===operator.id).length}</strong><span>Com você</span></article></div><button onClick={()=>setContactsOpen(true)}><UsersRound size={17}/>Contatos</button><small>Use os filtros para encontrar seus atendimentos.</small></div>}</section>
     {selected && <aside className={`wa-details ${detailsOpen ? "profile-is-open" : "profile-is-closed"}`}><header><div><span className="section-kicker">INFORMAÇÕES</span><b>Perfil do contato</b></div><button onClick={() => setDetailsOpen(false)} aria-label="Fechar perfil"><X size={20} /></button></header><section><span className="wa-detail-avatar">{initials(selected.name)}</span><b>{selected.name}</b><small>{selected.phone || "Telefone não informado"}</small></section><section className="wa-assignment"><small>RESPONSÁVEL PELO ATENDIMENTO</small><strong>{assignment?.assigneeName || "Nenhum atendente atribuído"}</strong><p>{assignment ? "Responsável por este atendimento" : "Assuma para organizar o atendimento."}</p><button className="wa-primary" disabled={savingAssignment || !operator} onClick={()=>saveAssignment()}>{assignment ? "Assumir com minha conta" : "Assumir conversa"}</button>{(operator?.role==="admin"||operator?.canAssign)&&<div className="transfer-controls"><label>Encaminhar para<select aria-label="Atendente de destino" value={transferId} onChange={e=>setTransferId(e.target.value)}><option value="">Selecione um atendente</option>{overview.agents.map(a=><option key={a.id} value={a.id}>{a.displayName}</option>)}</select></label><button className="wa-primary" disabled={!transferId||savingAssignment} onClick={()=>saveAssignment(transferId)}>Encaminhar atendimento</button></div>}{assignment && <button className="wa-unassign" disabled={savingAssignment} onClick={clearAssignment}>Remover atribuição</button>}</section><ContactProfile apiKey={config.apiKey} dirtyRef={profileDirtyRef} key={`${config.sessionId}:${selected.id}:${profileReload}`} baseUrl={config.baseUrl} token={operatorToken} sessionId={config.sessionId} chatId={selected.id} contactName={selected.name} contactPhone={selected.phone} onSaved={data=>{refreshGeneration.current++;setChats(current=>current.map(c=>c.id===selected.id?{...c,name:data.name||data.phone||"Contato",phone:data.phone}:c));setSelected(current=>current?{...current,name:data.name||data.phone||"Contato",phone:data.phone}:null);void refreshChats();}} canEdit={operator?.role === "admin" || operator?.canAssign === true} /></aside>}
