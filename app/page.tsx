@@ -2593,12 +2593,15 @@ export default function Home() {
   }
 
   const contactRows = useMemo(() => {
+    const hasName = (value?: string) => Boolean(value && /[\p{L}]/u.test(value));
+    const displayName = (...values: (string | undefined)[]) => values.find(hasName)?.trim() || "Contato sem nome";
+    const hiddenIds = new Set(overview.contacts.filter(contact => contact.data.directoryHidden).map(contact => contact.chatId));
     const rows = new Map(
-      chats.map((c) => [
+      chats.filter(c => !hiddenIds.has(c.id)).map((c) => [
         c.id,
         {
           id: c.id,
-          name: c.name,
+          name: displayName(c.name),
           phone: c.phone,
           avatar: c.avatar,
           tags: [] as string[],
@@ -2606,11 +2609,11 @@ export default function Home() {
       ]),
     );
     for (const contact of overview.contacts) {
-      if (/@(g\.us|broadcast|newsletter)$/.test(contact.chatId)) continue;
+      if (contact.data.directoryHidden || /@(g\.us|broadcast|newsletter)$/.test(contact.chatId)) continue;
       const old = rows.get(contact.chatId);
       rows.set(contact.chatId, {
         id: contact.chatId,
-        name: contact.data.name || old?.name || "Contato",
+        name: displayName(contact.data.name, old?.name),
         phone: contact.data.phone || old?.phone,
         avatar:
           old?.avatar ||

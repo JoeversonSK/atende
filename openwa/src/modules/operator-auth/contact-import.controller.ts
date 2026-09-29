@@ -12,6 +12,7 @@ type Identity = { chatId: string; phone: string; hasProfile: boolean };
 const assignmentTag = 'Sabrina - Atribuido';
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 const isAssignmentTag = (value: string) => value.trim().localeCompare(assignmentTag, 'pt-BR', { sensitivity: 'base' }) === 0;
+const usefulName = (value: unknown) => /[\p{L}\p{N}]/u.test(String(value ?? '')) ? String(value).trim() : '';
 
 /** A number is an identifier, not a quantity. Only add Brazil's country code to local 10/11-digit numbers. */
 export function normalizeImportPhone(value: unknown): string {
@@ -58,8 +59,8 @@ export class ContactImportService {
     for (const raw of source) {
       if (!raw || typeof raw !== 'object') throw new BadRequestException('Linha de contato inválida.');
       const row = raw as Record<string, unknown>;
-      const firstName = String(row.firstName ?? '').trim();
-      const lastName = String(row.lastName ?? '').trim();
+      const firstName = usefulName(row.firstName);
+      const lastName = usefulName(row.lastName);
       const phone = normalizeImportPhone(row.phone);
       if (firstName.length > 160 || lastName.length > 160) throw new BadRequestException('Nome muito longo.');
       if (phones.has(phone)) throw new BadRequestException(`Telefone repetido no mesmo lote: ${phone}`);
@@ -129,9 +130,10 @@ export class ContactImportService {
         const fullName = [row.firstName, row.lastName].filter(Boolean).join(' ');
         const merged: ContactData = {
           ...current,
-          name: fullName || current.name,
+          name: fullName || usefulName(current.name),
           phone: row.phone,
           tags: mergeTags(current.tags, row.tags),
+          directoryHidden: false,
         };
         if (row.tags.some(isAssignmentTag) && current.status === 'closed') {
           merged.status = 'open';

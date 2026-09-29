@@ -3,6 +3,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   Get,
   Headers,
   Injectable,
@@ -29,6 +30,7 @@ type AssignmentOwner = { assignee_id?: unknown; assignee_name?: unknown; updated
 export type ContactData = {
   name: string;
   phone: string;
+  directoryHidden?: boolean;
   email: string;
   company: string;
   document: string;
@@ -644,6 +646,23 @@ export class ContactProfileService implements OnModuleInit {
     if (!row) return { data: emptyContact(), revision: 0 };
     return { ...row, data: await this.dataForOperator(this.db, session, chat, row.data, user.id) };
   }
+  async hideFromDirectory(token: string, session: string, chat: string) {
+    await this.auth.requirePermission(token, 'canAssign');
+    const context = await this.auth.connectionContext(token);
+    if (context.sessionId !== session) throw new BadRequestException('Sessão do WhatsApp inválida.');
+    this.identifiers(session, chat);
+    await this.db.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
+      const [profile] = await db.query('SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2', [session, chat]);
+      const data = { ...(profile?.data || emptyContact()), directoryHidden: true };
+      await db.query(
+        `INSERT INTO openwa.contact_profiles (session_id,chat_id,data,revision) VALUES ($1,$2,$3::jsonb,1)
+         ON CONFLICT(session_id,chat_id) DO UPDATE SET data=EXCLUDED.data,revision=openwa.contact_profiles.revision+1,updated_at=NOW()`,
+        [session, chat, JSON.stringify(data)],
+      );
+    });
+    return { success: true };
+  }
   async tags(token: string, session: string) {
     const user = await this.auth.me(token);
     this.identifiers(session, 'tags');
@@ -784,6 +803,7 @@ export class ContactProfileService implements OnModuleInit {
       cleaned.closedAt =
         cleaned.status === 'closed' && current?.data?.status !== 'closed' ? Date.now() : current?.data?.closedAt;
       cleaned.queueOpenedAt = current?.data?.queueOpenedAt;
+      cleaned.directoryHidden = current?.data?.directoryHidden === true;
       cleaned.notes = cleaned.notes.map(n => {
         const old = current?.data?.notes?.find((o: ContactData['notes'][number]) => o.id === n.id);
         if (old && old.text !== n.text)
@@ -802,6 +822,13 @@ export class ContactProfileService implements OnModuleInit {
 @Controller('operator-auth/contacts')
 export class ContactProfileController {
   constructor(private readonly profiles: ContactProfileService) {}
+  @Delete(':session/:chat') removeFromDirectory(
+    @Headers('x-atende-token') token = '',
+    @Param('session') session: string,
+    @Param('chat') chat: string,
+  ) {
+    return this.profiles.hideFromDirectory(token, session, chat);
+  }
   @Post(':session/:chat/start') start(
     @Headers('x-atende-token') token = '',
     @Param('session') session: string,

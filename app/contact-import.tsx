@@ -16,6 +16,7 @@ const asText = (value: CellValue): string => {
   return "";
 };
 const normalizedHeader = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z]/g, "");
+const usefulName = (value: string) => /[\p{L}\p{N}]/u.test(value) ? value.trim() : "";
 const normalizePhone = (input: string) => {
   const raw = input.trim();
   let number = raw.replace(/\D/g, "");
@@ -40,7 +41,7 @@ export function parseContactTable(rows: CellValue[][]) {
     sourceRows++;
     const number = normalizePhone(asText(row[phone]));
     if (!number) { errors.push(`Linha ${index + 1}: telefone inválido ou vazio.`); continue; }
-    const firstName = asText(row[first]), lastName = asText(row[last]);
+    const firstName = usefulName(asText(row[first])), lastName = usefulName(asText(row[last]));
     const tagText = tags === headings.length - 1 ? row.slice(tags).map(asText).filter(Boolean).join(",") : asText(row[tags]);
     const incomingTags = tagText.split(",").map(tag => tag.trim()).filter(Boolean);
     const previous = contacts.get(number);
@@ -51,7 +52,8 @@ export function parseContactTable(rows: CellValue[][]) {
       tags: [...new Set([...(previous?.tags || []), ...incomingTags])],
     });
   }
-  return { contacts: [...contacts.values()], errors, sourceRows };
+  const parsed = [...contacts.values()];
+  return { contacts: parsed, errors, sourceRows, unnamedCount: parsed.filter(contact => !contact.firstName && !contact.lastName).length };
 }
 
 function parseCsv(content: string) {
@@ -147,9 +149,9 @@ export function ContactImport({ baseUrl, sessionId, token, onComplete, onClose }
       <p>Arquivo .xlsx ou .csv com <b>Primeiro nome, Sobrenome, Telefone e Etiquetas</b>. Separe as etiquetas por vírgula. Telefones brasileiros sem código do país recebem 55; para outros países, inclua + e o DDI.</p>
       <input ref={input} type="file" accept=".xlsx,.csv" hidden onChange={event => void choose(event.target.files?.[0])}/>
       <button type="button" className="contact-import-pick" disabled={busy} onClick={() => input.current?.click()}><FileUp size={20}/>{name || "Selecionar planilha"}</button>
-      {result && <><p><b>{result.contacts.length}</b> telefones únicos em {result.sourceRows} linhas. {result.errors.length ? <b>{result.errors.length} linhas com erro — corrija o arquivo antes de importar.</b> : "Confira uma amostra abaixo antes de continuar."}</p>
+      {result && <><p><b>{result.contacts.length}</b> telefones únicos em {result.sourceRows} linhas. {result.errors.length ? <b>{result.errors.length} linhas com erro — corrija o arquivo antes de importar.</b> : "Confira uma amostra abaixo antes de continuar."}{result.unnamedCount > 0 && <><br/><b>{result.unnamedCount} contatos sem nome no arquivo.</b> O nome ficará em branco até você editar o contato.</>}</p>
         {result.errors.length > 0 && <ul className="contact-import-errors">{result.errors.slice(0, 8).map(message => <li key={message}>{message}</li>)}</ul>}
-        {!result.errors.length && <div className="contact-import-preview"><table><thead><tr><th>Nome</th><th>Telefone</th><th>Etiquetas</th></tr></thead><tbody>{result.contacts.slice(0, 8).map(contact => <tr key={contact.phone}><td>{contact.firstName} {contact.lastName}</td><td>{contact.phone}</td><td>{contact.tags.join(", ") || "—"}</td></tr>)}</tbody></table></div>}
+        {!result.errors.length && <div className="contact-import-preview"><table><thead><tr><th>Nome</th><th>Telefone</th><th>Etiquetas</th></tr></thead><tbody>{result.contacts.slice(0, 8).map(contact => <tr key={contact.phone}><td>{[contact.firstName, contact.lastName].filter(Boolean).join(" ") || "Contato sem nome"}</td><td>{contact.phone}</td><td>{contact.tags.join(", ") || "—"}</td></tr>)}</tbody></table></div>}
         <button type="button" className="solid-button" disabled={busy || !!result.errors.length || !result.contacts.length} onClick={() => void importContacts()}>{busy ? `Importando ${progress}/${result.contacts.length}…` : `Importar ${result.contacts.length} contatos`}</button>
       </>}
       {feedback && <p role="status" className="contact-import-feedback">{feedback}</p>}

@@ -17,7 +17,9 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
     return result;
   }
   function apply(result:{data:Data;revision:number}){
-    setData({...empty,...result.data,...(result.revision===0?{name:result.data.name||(/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")?"":contactName),phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
+    const cleanName=/[\p{L}\p{N}]/u.test(result.data.name||"")?result.data.name:"";
+    const fallback=/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")||contactName==="Contato sem nome"?"":contactName;
+    setData({...empty,...result.data,name:cleanName||(result.revision===0?fallback:""),...(result.revision===0?{phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
   }
   useEffect(()=>{const abort=new AbortController();fetchProfile(abort.signal).then(apply).catch(e=>{if(e.name!=="AbortError")setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setLoading(false);});return()=>abort.abort();},[endpoint,token]);
   useEffect(()=>{const abort=new AbortController();fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/catalog/tags`,{signal:abort.signal,headers:{"X-Atende-Token":token}}).then(async response=>response.ok?response.json():[]).then(tags=>{if(!abort.signal.aborted)setAvailableTags(Array.isArray(tags)?tags:[]);}).catch(()=>undefined);return()=>abort.abort();},[baseUrl,sessionId,token]);

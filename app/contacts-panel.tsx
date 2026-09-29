@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, UserRound, UserPlus, MessageCircle, FileUp, Pencil } from "lucide-react";
+import { Search, UserRound, UserPlus, MessageCircle, FileUp, Pencil, Trash2 } from "lucide-react";
 import { ContactImport } from "./contact-import";
 import { ContactEditor } from "./contact-editor";
 
@@ -22,15 +22,36 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   const [tag, setTag] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
+  const [deleting, setDeleting] = useState("");
+  const [hiddenIds, setHiddenIds] = useState<string[]>([]);
+  const [deleteError, setDeleteError] = useState("");
   const tags = useMemo(() => [...new Set(contacts.flatMap(contact => contact.tags || []))].sort(), [contacts]);
   const shown = contacts.filter(contact =>
+    !hiddenIds.includes(contact.id) &&
     (!tag || contact.tags?.includes(tag)) &&
     `${contact.name} ${contact.phone || ""}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
   );
 
+  async function remove(contact: Contact) {
+    if (!window.confirm(`Excluir ${contact.name} da lista de contatos do Atende? O histórico da conversa e a agenda do WhatsApp serão preservados.`)) return;
+    setDeleting(contact.id); setDeleteError("");
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(contact.id)}`, {
+        method: "DELETE", headers: { "X-Atende-Token": token },
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { message?: string | string[] };
+        throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || "Não foi possível excluir o contato.");
+      }
+      setHiddenIds(current => [...current, contact.id]);
+      await onImported().catch(() => undefined);
+    } catch (error) { setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir o contato."); }
+    finally { setDeleting(""); }
+  }
+
   return <section className="contacts-panel" aria-label="Contatos">
     <header>
-      <div><h1>Contatos</h1><p>{contacts.length} contatos na central</p></div>
+      <div><h1>Contatos</h1><p>{contacts.length - hiddenIds.filter(id => contacts.some(contact => contact.id === id)).length} contatos na central</p>{deleteError && <p className="contact-delete-error" role="alert">{deleteError}</p>}</div>
       <div className="contact-header-actions">
         <button className="contact-import-trigger" onClick={() => setImportOpen(true)} disabled={!canCreate}><FileUp size={18}/>Importar planilha</button>
         <button className="solid-button" onClick={onCreate} disabled={!canCreate}><UserPlus size={18}/>Criar contato</button>
@@ -54,6 +75,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
             <td><span className="contact-row-actions">
               {canCreate && <button className="contact-edit" aria-label={`Editar contato ${contact.name}`} onClick={() => setEditing(contact)}><Pencil size={16}/>Editar</button>}
               <button className="contact-open" aria-label={`Abrir conversa com ${contact.name}`} onClick={() => onOpen(contact)}><MessageCircle size={17}/>Abrir</button>
+              {canCreate && <button className="contact-delete" aria-label={`Excluir contato ${contact.name}`} disabled={deleting === contact.id} onClick={() => void remove(contact)}><Trash2 size={16}/>{deleting === contact.id ? "Excluindo…" : "Excluir"}</button>}
             </span></td>
           </tr>)}</tbody>
         </table>{!shown.length && <p className="contacts-empty">Nenhum contato encontrado.</p>}</div>

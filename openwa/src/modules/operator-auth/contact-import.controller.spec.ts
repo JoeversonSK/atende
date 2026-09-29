@@ -49,4 +49,18 @@ describe('contact spreadsheet import', () => {
     expect(write[1]?.[1]).toBe('5511888888888@c.us');
     expect(query.mock.calls.some(([sql]) => sql.includes('INSERT INTO openwa.conversation_assignments'))).toBe(false);
   });
+
+  it('ignores punctuation-only names and restores a hidden contact on reimport', async () => {
+    const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes('FROM (SELECT chat_id FROM openwa.contact_profiles')) return [{ chatId: '5511888888888@c.us', phone: '5511888888888', hasProfile: true }];
+      if (sql.includes('SELECT data FROM openwa.contact_profiles')) return [{ data: { name: 'Nome existente', phone: '5511888888888', tags: [], directoryHidden: true } }];
+      return [];
+    });
+    const db = { query, transaction: async (run: (db: { query: typeof query }) => Promise<unknown>) => run({ query }) };
+    const auth = { requirePermission: jest.fn().mockResolvedValue({}), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'session-1', user: { id: 'admin' } }) };
+    const importer = new ContactImportService(db as never, auth as never, { get: () => undefined } as never, {} as never);
+    await importer.import('token', 'session-1', { contacts: [{ firstName: '.', lastName: '', phone: '5511888888888', tags: [] }] });
+    const write = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO openwa.contact_profiles'))!;
+    expect(JSON.parse(write[1]?.[2] as string)).toMatchObject({ name: 'Nome existente', directoryHidden: false });
+  });
 });
