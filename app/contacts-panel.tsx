@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, UserRound, UserPlus, MessageCircle, FileUp, Pencil, Trash2 } from "lucide-react";
+import { Search, UserRound, UserPlus, MessageCircle, FileUp, Pencil, Trash2, Merge } from "lucide-react";
 import { ContactImport } from "./contact-import";
 import { ContactEditor } from "./contact-editor";
 
@@ -25,6 +25,8 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   const [deleting, setDeleting] = useState("");
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
   const [deleteError, setDeleteError] = useState("");
+  const [reconciling, setReconciling] = useState(false);
+  const [reconcileMessage, setReconcileMessage] = useState("");
   const tags = useMemo(() => [...new Set(contacts.flatMap(contact => contact.tags || []))].sort(), [contacts]);
   const shown = contacts.filter(contact =>
     !hiddenIds.includes(contact.id) &&
@@ -49,10 +51,26 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
     finally { setDeleting(""); }
   }
 
+  async function reconcile() {
+    if (!window.confirm("Unificar os cadastros importados com conversas antigas que tenham exatamente o mesmo nome completo? Casos com nomes repetidos ou mensagens nos dois cadastros serão ignorados.")) return;
+    setReconciling(true); setReconcileMessage("");
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/reconcile`, {
+        method: "POST", headers: { "X-Atende-Token": token },
+      });
+      const body = await response.json() as { reconciled?: number; skipped?: number; message?: string | string[] };
+      if (!response.ok) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || "Não foi possível unificar os contatos.");
+      await onImported();
+      setReconcileMessage(`${body.reconciled || 0} contatos unificados.${body.skipped ? ` ${body.skipped} casos ambíguos precisam de revisão manual.` : ""}`);
+    } catch (error) { setReconcileMessage(error instanceof Error ? error.message : "Não foi possível unificar os contatos."); }
+    finally { setReconciling(false); }
+  }
+
   return <section className="contacts-panel" aria-label="Contatos">
     <header>
-      <div><h1>Contatos</h1><p>{contacts.length - hiddenIds.filter(id => contacts.some(contact => contact.id === id)).length} contatos na central</p>{deleteError && <p className="contact-delete-error" role="alert">{deleteError}</p>}</div>
+      <div><h1>Contatos</h1><p>{contacts.length - hiddenIds.filter(id => contacts.some(contact => contact.id === id)).length} contatos na central</p>{deleteError && <p className="contact-delete-error" role="alert">{deleteError}</p>}{reconcileMessage && <p role="status">{reconcileMessage}</p>}</div>
       <div className="contact-header-actions">
+        {canCreate && <button className="contact-reconcile-trigger" onClick={() => void reconcile()} disabled={reconciling} title="Associe importações às conversas antigas quando houver correspondência única de nome"><Merge size={18}/>{reconciling ? "Unificando…" : "Unificar duplicados"}</button>}
         <button className="contact-import-trigger" onClick={() => setImportOpen(true)} disabled={!canCreate}><FileUp size={18}/>Importar planilha</button>
         <button className="solid-button" onClick={onCreate} disabled={!canCreate}><UserPlus size={18}/>Criar contato</button>
       </div>

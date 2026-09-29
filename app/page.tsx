@@ -2595,7 +2595,9 @@ export default function Home() {
   const contactRows = useMemo(() => {
     const hasName = (value?: string) => Boolean(value && /[\p{L}]/u.test(value));
     const displayName = (...values: (string | undefined)[]) => values.find(hasName)?.trim() || "Contato sem nome";
+    const nameKey = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
     const hiddenIds = new Set(overview.contacts.filter(contact => contact.data.directoryHidden).map(contact => contact.chatId));
+    const liveChatIds = new Set(chats.map(chat => chat.id));
     const rows = new Map(
       chats.filter(c => !hiddenIds.has(c.id)).map((c) => [
         c.id,
@@ -2621,6 +2623,23 @@ export default function Home() {
           undefined,
         tags: (contact.data as { tags?: string[] }).tags || [],
       });
+    }
+    // A spreadsheet profile can be keyed by phone while the existing WhatsApp conversation uses a
+    // privacy ID. Collapse only a unique, full-name match when the phone profile has no live chat;
+    // a second real conversation must remain visible until it can be reconciled safely.
+    const groups = new Map<string, Array<{ id: string; name: string; phone?: string; avatar?: string; tags: string[] }>>();
+    for (const row of rows.values()) {
+      const key = nameKey(row.name);
+      if (key.length < 8 || key.split(" ").length < 2) continue;
+      groups.set(key, [...(groups.get(key) || []), row]);
+    }
+    for (const group of groups.values()) {
+      if (group.length !== 2) continue;
+      const old = group.find(row => row.id.endsWith("@lid") && !row.phone);
+      const imported = group.find(row => row.id.endsWith("@c.us") && row.phone && !liveChatIds.has(row.id));
+      if (!old || !imported) continue;
+      rows.set(old.id, { ...old, phone: imported.phone, tags: [...new Set([...old.tags, ...imported.tags])] });
+      rows.delete(imported.id);
     }
     return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [chats, overview.contacts]);
