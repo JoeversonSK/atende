@@ -2788,6 +2788,7 @@ export default function Home() {
             contacts={contactRows}
             canCreate={operator.role === "admin" || operator.canAssign === true}
             baseUrl={config.baseUrl}
+            apiKey={config.apiKey}
             sessionId={config.sessionId}
             token={operatorToken}
             onImported={() => refreshChats()}
