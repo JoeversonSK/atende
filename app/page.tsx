@@ -2787,6 +2787,10 @@ export default function Home() {
           <ContactsPanel
             contacts={contactRows}
             canCreate={operator.role === "admin" || operator.canAssign === true}
+            baseUrl={config.baseUrl}
+            sessionId={config.sessionId}
+            token={operatorToken}
+            onImported={() => refreshChats()}
             onCreate={() => setNewChatOpen(true)}
             onOpen={(contact) => {
               setContactsOpen(false);
