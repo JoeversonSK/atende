@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Headers, Injectable, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Headers, Injectable, Optional, Param, Post } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Public } from '../auth/decorators/auth.decorators';
@@ -6,6 +6,8 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EventsGateway } from '../events/events.gateway';
 import { OperatorAuthService } from './operator-auth.service';
 import { ContactData, emptyContact } from './contact-profile.controller';
+import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
+import { ChatSummary, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
 type ImportRow = { firstName: string; lastName: string; phone: string; tags: string[] };
 type Identity = { chatId: string; phone: string; name?: string; hasProfile: boolean; hidden?: boolean };
@@ -47,7 +49,43 @@ export class ContactImportService {
     private readonly auth: OperatorAuthService,
     private readonly engines: EngineRegistry,
     private readonly events: EventsGateway,
+    @Optional() private readonly lidMappings?: LidMappingStoreService,
   ) {}
+
+  private async resolveMissingPhones(session: string, engine: IWhatsAppEngine, chats: ChatSummary[]) {
+    const profiles = await this.db.query(
+      `SELECT chat_id AS "chatId",data->>'phone' AS phone FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id LIKE '%@lid'`,
+      [session],
+    ) as { chatId: string; phone: string | null }[];
+    const phoneByChat = new Map(profiles.map(row => [row.chatId, digits(row.phone)]));
+    const unresolved = chats.filter(chat => chat.id.endsWith('@lid') && !phoneByChat.get(chat.id));
+    let position = 0, resolved = 0;
+    const worker = async () => {
+      while (position < unresolved.length) {
+        const chat = unresolved[position++];
+        let phone = '';
+        try { phone = digits(await engine.resolveContactPhone(chat.id)); }
+        catch { continue; }
+        if (!/^\d{7,15}$/.test(phone) || phone === chat.id.split('@')[0]) continue;
+        const saved = await this.db.transaction(async db => {
+          await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat.id])]);
+          const [profile] = await db.query('SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2', [session, chat.id]);
+          const current = (profile?.data || emptyContact()) as ContactData;
+          if (digits(current.phone) && digits(current.phone) !== phone) return false;
+          const data = { ...current, phone, name: usefulName(current.name) || (/\p{L}/u.test(chat.name) ? chat.name : '') };
+          await db.query(
+            `INSERT INTO openwa.contact_profiles (session_id,chat_id,data,revision) VALUES ($1,$2,$3::jsonb,1)
+             ON CONFLICT(session_id,chat_id) DO UPDATE SET data=EXCLUDED.data,revision=openwa.contact_profiles.revision+1,updated_at=NOW()`,
+            [session, chat.id, JSON.stringify(data)],
+          );
+          return true;
+        });
+        if (saved) { resolved++; await this.lidMappings?.remember(chat.id.split('@')[0], phone, session); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, unresolved.length) }, () => worker()));
+    return { resolved, unresolved: unresolved.length - resolved };
+  }
 
   async reconcile(token: string, session: string) {
     await this.auth.requirePermission(token, 'canAssign');
@@ -56,6 +94,7 @@ export class ContactImportService {
     const engine = this.engines.get(session);
     if (!engine) throw new BadRequestException('Conecte o WhatsApp para identificar as conversas antigas.');
     const chats = await engine.getChats();
+    const phoneResolution = await this.resolveMissingPhones(session, engine, chats);
     const lidsByName = new Map<string, string[]>();
     for (const chat of chats) {
       if (!chat.id.endsWith('@lid')) continue;
@@ -76,12 +115,33 @@ export class ContactImportService {
       if (!distinctiveName(key) || !digits(profile.data.phone)) continue;
       profilesByName.set(key, [...(profilesByName.get(key) || []), profile]);
     }
+    const lidRows = await this.db.query(
+      `SELECT chat_id AS "chatId",data->>'phone' AS phone FROM openwa.contact_profiles
+       WHERE session_id=$1 AND chat_id LIKE '%@lid' AND NULLIF(data->>'phone','') IS NOT NULL
+       AND COALESCE((data->>'directoryHidden')::boolean,false)=false`, [session],
+    ) as { chatId: string; phone: string }[];
+    const lidsByPhone = new Map<string, string[]>();
+    for (const row of lidRows) {
+      const phone = digits(row.phone);
+      lidsByPhone.set(phone, [...(lidsByPhone.get(phone) || []), row.chatId]);
+    }
+    const sourcePhoneCounts = new Map<string, number>();
+    for (const profile of profiles) {
+      const phone = digits(profile.data.phone);
+      sourcePhoneCounts.set(phone, (sourcePhoneCounts.get(phone) || 0) + 1);
+    }
+    const phoneCandidates = profiles.filter(profile => {
+      const phone = digits(profile.data.phone);
+      return sourcePhoneCounts.get(phone) === 1 && lidsByPhone.get(phone)?.length === 1;
+    });
     const ambiguous = [...profilesByName]
       .filter(([key, values]) => lidsByName.has(key) && (values.length !== 1 || lidsByName.get(key)?.length !== 1))
-      .flatMap(([, values]) => values.map(profile => ({ name: profile.data.name, phone: profile.data.phone,
+      .flatMap(([, values]) => values.filter(profile => !phoneCandidates.some(candidate => candidate.chatId === profile.chatId))
+        .map(profile => ({ name: profile.data.name, phone: profile.data.phone,
         reason: 'Nome repetido em mais de um cadastro ou conversa. Confira antes de unificar.' })));
-    const candidates = [...profilesByName].filter(([key, values]) => values.length === 1 && lidsByName.get(key)?.length === 1)
+    const nameCandidates = [...profilesByName].filter(([key, values]) => values.length === 1 && lidsByName.get(key)?.length === 1)
       .map(([, values]) => values[0]);
+    const candidates = [...new Map([...phoneCandidates, ...nameCandidates].map(profile => [profile.chatId, profile])).values()];
     const errors: { name: string; phone: string; reason: string }[] = [];
     for (let index = 0; index < candidates.length; index += 25) {
       const batch = candidates.slice(index, index + 25).map(({ data }) => ({ firstName: data.name, lastName: '', phone: data.phone,
@@ -106,7 +166,8 @@ export class ContactImportService {
       name: candidate.data.name, phone: candidate.data.phone,
       reason: errors.find(error => error.phone === candidate.data.phone)?.reason || 'Não foi possível confirmar a correspondência com a conversa antiga.',
     }))];
-    return { candidates: candidates.length, reconciled: hidden.size, skipped: cases.length, cases };
+    return { candidates: candidates.length, reconciled: hidden.size, skipped: cases.length, cases,
+      phonesResolved: phoneResolution.resolved, phonesStillUnknown: phoneResolution.unresolved };
   }
 
   async import(token: string, session: string, input: unknown) {
@@ -148,7 +209,10 @@ export class ContactImportService {
 
     const identities = await this.db.query(
       `SELECT ids.chat_id AS "chatId", COALESCE(NULLIF(p.data->>'phone',''), CASE WHEN ids.chat_id ~ '^[0-9]+@(c[.]us|s[.]whatsapp[.]net)$' THEN split_part(ids.chat_id,'@',1) ELSE lm.phone END, '') AS phone,
-              p.data->>'name' AS name, (p.chat_id IS NOT NULL) AS "hasProfile", COALESCE((p.data->>'directoryHidden')::boolean,false) AS hidden
+              COALESCE(NULLIF(p.data->>'name',''),(SELECT m."chatName" FROM openwa.messages m
+                WHERE m."sessionId"=$1 AND m."chatId"=ids.chat_id AND m."chatName" IS NOT NULL
+                ORDER BY m.timestamp DESC NULLS LAST LIMIT 1)) AS name,
+              (p.chat_id IS NOT NULL) AS "hasProfile", COALESCE((p.data->>'directoryHidden')::boolean,false) AS hidden
        FROM (SELECT chat_id FROM openwa.contact_profiles WHERE session_id=$1
              UNION SELECT "chatId" FROM openwa.messages WHERE "sessionId"=$1
              UNION SELECT chat_id FROM openwa.conversation_assignments WHERE session_id=$1) ids

@@ -141,4 +141,20 @@ describe('contact spreadsheet import', () => {
     ] })).rejects.toThrow('Conecte o WhatsApp');
     expect(db.transaction).not.toHaveBeenCalled();
   });
+
+  it('persists WhatsApp-confirmed phone numbers for LID conversations before reconciliation', async () => {
+    const lid = '123456789012345@lid';
+    const query = jest.fn(async (_sql: string, _params?: unknown[]) => []);
+    const db = { query, transaction: async (run: (db: { query: typeof query }) => Promise<unknown>) => run({ query }) };
+    const auth = { requirePermission: jest.fn().mockResolvedValue({}), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'session-1' }) };
+    const engine = { getChats: jest.fn().mockResolvedValue([{ id: lid, name: 'Cliente Antigo' }]),
+      resolveContactPhone: jest.fn().mockResolvedValue('5511999999999') };
+    const mappings = { remember: jest.fn().mockResolvedValue(undefined) };
+    const importer = new ContactImportService(db as never, auth as never, { get: () => engine } as never, {} as never, mappings as never);
+    await expect(importer.reconcile('token', 'session-1')).resolves.toMatchObject({ phonesResolved: 1, phonesStillUnknown: 0 });
+    const write = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO openwa.contact_profiles'))!;
+    expect(write[1]?.[1]).toBe(lid);
+    expect(JSON.parse(write[1]?.[2] as string)).toMatchObject({ name: 'Cliente Antigo', phone: '5511999999999' });
+    expect(mappings.remember).toHaveBeenCalledWith('123456789012345', '5511999999999', 'session-1');
+  });
 });

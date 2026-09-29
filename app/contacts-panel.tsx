@@ -19,6 +19,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   onImported: () => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
+  const [missingOnly, setMissingOnly] = useState(false);
   const [tag, setTag] = useState("");
   const [tagSearch, setTagSearch] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -36,10 +37,14 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   }, [contacts]);
   const tags = useMemo(() => [...tagCounts.keys()].sort((a, b) => a.localeCompare(b, "pt-BR")), [tagCounts]);
   const visibleTags = tags.filter(value => value.toLocaleLowerCase("pt-BR").includes(tagSearch.toLocaleLowerCase("pt-BR")));
+  const normalized = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const query = normalized(search.trim());
+  const missingCount = contacts.filter(contact => !contact.phone).length;
   const shown = contacts.filter(contact =>
     !hiddenIds.includes(contact.id) &&
+    (!missingOnly || !contact.phone) &&
     (!tag || contact.tags?.includes(tag)) &&
-    `${contact.name} ${contact.phone || ""}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+    normalized(`${contact.name} ${contact.phone || "Não informado"}`).includes(query),
   );
 
   async function remove(contact: Contact) {
@@ -66,11 +71,11 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
       const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/reconcile`, {
         method: "POST", headers: { "X-Atende-Token": token },
       });
-      const body = await response.json() as { reconciled?: number; skipped?: number; cases?: { name: string; phone: string; reason: string }[]; message?: string | string[] };
+      const body = await response.json() as { reconciled?: number; skipped?: number; phonesResolved?: number; phonesStillUnknown?: number; cases?: { name: string; phone: string; reason: string }[]; message?: string | string[] };
       if (!response.ok) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || "Não foi possível unificar os contatos.");
       await onImported();
       setReconcileCases(Array.isArray(body.cases) ? body.cases : []);
-      setReconcileMessage(`${body.reconciled || 0} contatos unificados.${body.skipped ? ` ${body.skipped} casos pendentes listados abaixo.` : ""}`);
+      setReconcileMessage(`${body.phonesResolved || 0} telefones identificados no WhatsApp; ${body.reconciled || 0} contatos unificados.${body.skipped ? ` ${body.skipped} casos pendentes listados abaixo.` : ""}${body.phonesStillUnknown ? ` ${body.phonesStillUnknown} conversas ainda sem número confirmado.` : ""}`);
     } catch (error) { setReconcileMessage(error instanceof Error ? error.message : "Não foi possível unificar os contatos."); }
     finally { setReconciling(false); }
   }
@@ -95,7 +100,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
         {!tags.length && <p>Nenhuma etiqueta cadastrada.</p>}
       </aside>
       <div className="contacts-main">
-        <label className="contacts-search"><Search size={18}/><input aria-label="Buscar contatos" placeholder="Buscar nome ou WhatsApp" value={search} onChange={event => setSearch(event.target.value)}/></label>
+        <div className="contacts-search-row"><label className="contacts-search"><Search size={18}/><input aria-label="Buscar contatos" placeholder="Buscar contato, telefone ou Não informado" value={search} onChange={event => setSearch(event.target.value)}/></label><button className={`contact-missing-filter${missingOnly ? " active" : ""}`} onClick={() => setMissingOnly(current => !current)}>Sem telefone <span>{missingCount}</span></button></div>
         <div className="contacts-table-wrap"><table>
           <thead><tr><th>Contato</th><th>WhatsApp</th><th>Etiquetas</th><th>Ações</th></tr></thead>
           <tbody>{shown.map(contact => <tr key={contact.id}>
