@@ -76,6 +76,7 @@ export type MessageType =
   | 'location'
   | 'contact'
   | 'poll'
+  | 'list_response'
   | 'call'
   | 'revoked'
   // WhatsApp Business commerce: a customer's cart placed from the catalog, and a single product
@@ -93,6 +94,8 @@ export interface IncomingMessage {
   to: string;
   chatId: string;
   body: string;
+  /** Stable row id when this message is a response to a WhatsApp interactive list. */
+  selectedRowId?: string;
   type: MessageType;
   timestamp: number;
   fromMe: boolean;
@@ -612,6 +615,13 @@ export interface ReactionEvent {
   senderId: string;
 }
 
+export interface PollVoteEvent {
+  pollMessageId:string;
+  voterId:string;
+  selectedOptions:string[];
+  timestamp:number;
+}
+
 /**
  * A group membership or metadata change, mapped at the adapter boundary to this neutral
  * shape so consumers never see engine-specific payloads:
@@ -765,6 +775,7 @@ export interface EngineEventCallbacks {
   onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
+  onPollVote?: (event: PollVoteEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**
    * Fired on group membership changes (join/leave), group metadata updates
@@ -975,6 +986,18 @@ export interface MessagingCapability {
   sendStickerMessage(chatId: string, media: MediaInput): Promise<MessageResult>;
 
   sendPollMessage(chatId: string, poll: PollInput): Promise<MessageResult>;
+
+  /** Interactive WhatsApp list. A selected row returns as an ordinary inbound list_response. */
+  sendListMessage?(
+    chatId: string,
+    input: {
+      body: string;
+      buttonText: string;
+      rows: { id: string; title: string; description?: string }[];
+      title?: string;
+      footer?: string;
+    },
+  ): Promise<MessageResult>;
 
   /**
    * Reply to a message, quoting it. `mentions` tags participants exactly as on the send routes: the

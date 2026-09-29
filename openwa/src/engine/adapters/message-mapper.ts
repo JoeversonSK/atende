@@ -33,6 +33,8 @@ export function mapWwebjsMessageType(raw: string): MessageType {
       return 'call';
     case 'poll_creation':
       return 'poll';
+    case 'list_response':
+      return 'list_response';
     case 'revoked':
       return 'revoked';
     case 'order':
@@ -60,6 +62,7 @@ export interface RawMessageFields {
   from: string;
   to: string;
   body: string;
+  selectedRowId?: string;
   type: string;
   timestamp: number;
   fromMe: boolean;
@@ -101,6 +104,7 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     to: msg.to,
     chatId,
     body: msg.body,
+    selectedRowId: msg.selectedRowId,
     type: mapWwebjsMessageType(msg.type),
     timestamp: msg.timestamp,
     fromMe: msg.fromMe,

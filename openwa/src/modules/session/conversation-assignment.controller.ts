@@ -1,4 +1,4 @@
-import { Body, ConflictException, Controller, Delete, Get, Param, Put, UseGuards } from '@nestjs/common';
+import { Body, ConflictException, Controller, Delete, Get, Param, Put, Req, UseGuards } from '@nestjs/common';
 import { OperatorWriteGuard } from '../operator-auth/operator-write.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
@@ -7,6 +7,7 @@ import { Repository } from 'typeorm';
 import { RequireRole, SessionScoped } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
 import { Session } from './entities/session.entity';
+import { EventsGateway } from '../events/events.gateway';
 
 class AssignConversationDto {
   @IsString()
@@ -25,7 +26,7 @@ class AssignConversationDto {
 @SessionScoped()
 @RequireRole(ApiKeyRole.OPERATOR)
 export class ConversationAssignmentController {
-  constructor(@InjectRepository(Session, 'data') private readonly sessions: Repository<Session>) {}
+  constructor(@InjectRepository(Session, 'data') private readonly sessions: Repository<Session>, private readonly events: EventsGateway) {}
 
   @Get('assignments')
   async listAssignments(@Param('sessionId') sessionId: string) {
@@ -53,18 +54,33 @@ export class ConversationAssignmentController {
     @Param('sessionId') sessionId: string,
     @Param('chatId') chatId: string,
     @Body() dto: AssignConversationDto,
+    @Req() request: { atendeOperator?: { id: string; displayName: string } },
   ) {
     const assigneeName = dto.assigneeName.trim();
-    return this.sessions.manager.transaction(async db => {
+    const assignment=await this.sessions.manager.transaction(async db => {
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[JSON.stringify([sessionId,chatId])]);
     const [profile]=await db.query('SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId]);
-    if (profile?.data?.status==='closed') throw new ConflictException('Reabra o atendimento no perfil antes de atribuí-lo.');
+    let reopened=false,profileData=profile?.data;
+    if (profile?.data?.status==='closed') {
+      profileData={...profile.data,status:'open',serviceType:'remote',closedAt:undefined,queueOpenedAt:undefined};
+      await db.query('UPDATE openwa.contact_profiles SET data=$3,revision=revision+1,updated_at=NOW() WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId,JSON.stringify(profileData)]);
+      reopened=true;
+    }
     const rows = await db.query(
       'INSERT INTO openwa.conversation_assignments (session_id, chat_id, assignee_name, assignee_id, updated_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (session_id, chat_id) DO UPDATE SET assignee_name = EXCLUDED.assignee_name, updated_at = CASE WHEN openwa.conversation_assignments.assignee_id IS DISTINCT FROM EXCLUDED.assignee_id THEN NOW() ELSE openwa.conversation_assignments.updated_at END, assignee_id = EXCLUDED.assignee_id RETURNING assignee_name AS "assigneeName", assignee_id AS "assigneeId", updated_at AS "updatedAt"',
       [sessionId, chatId, assigneeName, dto.assigneeId.trim()],
     );
-    return rows[0];
+    return {...rows[0],reopened,profileData};
     });
+    this.events.emitConversationAssigned(sessionId,{
+      chatId,
+      assigneeId:assignment.assigneeId,
+      assigneeName:assignment.assigneeName,
+      assignedById:request.atendeOperator?.id,
+      assignedByName:request.atendeOperator?.displayName,
+      updatedAt:assignment.updatedAt,
+    });
+    return assignment;
   }
 
   @Delete(':chatId/assignment')

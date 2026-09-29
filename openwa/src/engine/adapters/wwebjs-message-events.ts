@@ -4,6 +4,7 @@ import {
   type RevokedMessage,
   type ReactionEvent,
   type EditedMessage,
+  type PollVoteEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { type SerializedWid } from '../types/whatsapp-web-js.types';
 import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
@@ -195,6 +196,21 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       host.getCallbacks().onMessageReaction?.(event);
     } catch (error) {
       host.logger.error('Error processing message_reaction', String(error));
+    }
+  });
+
+  client.on('vote_update', vote => {
+    try {
+      const parentId=vote.parentMessage?.id as unknown as SerializedWid|undefined;
+      const event:PollVoteEvent={
+        pollMessageId:parentId?._serialized??parentId?.$1??'',
+        voterId:vote.voter,
+        selectedOptions:(vote.selectedOptions||[]).map(option=>String(option.name||'')).filter(Boolean),
+        timestamp:Math.floor(Number(vote.interractedAtTs||Date.now())/1000),
+      };
+      if(event.pollMessageId)host.getCallbacks().onPollVote?.(event);
+    } catch(error){
+      host.logger.error('Error processing vote_update',String(error));
     }
   });
 

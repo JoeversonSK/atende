@@ -27,6 +27,8 @@ const PATCHERS_ON_DISK = fs
 const EXPECTED_PATCHER_ORDER = [
   'patch-wwebjs-201832.js',
   'patch-wwebjs-newsletter-preview.js',
+  'patch-wwebjs-media-model-id.js',
+  'patch-wwebjs-download-media-mimetype.js',
   'patch-wwebjs-status.js',
   'patch-wwebjs-ready-sync.js',
   'patch-wwebjs-participant-arity.js',

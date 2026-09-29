@@ -658,6 +658,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     this.emitToRooms(sessionId, 'message.edited', data);
   }
 
+  /** Notify the newly responsible operator that a conversation was transferred to their account. */
+  emitConversationAssigned(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'conversation.assigned', data);
+  }
+
   /**
    * Emit a group membership join (a user was added or joined via invite). Payload mirrors the
    * `group.join` webhook: `{ groupId, participantIds, timestamp, actorId? }`.

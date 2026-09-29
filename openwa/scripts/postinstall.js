@@ -1,7 +1,7 @@
 /**
  * Post-install hook (npm `postinstall`).
  *
- * Ten conditional steps, each skipped when its target is absent so the hook is a no-op where the
+ * Twelve conditional steps, each skipped when its target is absent so the hook is a no-op where the
  * piece is missing (the Docker builder stage copies package*.json long before any source):
  *
  *   1. `npm ci` inside dashboard/ when dashboard/ exists — the dashboard carries its own lockfile and
@@ -17,21 +17,25 @@
  *      tree — which must never be waved through. So a non-zero status here is propagated as-is.
  *   3. `node scripts/patch-wwebjs-newsletter-preview.js --best-effort` when present. The production
  *      Docker stage runs it again without best-effort, making dependency drift a build failure.
- *   4. `node scripts/patch-wwebjs-status.js --best-effort` when present — the status posting
+ *   4. `node scripts/patch-wwebjs-media-model-id.js --best-effort` when present — prevents a
+ *      private media-model id from replacing the outgoing message id during document/media sends.
+ *   5. `node scripts/patch-wwebjs-download-media-mimetype.js --best-effort` when present — restores
+ *      downloads of uncached audio/video/images on current WhatsApp Web builds.
+ *   6. `node scripts/patch-wwebjs-status.js --best-effort` when present — the status posting
  *      repairs, gated the same way as step 3.
- *   5. `node scripts/patch-wwebjs-ready-sync.js --best-effort` when present — the readiness
+ *   6. `node scripts/patch-wwebjs-ready-sync.js --best-effort` when present — the readiness
  *      marker + hasSynced level-check, gated the same way.
- *   6. `node scripts/patch-wwebjs-participant-arity.js --best-effort` when present — makes the group
+ *   7. `node scripts/patch-wwebjs-participant-arity.js --best-effort` when present — makes the group
  *      participant writes report which requested ids resolved to members, gated the same way.
- *   7. `node scripts/patch-wwebjs-block.js --best-effort` when present, restoring block and
+ *   8. `node scripts/patch-wwebjs-block.js --best-effort` when present, restoring block and
  *      unblock after WhatsApp Web removed the contact resolver they used.
- *   8. `node scripts/patch-wwebjs-group-description.js --best-effort` when present, realigning the
+ *   9. `node scripts/patch-wwebjs-group-description.js --best-effort` when present, realigning the
  *      group-description job call with the options object the page now takes, gated the same way.
- *   9. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
+ *  10. `node scripts/patch-baileys-appstate.js --best-effort` when present, the app-state resync
  *      bound, gated the same way.
- *  10. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
- *      newsletter-create parse fix. Steps 9-10 are the Baileys patches, so a Baileys-only install
- *      runs those and skips 2-8.
+ *  11. `node scripts/patch-baileys-newsletter-create.js --best-effort` when present, the
+ *      newsletter-create parse fix. Steps 10-11 are the Baileys patches, so a Baileys-only install
+ *      runs those and skips 2-9.
  *
  * Structured like scripts/patch-wwebjs-201832.js: pure planning + injectable spawn, so the spec
  * (scripts/postinstall.spec.js, node:test) exercises every branch without a real npm run.
@@ -94,6 +98,24 @@ function planSteps(root, env = process.env) {
     });
   }
   const statusPatcher = path.join(root, 'scripts', 'patch-wwebjs-status.js');
+  const mediaModelIdPatcher = path.join(root, 'scripts', 'patch-wwebjs-media-model-id.js');
+  if (fs.existsSync(mediaModelIdPatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js media model id repair (scripts/patch-wwebjs-media-model-id.js --best-effort)',
+      command: process.execPath,
+      args: [mediaModelIdPatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
+  const downloadMediaMimetypePatcher = path.join(root, 'scripts', 'patch-wwebjs-download-media-mimetype.js');
+  if (fs.existsSync(downloadMediaMimetypePatcher)) {
+    steps.push({
+      name: 'whatsapp-web.js download media MIME repair (scripts/patch-wwebjs-download-media-mimetype.js --best-effort)',
+      command: process.execPath,
+      args: [downloadMediaMimetypePatcher, '--best-effort'],
+      options: { stdio: 'inherit', cwd: root, env: cleanEnv },
+    });
+  }
   if (fs.existsSync(statusPatcher)) {
     steps.push({
       name: 'whatsapp-web.js status send repair (scripts/patch-wwebjs-status.js --best-effort)',

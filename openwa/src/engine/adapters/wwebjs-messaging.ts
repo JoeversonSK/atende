@@ -1,4 +1,4 @@
-import { MessageMedia, MessageTypes, type Client, type Message } from 'whatsapp-web.js';
+import { List, MessageMedia, MessageTypes, type Client, type Message } from 'whatsapp-web.js';
 import {
   CustomLinkPreview,
   IncomingMessage,
@@ -377,6 +377,17 @@ export class WwebjsMessaging {
           : this.client().sendMessage(to, text),
       options?.quotedMessageId,
     );
+    return toMessageResult(msg);
+  }
+
+  async sendListMessage(
+    chatId: string,
+    input: { body:string; buttonText:string; rows:{id:string;title:string;description?:string}[]; title?:string; footer?:string },
+  ): Promise<MessageResult> {
+    this.host.ensureReady();
+    if(!input.rows.length)throw new BadRequestException('A lista precisa ter opções.');
+    const list=new List(input.body,input.buttonText,[{rows:input.rows}],input.title||undefined,input.footer||undefined);
+    const msg=await this.sendResolved(chatId,to=>this.client().sendMessage(to,list));
     return toMessageResult(msg);
   }
 

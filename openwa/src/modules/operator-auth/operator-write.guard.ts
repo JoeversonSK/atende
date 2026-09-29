@@ -9,8 +9,9 @@ export class OperatorWriteGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     if (['GET','HEAD','OPTIONS'].includes(request.method)) return true;
     if (process.env.ATENDE_REQUIRE_OPERATOR !== 'true') return true;
-    const assigning = context.getClass().name === 'ConversationAssignmentController';
+    const assigning = context.getClass().name === 'ConversationAssignmentController' || (context.getClass().name === 'ContactProfileController' && ['start','close'].includes(context.getHandler().name));
     const user = await this.auth.requirePermission(request.headers['x-atende-token'] || '', assigning ? 'canAssign' : 'canSend');
+    request.atendeOperator = user;
     if (assigning && request.method === 'PUT') {
       const target = await this.auth.assignmentTarget(request.headers['x-atende-token'] || '', request.body?.assigneeId || user.id);
       request.body.assigneeId = target.id;

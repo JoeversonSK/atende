@@ -36,6 +36,7 @@ import {
   SendLocationDto,
   SendContactDto,
   SendPollDto,
+  SendListDto,
   ReplyMessageDto,
   ForwardMessageDto,
   ReactMessageDto,
@@ -343,6 +344,14 @@ export class MessageController {
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   async sendPoll(@Param('sessionId') sessionId: string, @Body() dto: SendPollDto): Promise<MessageResponseDto> {
     return this.messageService.sendPoll(sessionId, dto);
+  }
+
+  @Post('send-list')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Send an interactive WhatsApp option list' })
+  @ApiResponse({ status: 201, description: 'Interactive list sent', type: MessageResponseDto })
+  async sendList(@Param('sessionId') sessionId: string, @Body() dto: SendListDto): Promise<MessageResponseDto> {
+    return this.messageService.sendList(sessionId, dto);
   }
 
   @Post('reply')

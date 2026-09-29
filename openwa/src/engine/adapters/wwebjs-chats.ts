@@ -51,6 +51,20 @@ export class WwebjsChats {
         continue;
       }
 
+      const lastMessage = chat.lastMessage;
+      const mediaPreview = (() => {
+        if (!lastMessage) return undefined;
+        const type = String(lastMessage.type || '').toLowerCase();
+        if (['ptt', 'voice', 'audio'].includes(type)) return 'Áudio';
+        if (['video', 'gif'].includes(type)) return 'Vídeo';
+        if (type === 'sticker') return 'Figurinha';
+        if (type === 'image') return 'Imagem';
+        if (type === 'document') return 'Documento';
+        if (type === 'location') return 'Localização';
+        if (['vcard', 'contact_card', 'contact_card_multi'].includes(type)) return 'Contato';
+        return lastMessage.hasMedia ? 'Mídia' : undefined;
+      })();
+
       summaries.push({
         id,
         name: chat.name || id,
@@ -58,8 +72,9 @@ export class WwebjsChats {
         kind: chatKind(id),
         unreadCount: chat.unreadCount || 0,
         timestamp: chat.timestamp || 0,
-        // A location message's body is the base64 map thumbnail; don't surface it as the chat preview.
-        lastMessage: chat.lastMessage?.type === MessageTypes.LOCATION ? '📍' : chat.lastMessage?.body || undefined,
+        // Media-only messages have no body. Keep the chat preview meaningful instead of making the
+        // client render them as an empty conversation.
+        lastMessage: lastMessage?.type === MessageTypes.LOCATION ? 'Localização' : lastMessage?.body || mediaPreview,
         archived: Boolean(chat.archived),
         pinned: Boolean(chat.pinned),
         // Chat.isMuted is the current verdict; muteExpiration is wwjs epoch SECONDS with -1 = forever.

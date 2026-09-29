@@ -55,6 +55,7 @@ const MESSAGE_TYPE_FLAGS: Record<MessageType, true> = {
   location: true,
   contact: true,
   poll: true,
+  list_response: true,
   call: true,
   revoked: true,
   order: true,

@@ -244,6 +244,10 @@ export class SessionEngineEventWiring {
 
         host.messages.applyReactionQueued(id, event);
       },
+      onPollVote: (event): void => {
+        if(!host.isLiveEngine(id,engine))return;
+        host.messages.handlePollVote(id,engine,event);
+      },
       onMessageEdited: (message): void => {
         if (!host.isLiveEngine(id, engine)) return;
         if (!message.messageId) {

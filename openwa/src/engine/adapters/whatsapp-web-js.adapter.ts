@@ -551,6 +551,10 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     return this.messaging.sendTextMessage(chatId, text, mentions, options);
   }
 
+  sendListMessage(chatId:string,input:{body:string;buttonText:string;rows:{id:string;title:string;description?:string}[];title?:string;footer?:string}):Promise<MessageResult>{
+    return this.messaging.sendListMessage(chatId,input);
+  }
+
   sendImageMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     return this.messaging.sendImageMessage(chatId, media);
   }

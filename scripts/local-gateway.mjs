@@ -1,4 +1,6 @@
 import http from 'node:http';
+import https from 'node:https';
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 
 // One public origin for the UI, API and realtime events. Never accept a target
@@ -12,7 +14,7 @@ function options(req) {
   const upstream = target(req.url || '/');
   return { hostname: upstream.hostname, port: upstream.port || 80, path: req.url, method: req.method, headers: { ...req.headers, host: upstream.host } };
 }
-const server = http.createServer((req, res) => {
+function handleRequest(req, res) {
   const upstream = http.request(options(req), response => {
     res.writeHead(response.statusCode || 502, response.headers);
     response.pipe(res);
@@ -25,8 +27,8 @@ const server = http.createServer((req, res) => {
   req.on('aborted', () => upstream.destroy());
   res.on('close', () => upstream.destroy());
   req.pipe(upstream);
-});
-server.on('upgrade', (req, socket, head) => {
+}
+function handleUpgrade(req, socket, head) {
   if (!req.url?.startsWith('/socket.io/')) { socket.destroy(); return; }
   const upstream = http.request(options(req));
   upstream.on('upgrade', (response, remote, remoteHead) => {
@@ -43,9 +45,19 @@ server.on('upgrade', (req, socket, head) => {
   upstream.on('error', () => socket.destroy());
   socket.on('error', () => upstream.destroy());
   upstream.end();
-});
+}
+const server = http.createServer(handleRequest);
+server.on('upgrade', handleUpgrade);
 server.listen(3000, '0.0.0.0');
-function stop() { server.close(); child.kill('SIGTERM'); setTimeout(() => process.exit(0), 5000).unref(); }
+let secureServer;
+const certPath=process.env.TLS_CERT_PATH;
+const keyPath=process.env.TLS_KEY_PATH;
+if(certPath&&keyPath){
+  secureServer=https.createServer({cert:readFileSync(certPath),key:readFileSync(keyPath)},handleRequest);
+  secureServer.on('upgrade',handleUpgrade);
+  secureServer.listen(Number(process.env.HTTPS_PORT||3443),'0.0.0.0');
+}
+function stop() { server.close(); secureServer?.close(); child.kill('SIGTERM'); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 child.on('exit', code => { server.close(); process.exit(code ?? 1); });

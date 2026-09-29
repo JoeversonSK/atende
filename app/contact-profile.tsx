@@ -4,9 +4,10 @@ import {Plus,Trash2} from "lucide-react";
 type Data={name:string;phone:string;email:string;company:string;document:string;address:string;status:string;serviceType?:string;priority?:string;notes:{id:string;text:string;author:string;createdAt:string}[];events:{id:string;title:string;date:string}[];tags:string[];sequences:string[];campaigns:string[];custom:{id:string;label:string;value:string}[]};
 const empty:Data={name:"",phone:"",email:"",company:"",document:"",address:"",status:"open",serviceType:"remote",priority:"normal",notes:[],events:[],tags:[],sequences:[],campaigns:[],custom:[]};
 export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactName,contactPhone="",canEdit,dirtyRef,onSaved}:{baseUrl:string;apiKey:string;token:string;sessionId:string;chatId:string;contactName:string;contactPhone?:string;canEdit:boolean;dirtyRef:{current:boolean};onSaved?:(data:Data)=>void}){
-  const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[dirty,setDirty]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
+  const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[savingPriority,setSavingPriority]=useState(false),[dirty,setDirty]=useState(false),[autoSaveBlocked,setAutoSaveBlocked]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const [note,setNote]=useState(""),[fieldName,setFieldName]=useState(""),[fieldValue,setFieldValue]=useState("");
   const [drafts,setDrafts]=useState({tags:"",sequences:"",campaigns:""});
+  const [availableTags,setAvailableTags]=useState<string[]>([]),[tagChoice,setTagChoice]=useState("");
   useEffect(()=>{dirtyRef.current=dirty;return()=>{dirtyRef.current=false;};},[dirty,dirtyRef]);
   const endpoint=`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(chatId)}`;
   async function fetchProfile(signal?:AbortSignal){
@@ -19,8 +20,9 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
     setData({...empty,...result.data,...(result.revision===0?{name:result.data.name||(/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")?"":contactName),phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
   }
   useEffect(()=>{const abort=new AbortController();fetchProfile(abort.signal).then(apply).catch(e=>{if(e.name!=="AbortError")setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setLoading(false);});return()=>abort.abort();},[endpoint,token]);
+  useEffect(()=>{const abort=new AbortController();fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/catalog/tags`,{signal:abort.signal,headers:{"X-Atende-Token":token}}).then(async response=>response.ok?response.json():[]).then(tags=>{if(!abort.signal.aborted)setAvailableTags(Array.isArray(tags)?tags:[]);}).catch(()=>undefined);return()=>abort.abort();},[baseUrl,sessionId,token]);
   useEffect(()=>{if(!dirty)return;const leave=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue="";};window.addEventListener("beforeunload",leave);return()=>window.removeEventListener("beforeunload",leave);},[dirty]);
-  function change(patch:Partial<Data>){setData(current=>({...current,...patch}));setDirty(true);setNotice("");}
+  function change(patch:Partial<Data>){setData(current=>({...current,...patch}));setDirty(true);setAutoSaveBlocked(false);setError("");setNotice("");}
   useEffect(()=>{
     if(dirty||saving||loading)return;
     const abort=new AbortController();
@@ -35,17 +37,23 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
     return()=>{window.clearInterval(timer);abort.abort();};
   },[endpoint,token,revision,dirty,saving,loading]);
   async function save(){
-    setSaving(true);setError("");setNotice("");
+    if(!dirty||saving)return;setSaving(true);setAutoSaveBlocked(false);setError("");setNotice("Salvando automaticamente…");
     try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json();if(!response.ok)throw new Error(result.message||"Não foi possível salvar.");apply(result);onSaved?.(result.data);setNotice("Informações salvas para a equipe.");}
-    catch(e){setError(e instanceof Error?e.message:"Erro ao salvar.");}finally{setSaving(false);}
+    catch(e){setAutoSaveBlocked(true);setError(e instanceof Error?e.message:"Erro ao salvar.");setNotice("");}finally{setSaving(false);}
   }
+  useEffect(()=>{if(!canEdit||!dirty||saving||savingPriority||loading||autoSaveBlocked)return;const timer=window.setTimeout(()=>void save(),650);return()=>window.clearTimeout(timer);},[canEdit,dirty,saving,savingPriority,loading,autoSaveBlocked,data,revision,endpoint,token]);
   async function reload(){if(dirty&&!window.confirm("Descartar as alterações não salvas e recarregar o perfil?"))return;setLoading(true);setError("");try{apply(await fetchProfile());}catch(e){setError(e instanceof Error?e.message:"Erro ao carregar.");}finally{setLoading(false);}}
+  async function savePriority(priority:string){
+    const previous=data.priority||"normal";setData(current=>({...current,priority}));setSavingPriority(true);setError("");setNotice("Salvando prioridade…");
+    try{const response=await fetch(`${endpoint}/priority`,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({priority})});const result=await response.json();if(!response.ok)throw new Error(result.message||"Não foi possível alterar a prioridade.");setRevision(result.revision);onSaved?.({...data,priority});setNotice("Prioridade atualizada no dashboard.");}
+    catch(e){setData(current=>({...current,priority:previous}));setError(e instanceof Error?e.message:"Erro ao alterar a prioridade.");setNotice("");}finally{setSavingPriority(false);}
+  }
   if(loading)return <div className="contact-crm"><p role="status">Carregando informações…</p></div>;
   return <div className="contact-crm">
     {error&&<p className="form-error" role="alert">{error}</p>}
     <fieldset disabled={!canEdit||saving}>
       <label className="crm-status">Chat<select value={data.status} onChange={e=>change({status:e.target.value})}><option value="open">Aberto</option><option value="pending">Pendente</option><option value="closed">Fechado</option></select></label>
-      <div className="crm-content"><label>Prioridade<select value={data.priority||"normal"} onChange={e=>change({priority:e.target.value})}><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option></select></label></div>
+      <div className="crm-content"><label>Prioridade<select value={data.priority||"normal"} disabled={savingPriority} onChange={e=>void savePriority(e.target.value)}><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option></select><small>{savingPriority?"Atualizando o dashboard…":"A alteração é salva automaticamente."}</small></label></div>
       <details open><summary>Dados do usuário <span>{[data.name,data.phone,data.email,data.company,data.document,data.address].filter(Boolean).length}</span></summary><div className="crm-content">
         {([["name","Nome"],["phone","Telefone"],["email","E-mail"],["company","Empresa"],["document","CPF / CNPJ"],["address","Endereço"]] as const).map(([key,label])=><label key={key}>{label}<input value={data[key]} type={key==="email"?"email":"text"} maxLength={key==="address"?1000:key==="phone"||key==="document"?50:300} placeholder={key==="phone"?"Informe o número com DDD":""} onChange={e=>change({[key]:e.target.value})}/></label>)}
         <small>Dados internos do contato. Não alteram o cadastro no WhatsApp.</small>
@@ -57,15 +65,16 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
       {([["tags","Etiquetas"],["sequences","Sequências"],["campaigns","Campanhas"]] as const).map(([key,label])=><details key={key}><summary>{label} <span>{data[key].length}</span></summary><div className="crm-content">
         {key!=="tags"&&<small>Associação informativa. Não dispara mensagens ou automações.</small>}
         <div className="crm-chips">{data[key].map(value=><span key={value}>{value}<button aria-label={`Remover ${value}`} onClick={()=>change({[key]:data[key].filter(v=>v!==value)})}>×</button></span>)}</div>
-        <label>{key==="tags"?"Nova etiqueta":`Nome da ${key==="sequences"?"sequência":"campanha"}`}<input maxLength={key==="tags"?80:160} value={drafts[key]} onChange={e=>setDrafts({...drafts,[key]:e.target.value})}/></label>
-        <button className="crm-add" disabled={!drafts[key].trim()} onClick={()=>{change({[key]:[...new Set([...data[key],drafts[key].trim()])]});setDrafts({...drafts,[key]:""});}}><Plus size={15}/>Adicionar</button>
+        {key==="tags"&&availableTags.some(tag=>!data.tags.includes(tag))&&<label>Usar etiqueta existente<select value={tagChoice} onChange={e=>{const value=e.target.value;setTagChoice("");if(value)change({tags:[...new Set([...data.tags,value])]});}}><option value="">Selecione uma etiqueta</option>{availableTags.filter(tag=>!data.tags.includes(tag)).map(tag=><option key={tag} value={tag}>{tag}</option>)}</select></label>}
+        <label>{key==="tags"?"Nova etiqueta":`Nome da ${key==="sequences"?"sequência":"campanha"}`}<input list={key==="tags"?"known-contact-tags":undefined} maxLength={key==="tags"?80:160} value={drafts[key]} onChange={e=>setDrafts({...drafts,[key]:e.target.value})}/>{key==="tags"&&<datalist id="known-contact-tags">{availableTags.map(tag=><option key={tag} value={tag}/>)}</datalist>}</label>
+        <button className="crm-add" disabled={!drafts[key].trim()} onClick={()=>{const value=drafts[key].trim();change({[key]:[...new Set([...data[key],value])]});if(key==="tags")setAvailableTags(current=>[...new Set([...current,value])].sort((a,b)=>a.localeCompare(b)));setDrafts({...drafts,[key]:""});}}><Plus size={15}/>Adicionar</button>
       </div></details>)}
       <details><summary>Campos personalizados <span>{data.custom.length}</span></summary><div className="crm-content">
         {data.custom.map(c=><div className="crm-entry" key={c.id}><label>{c.label}<input maxLength={2000} value={c.value} onChange={e=>change({custom:data.custom.map(v=>v.id===c.id?{...v,value:e.target.value}:v)})}/></label><button aria-label={`Remover campo ${c.label}`} onClick={()=>change({custom:data.custom.filter(v=>v.id!==c.id)})}><Trash2 size={14}/></button></div>)}
         <label>Nome do campo<input maxLength={100} value={fieldName} onChange={e=>setFieldName(e.target.value)}/></label><label>Valor<input maxLength={2000} value={fieldValue} onChange={e=>setFieldValue(e.target.value)}/></label><button className="crm-add" disabled={!fieldName.trim()} onClick={()=>{change({custom:[...data.custom,{id:crypto.randomUUID(),label:fieldName.trim(),value:fieldValue.trim()}]});setFieldName("");setFieldValue("");}}><Plus size={15}/>Adicionar campo</button>
       </div></details>
     </fieldset>
-    <div className="crm-save">{canEdit?<><button className="solid-button" disabled={saving||!dirty} onClick={save}>{saving?"Salvando…":"Salvar informações"}</button>{dirty&&<small>Salve antes de trocar de conversa.</small>}</>:<small>Seu acesso permite apenas consultar. A edição usa a permissão de atribuições.</small>}
+    <div className="crm-save">{canEdit?<><small>{saving||dirty&&!autoSaveBlocked?"Salvando alterações automaticamente…":"As alterações são salvas automaticamente."}</small>{autoSaveBlocked&&<button className="solid-button" disabled={saving} onClick={()=>void save()}>Tentar salvar novamente</button>}</>:<small>Seu acesso permite apenas consultar. A edição usa a permissão de atribuições.</small>}
       <button className="back-link" disabled={saving} onClick={reload}>Recarregar informações</button>{notice&&<small role="status">{notice}</small>}
     </div>
   </div>;

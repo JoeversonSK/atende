@@ -9,11 +9,17 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+      - "443:3443"
     environment:
       OPENWA_INTERNAL_URL: http://openwa:2785
       DATABASE_URL: postgresql://atende:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}@postgres:5432/atende
       REDIS_URL: redis://redis:6379
       APP_SESSION_SECRET: ${APP_SESSION_SECRET:?Defina APP_SESSION_SECRET no arquivo .env}
+      HTTPS_PORT: 3443
+      TLS_CERT_PATH: /app/https/server.crt
+      TLS_KEY_PATH: /app/https/server.key
+    volumes:
+      - ./docker/https/generated:/app/https:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,7 +97,13 @@ services:
       API_MASTER_KEY: ${OPENWA_MASTER_KEY:?Defina OPENWA_MASTER_KEY no arquivo .env}
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
       AUTO_START_SESSIONS: "true"
+      SIMULATE_TYPING: "false"
+      MEDIA_DOWNLOAD_ENABLED: "true"
+      MEDIA_CONVERSION_ENABLED: "true"
+      CHAT_MEDIA_ARCHIVE_ENABLED: "true"
+      CHAT_MEDIA_ARCHIVE_OUTBOUND: "true"
       ATENDE_REQUIRE_OPERATOR: "true"
+      DISCORD_UNASSIGNED_WEBHOOK_URL: ${DISCORD_UNASSIGNED_WEBHOOK_URL:-}
     volumes:
       - atende-openwa:/app/data
     ports:

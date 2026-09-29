@@ -21,6 +21,7 @@
 # misc
 .DS_Store
 *.pem
+/docker/https/generated/
 
 # debug
 npm-debug.log*
@@ -43,6 +44,7 @@ next-env.d.ts
 /.sites-runtime/
 /.agents/
 /.codex/
+/.codex-video-review/
 /outputs/
 /work/
 *.tsbuildinfo

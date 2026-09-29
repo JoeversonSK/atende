@@ -1,0 +1,12 @@
+COMO ATIVAR AS NOTIFICACOES EM OUTRO COMPUTADOR
+
+1. Acesse http://suporte-5:3000/atende-local-ca.crt e baixe o certificado.
+2. Abra o arquivo baixado e escolha "Instalar Certificado".
+3. Selecione "Computador Local". Essa etapa pode pedir a senha do administrador.
+4. Escolha "Colocar todos os certificados no repositório a seguir".
+5. Selecione "Autoridades de Certificação Raiz Confiáveis" e conclua.
+6. Feche completamente o Chrome ou Edge e abra novamente.
+7. Acesse https://suporte-5, entre no sistema e clique em "Ativar notificações".
+
+O endereço antigo http://suporte-5:3000 continuará disponível, mas não permite
+notificações do Windows por uma regra de segurança dos navegadores.

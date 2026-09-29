@@ -140,6 +140,31 @@ export class SendPollDto {
   quotedMessageId?: string;
 }
 
+export class SendListDto {
+  @IsString()
+  @IsNotEmpty()
+  chatId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(1024)
+  body!: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(24)
+  buttonText?: string;
+
+  @IsArray()
+  @ArrayMinSize(2)
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  @MaxLength(100, { each: true })
+  options!: string[];
+}
+
 export class ReplyMessageDto {
   @ApiProperty()
   @IsString()

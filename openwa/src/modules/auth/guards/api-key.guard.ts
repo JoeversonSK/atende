@@ -57,12 +57,25 @@ export class ApiKeyGuard implements CanActivate {
     }
     if (apiKeyHeader.startsWith('atende_')) {
       const path = request.path.replace(/^\/api/, '');
-      const reading = request.method === 'GET' && (/^\/sessions$/.test(path) || /^\/sessions\/[^/]+$/.test(path) || /^\/sessions\/[^/]+\/(chats|messages|contacts|conversations)(\/|$)/.test(path));
-      const sending = request.method === 'POST' && /^\/sessions\/[^/]+\/messages\/send-(text|image|video|audio|document|sticker)$/.test(path);
+      const reading =
+        request.method === 'GET' &&
+        (/^\/sessions$/.test(path) ||
+          /^\/sessions\/[^/]+$/.test(path) ||
+          /^\/sessions\/[^/]+\/(chats|messages|contacts|conversations)(\/|$)/.test(path));
+      const sending =
+        request.method === 'POST' &&
+        /^\/sessions\/[^/]+\/messages\/send-(text|image|video|audio|document|sticker|poll)$/.test(path);
+      const preparingMedia =
+        (request.method === 'GET' && /^\/sessions\/[^/]+\/media\/convert$/.test(path)) ||
+        (request.method === 'POST' && /^\/sessions\/[^/]+\/media\/convert\/(voice|video)$/.test(path));
       const readReceipt = request.method === 'POST' && /^\/sessions\/[^/]+\/chats\/read$/.test(path);
-      const assigning = ['PUT','DELETE'].includes(request.method) && /^\/sessions\/[^/]+\/conversations\/[^/]+\/assignment$/.test(path);
-      if (!reading && !sending && !readReceipt && !assigning) throw new ForbiddenException('Acesso restrito ao atendimento.');
-      if (request.headers['x-atende-token'] !== apiKeyHeader.slice(7)) throw new UnauthorizedException('Faça login para continuar.');
+      const assigning =
+        ['PUT', 'DELETE'].includes(request.method) &&
+        /^\/sessions\/[^/]+\/conversations\/[^/]+\/assignment$/.test(path);
+      if (!reading && !sending && !preparingMedia && !readReceipt && !assigning)
+        throw new ForbiddenException('Acesso restrito ao atendimento.');
+      if (request.headers['x-atende-token'] !== apiKeyHeader.slice(7))
+        throw new UnauthorizedException('Faça login para continuar.');
     }
 
     const requiredRole = this.reflector.getAllAndOverride<ApiKeyRole>(REQUIRED_ROLE_KEY, [

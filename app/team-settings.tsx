@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { ShieldCheck, UsersRound } from "lucide-react";
-type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean };
+type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean; dashboardVisible:boolean };
 export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) {
   const [users,setUsers]=useState<Member[]>([]);
   const [recipient,setRecipient]=useState("");
@@ -20,7 +20,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
   async function save(user:Member) {
     setSaving(user.id);setError("");setFeedback("");
     try {
-      const updated=await api(`/users/${user.id}`,{role:user.role,active:user.active,canSend:user.canSend,canAssign:user.canAssign});
+      const updated=await api(`/users/${user.id}`,{role:user.role,active:user.active,canSend:user.canSend,canAssign:user.canAssign,dashboardVisible:user.dashboardVisible});
       edit(user.id,updated);
       if(!updated.active && recipient===user.id)setRecipient("");
       setFeedback(`Permissões de ${updated.displayName} salvas.`);
@@ -50,6 +50,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
       <label className="team-check"><input type="checkbox" checked={user.active} onChange={e=>edit(user.id,{active:e.target.checked})}/>Conta ativa</label>
       <label className="team-check"><input type="checkbox" disabled={user.role==="admin"} checked={user.role==="admin"||user.canSend} onChange={e=>edit(user.id,{canSend:e.target.checked})}/>Enviar mensagens e arquivos</label>
       <label className="team-check"><input type="checkbox" disabled={user.role==="admin"} checked={user.role==="admin"||user.canAssign} onChange={e=>edit(user.id,{canAssign:e.target.checked})}/>Assumir e remover atribuições</label>
+      <label className="team-check"><input type="checkbox" checked={user.dashboardVisible!==false} onChange={e=>edit(user.id,{dashboardVisible:e.target.checked})}/>Exibir nos atendimentos realizados do dashboard</label>
       <button className="solid-button" disabled={!!saving} onClick={()=>save(user)}>{saving===user.id?"Salvando…":"Salvar permissões"}</button>
     </section>)}</div></>}
   </>;

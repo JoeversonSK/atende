@@ -450,6 +450,34 @@ export class MessageSendService {
     return this.persistSentState(message, result);
   }
 
+  async sendList(
+    sessionId: string,
+    dto: { chatId: string; body: string; buttonText?: string; options: string[] },
+  ): Promise<MessageResponseDto> {
+    const finalDto = await this.applySendingGate(sessionId, 'list', dto);
+    const engine = this.getEngine(sessionId);
+    if (!engine.sendListMessage) throw new BadRequestException('Esta conexão não oferece listas interativas.');
+
+    const message = await this.saveOutgoingMessage(sessionId, {
+      chatId: finalDto.chatId,
+      body: finalDto.body,
+      type: 'list',
+      metadata: { options: finalDto.options },
+    });
+
+    let result: MessageResult;
+    try {
+      result = await engine.sendListMessage(finalDto.chatId, {
+        body: finalDto.body,
+        buttonText: finalDto.buttonText || 'Selecionar opção',
+        rows: finalDto.options.map((title, index) => ({ id: `opcao-${index + 1}`, title })),
+      });
+    } catch (error) {
+      return this.failSend(sessionId, 'list', message, finalDto, error);
+    }
+    return this.persistSentState(message, result);
+  }
+
   async sendSticker(sessionId: string, dto: SendMediaMessageDto): Promise<MessageResponseDto> {
     const finalDto = await this.applySendingGate(sessionId, 'sticker', dto);
     const engine = this.getEngine(sessionId);

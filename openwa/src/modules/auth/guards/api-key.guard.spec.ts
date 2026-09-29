@@ -31,10 +31,14 @@ function createMockContext(
   headers: Record<string, string> = {},
   params: Record<string, string> = {},
   socketIp = '127.0.0.1',
+  method = 'GET',
+  path = '/api/sessions',
 ): ExecutionContext {
   const request = {
     headers,
     params,
+    method,
+    path,
     ip: socketIp,
     socket: { remoteAddress: socketIp },
   };
@@ -129,6 +133,38 @@ describe('ApiKeyGuard', () => {
 
     expect(result).toBe(true);
     expect(authService.validateApiKey).toHaveBeenCalledWith('my-bearer-key', '127.0.0.1', undefined);
+  });
+
+  it.each([
+    ['POST', '/api/sessions/sess-1/media/convert/voice'],
+    ['POST', '/api/sessions/sess-1/media/convert/video'],
+    ['GET', '/api/sessions/sess-1/media/convert'],
+  ])('allows an Atende operator credential to prepare media: %s %s', async (method, path) => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey());
+
+    const context = createMockContext(
+      { 'x-api-key': 'atende_operator-token', 'x-atende-token': 'operator-token' },
+      { sessionId: 'sess-1' },
+      '127.0.0.1',
+      method,
+      path,
+    );
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('keeps unrelated routes blocked for an Atende operator credential', async () => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
+    const context = createMockContext(
+      { 'x-api-key': 'atende_operator-token', 'x-atende-token': 'operator-token' },
+      {},
+      '127.0.0.1',
+      'POST',
+      '/api/plugins/install',
+    );
+
+    await expect(guard.canActivate(context)).rejects.toThrow('Acesso restrito ao atendimento.');
   });
 
   it('should reject when API key validation fails', async () => {

@@ -26,6 +26,7 @@ import {
   ReactionEvent,
   EditedMessage,
   RevokedMessage,
+  PollVoteEvent,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -36,6 +37,7 @@ import {
   deliveryStatusToAck,
   ackStatusTransitionFrom,
 } from '../message/message-status.util';
+import { DiscordUnassignedNotifier } from './discord-unassigned-notifier.service';
 
 /**
  * Projects engine message events into the `messages` table and out to webhooks/WebSocket.
@@ -90,6 +92,14 @@ export class MessageProjector {
   // messageMutations queue, so the public enqueue path and the queued applies serialize on one chain.
   private readonly mutationProjector: MessageMutationProjector;
 
+  handlePollVote(id:string,engine:IWhatsAppEngine,event:PollVoteEvent):void{
+    if(!this.engines.isLive(id,engine)||!this.contactProfiles)return;
+    void (async()=>{
+      const evaluationHandled=await this.contactProfiles!.handleEvaluationPollVote(id,engine,event);
+      if(!evaluationHandled)await this.contactProfiles!.handleFlowPollVote(id,engine,event);
+    })().catch(err=>this.logger.error('Failed to process a support poll vote',String(err)));
+  }
+
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
@@ -112,6 +122,8 @@ export class MessageProjector {
     private readonly automationRules?: AutomationRulesService,
     @Optional()
     private readonly contactProfiles?: ContactProfileService,
+    @Optional()
+    private readonly discordNotifier?: DiscordUnassignedNotifier,
   ) {
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
@@ -242,6 +254,10 @@ export class MessageProjector {
       } catch (err) {
         this.logger.error('Failed to reopen incoming support conversation', String(err));
       }
+    }
+    if(outcome.persisted&&!incoming.fromMe)void this.discordNotifier?.notify(id,incoming).catch(err=>this.logger.error('Failed to notify Discord about an unassigned message',String(err)));
+    if(outcome.persisted&&this.contactProfiles&&!incoming.fromMe&&incoming.type==='list_response'){
+      void this.contactProfiles.handleFlowListResponse(id,engine,incoming.chatId,incoming.body||'').catch(err=>this.logger.error('Failed to continue an interactive conversation flow',String(err)));
     }
     this.dispatchInboundMessage(id, finalMessage, outcome);
   }
