@@ -14,7 +14,8 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 const isAssignmentTag = (value: string) => value.trim().localeCompare(assignmentTag, 'pt-BR', { sensitivity: 'base' }) === 0;
 const usefulName = (value: unknown) => /[\p{L}\p{N}]/u.test(String(value ?? '')) ? String(value).trim() : '';
 const nameKey = (value: unknown) => usefulName(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-const distinctiveName = (value: string) => value.split(' ').length >= 2 && value.length >= 8;
+// Single names such as "Edyedy" are valid, but must still be long and unique on both sides.
+const distinctiveName = (value: string) => value.length >= 6 && /\p{L}/u.test(value);
 
 /** A number is an identifier, not a quantity. Only add Brazil's country code to local 10/11-digit numbers. */
 export function normalizeImportPhone(value: unknown): string {
@@ -75,9 +76,13 @@ export class ContactImportService {
       if (!distinctiveName(key) || !digits(profile.data.phone)) continue;
       profilesByName.set(key, [...(profilesByName.get(key) || []), profile]);
     }
+    const ambiguous = [...profilesByName]
+      .filter(([key, values]) => lidsByName.has(key) && (values.length !== 1 || lidsByName.get(key)?.length !== 1))
+      .flatMap(([, values]) => values.map(profile => ({ name: profile.data.name, phone: profile.data.phone,
+        reason: 'Nome repetido em mais de um cadastro ou conversa. Confira antes de unificar.' })));
     const candidates = [...profilesByName].filter(([key, values]) => values.length === 1 && lidsByName.get(key)?.length === 1)
       .map(([, values]) => values[0]);
-    const errors: string[] = [];
+    const errors: { name: string; phone: string; reason: string }[] = [];
     for (let index = 0; index < candidates.length; index += 25) {
       const batch = candidates.slice(index, index + 25).map(({ data }) => ({ firstName: data.name, lastName: '', phone: data.phone,
         tags: Array.isArray(data.tags) ? data.tags : [] }));
@@ -86,17 +91,22 @@ export class ContactImportService {
       } catch (error) {
         for (const row of batch) {
           try { await this.import(token, session, { contacts: [row] }); }
-          catch (individualError) { errors.push(individualError instanceof Error ? individualError.message : 'Não foi possível reconciliar um contato.'); }
+          catch (individualError) { errors.push({ name: row.firstName, phone: row.phone,
+            reason: individualError instanceof Error ? individualError.message : 'Não foi possível reconciliar este contato.' }); }
         }
       }
     }
-    const [count] = candidates.length ? await this.db.query(
-      `SELECT COUNT(*)::integer AS total FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=ANY($2::text[])
+    const hiddenRows = candidates.length ? await this.db.query(
+      `SELECT chat_id AS "chatId" FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=ANY($2::text[])
        AND COALESCE((data->>'directoryHidden')::boolean,false)=true`,
       [session, candidates.map(candidate => candidate.chatId)],
-    ) as { total: number }[] : [{ total: 0 }];
-    return { candidates: candidates.length, reconciled: count.total, skipped: candidates.length - count.total,
-      errors: errors.slice(0, 5) };
+    ) as { chatId: string }[] : [];
+    const hidden = new Set(hiddenRows.map(row => row.chatId));
+    const cases = [...ambiguous, ...candidates.filter(candidate => !hidden.has(candidate.chatId)).map(candidate => ({
+      name: candidate.data.name, phone: candidate.data.phone,
+      reason: errors.find(error => error.phone === candidate.data.phone)?.reason || 'Não foi possível confirmar a correspondência com a conversa antiga.',
+    }))];
+    return { candidates: candidates.length, reconciled: hidden.size, skipped: cases.length, cases };
   }
 
   async import(token: string, session: string, input: unknown) {

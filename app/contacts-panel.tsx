@@ -20,6 +20,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
 }) {
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
+  const [tagSearch, setTagSearch] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [deleting, setDeleting] = useState("");
@@ -27,7 +28,14 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   const [deleteError, setDeleteError] = useState("");
   const [reconciling, setReconciling] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState("");
-  const tags = useMemo(() => [...new Set(contacts.flatMap(contact => contact.tags || []))].sort(), [contacts]);
+  const [reconcileCases, setReconcileCases] = useState<{ name: string; phone: string; reason: string }[]>([]);
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const contact of contacts) for (const value of new Set(contact.tags || [])) counts.set(value, (counts.get(value) || 0) + 1);
+    return counts;
+  }, [contacts]);
+  const tags = useMemo(() => [...tagCounts.keys()].sort((a, b) => a.localeCompare(b, "pt-BR")), [tagCounts]);
+  const visibleTags = tags.filter(value => value.toLocaleLowerCase("pt-BR").includes(tagSearch.toLocaleLowerCase("pt-BR")));
   const shown = contacts.filter(contact =>
     !hiddenIds.includes(contact.id) &&
     (!tag || contact.tags?.includes(tag)) &&
@@ -52,16 +60,17 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   }
 
   async function reconcile() {
-    if (!window.confirm("Unificar os cadastros importados com conversas antigas que tenham exatamente o mesmo nome completo? Casos com nomes repetidos ou mensagens nos dois cadastros serão ignorados.")) return;
-    setReconciling(true); setReconcileMessage("");
+    if (!window.confirm("Unificar os cadastros importados com conversas antigas que tenham exatamente o mesmo nome e uma correspondência única? Casos ambíguos ou com mensagens nos dois cadastros serão listados para revisão.")) return;
+    setReconciling(true); setReconcileMessage(""); setReconcileCases([]);
     try {
       const response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/reconcile`, {
         method: "POST", headers: { "X-Atende-Token": token },
       });
-      const body = await response.json() as { reconciled?: number; skipped?: number; message?: string | string[] };
+      const body = await response.json() as { reconciled?: number; skipped?: number; cases?: { name: string; phone: string; reason: string }[]; message?: string | string[] };
       if (!response.ok) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || "Não foi possível unificar os contatos.");
       await onImported();
-      setReconcileMessage(`${body.reconciled || 0} contatos unificados.${body.skipped ? ` ${body.skipped} casos ambíguos precisam de revisão manual.` : ""}`);
+      setReconcileCases(Array.isArray(body.cases) ? body.cases : []);
+      setReconcileMessage(`${body.reconciled || 0} contatos unificados.${body.skipped ? ` ${body.skipped} casos pendentes listados abaixo.` : ""}`);
     } catch (error) { setReconcileMessage(error instanceof Error ? error.message : "Não foi possível unificar os contatos."); }
     finally { setReconciling(false); }
   }
@@ -75,11 +84,14 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
         <button className="solid-button" onClick={onCreate} disabled={!canCreate}><UserPlus size={18}/>Criar contato</button>
       </div>
     </header>
+    {reconcileCases.length > 0 && <details className="contact-reconcile-cases" open><summary>Contatos que precisam de revisão ({reconcileCases.length})</summary><ul>{reconcileCases.map((item, index) => <li key={`${item.phone}-${index}`}><strong>{item.name || "Contato sem nome"}</strong><span>{item.phone ? `+${item.phone.replace(/\D/g, "")}` : "Telefone não informado"}</span><small>{item.reason}</small></li>)}</ul></details>}
     <div className="contacts-layout">
       <aside>
-        <h2>Etiquetas</h2>
-        <button className={!tag ? "active" : ""} onClick={() => setTag("")}>Todos os contatos</button>
-        {tags.map(value => <button key={value} className={tag === value ? "active" : ""} onClick={() => setTag(value)}>{value}</button>)}
+        <h2>Etiquetas <span>{tags.length}</span></h2>
+        <label className="contact-tag-search"><Search size={16}/><input aria-label="Buscar etiqueta" placeholder="Buscar etiqueta" value={tagSearch} onChange={event => setTagSearch(event.target.value)}/></label>
+        <button className={!tag ? "active" : ""} onClick={() => setTag("")}>Todos os contatos <span>{contacts.length}</span></button>
+        <div className="contact-tag-options">{visibleTags.map(value => <button key={value} className={tag === value ? "active" : ""} onClick={() => setTag(value)}><span>{value}</span><span>{tagCounts.get(value)}</span></button>)}</div>
+        {tags.length > 0 && !visibleTags.length && <p>Nenhuma etiqueta corresponde à busca.</p>}
         {!tags.length && <p>Nenhuma etiqueta cadastrada.</p>}
       </aside>
       <div className="contacts-main">
@@ -89,7 +101,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
           <tbody>{shown.map(contact => <tr key={contact.id}>
             <td><span className="contact-cell"><span className="contact-avatar">{contact.avatar ? <img src={contact.avatar} alt="" referrerPolicy="no-referrer"/> : <UserRound size={20}/>}</span><strong>{contact.name}</strong></span></td>
             <td>{contact.phone ? `+${contact.phone.replace(/\D/g, "")}` : "Não informado"}</td>
-            <td>{contact.tags?.map(value => <span className="contact-tag" key={value}>{value}</span>)}</td>
+            <td><div className="contact-tag-list">{contact.tags?.length ? [...new Set(contact.tags)].sort((a, b) => a.localeCompare(b, "pt-BR")).map(value => <span className="contact-tag" key={value}>{value}</span>) : <span className="contact-no-tags">Sem etiquetas</span>}</div></td>
             <td><span className="contact-row-actions">
               {canCreate && <button className="contact-edit" aria-label={`Editar contato ${contact.name}`} onClick={() => setEditing(contact)}><Pencil size={16}/>Editar</button>}
               <button className="contact-open" aria-label={`Abrir conversa com ${contact.name}`} onClick={() => onOpen(contact)}><MessageCircle size={17}/>Abrir</button>

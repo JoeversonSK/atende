@@ -2630,7 +2630,7 @@ export default function Home() {
     const groups = new Map<string, Array<{ id: string; name: string; phone?: string; avatar?: string; tags: string[] }>>();
     for (const row of rows.values()) {
       const key = nameKey(row.name);
-      if (key.length < 8 || key.split(" ").length < 2) continue;
+      if (key.length < 6 || !/[\p{L}]/u.test(key)) continue;
       groups.set(key, [...(groups.get(key) || []), row]);
     }
     for (const group of groups.values()) {

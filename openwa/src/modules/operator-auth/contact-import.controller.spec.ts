@@ -92,7 +92,7 @@ describe('contact spreadsheet import', () => {
   });
 
   it('only offers unique full-name pairs for bulk reconciliation', async () => {
-    const db = { query: jest.fn(async (sql: string) => sql.includes('COUNT(*)') ? [{ total: 1 }] : [
+    const db = { query: jest.fn(async (sql: string) => sql.includes("=true") ? [{ chatId: '558896556723@c.us' }] : [
       { chatId: '558896556723@c.us', data: { name: 'Djalma Max Móveis', phone: '558896556723', tags: ['Clipp'] } },
       { chatId: '5511999991111@c.us', data: { name: 'Nome Repetido', phone: '5511999991111', tags: [] } },
     ]) };
@@ -103,10 +103,31 @@ describe('contact spreadsheet import', () => {
     ]) };
     const importer = new ContactImportService(db as never, auth as never, { get: () => engine } as never, {} as never);
     const run = jest.spyOn(importer, 'import').mockResolvedValue({ created: 0, updated: 1, assigned: 0 });
-    await expect(importer.reconcile('token', 'session-1')).resolves.toMatchObject({ candidates: 1, reconciled: 1, skipped: 0 });
+    await expect(importer.reconcile('token', 'session-1')).resolves.toMatchObject({ candidates: 1, reconciled: 1, skipped: 1,
+      cases: [{ name: 'Nome Repetido', phone: '5511999991111' }] });
     expect(run).toHaveBeenCalledWith('token', 'session-1', { contacts: [
       { firstName: 'Djalma Max Móveis', lastName: '', phone: '558896556723', tags: ['Clipp'] },
     ] });
+  });
+
+  it('reconciles a unique single-name contact and reports the ones that need review', async () => {
+    const db = { query: jest.fn(async (sql: string) => sql.includes('chat_id=ANY')
+      ? [{ chatId: '558888249164@c.us' }]
+      : [
+        { chatId: '558888249164@c.us', data: { name: 'Edyedy', phone: '558888249164', tags: ['Clipp'] } },
+        { chatId: '5511999999999@c.us', data: { name: 'Nome Repetido', phone: '5511999999999', tags: [] } },
+      ]) };
+    const auth = { requirePermission: jest.fn().mockResolvedValue({}), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'session-1' }) };
+    const engine = { getChats: jest.fn().mockResolvedValue([
+      { id: 'lid-1@lid', name: 'Edyedy' },
+      { id: 'lid-2@lid', name: 'Nome Repetido' }, { id: 'lid-3@lid', name: 'Nome Repetido' },
+    ]) };
+    const importer = new ContactImportService(db as never, auth as never, { get: () => engine } as never, {} as never);
+    jest.spyOn(importer, 'import').mockResolvedValue({ created: 0, updated: 1, assigned: 0 });
+    await expect(importer.reconcile('token', 'session-1')).resolves.toMatchObject({
+      candidates: 1, reconciled: 1, skipped: 1,
+      cases: [{ name: 'Nome Repetido', phone: '5511999999999', reason: expect.stringContaining('Nome repetido') }],
+    });
   });
 
   it('does not create a phone-keyed duplicate when old LID chats cannot be checked', async () => {
