@@ -5,6 +5,7 @@ import { io, type Socket } from "socket.io-client";
 import { LoginScreen, SettingsScreen } from "./account-panels";
 import { connectionOrigin } from "./connection-origin";
 import { ContactsPanel } from "./contacts-panel";
+import { TeamChat } from "./team-chat";
 import { ContactProfile } from "./contact-profile";
 import { messageTimestamp, reconcileMessages } from "./message-reconciliation";
 import type { ConversationFlow } from "./flow-settings";
@@ -680,6 +681,7 @@ export default function Home() {
   );
   const [profileReload, setProfileReload] = useState(0);
   const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [teamChatOpen, setTeamChatOpen] = useState(false);
   const [syncWarning, setSyncWarning] = useState("");
   const [transferId, setTransferId] = useState("");
   const readVersions = useRef(new Map<string, number>());
@@ -1147,6 +1149,7 @@ export default function Home() {
         chat?.unread &&
         Date.now() - (lastReadAttempt.current.get(chat.id) || 0) > 15000 &&
         !dashboardOpen &&
+        !teamChatOpen &&
         !settingsOpen &&
         !operatorOpen &&
         document.visibilityState === "visible" &&
@@ -1161,7 +1164,7 @@ export default function Home() {
       window.removeEventListener("focus", acknowledge);
       document.removeEventListener("visibilitychange", acknowledge);
     };
-  }, [chats, selected?.id, dashboardOpen, settingsOpen, operatorOpen]);
+  }, [chats, selected?.id, dashboardOpen, teamChatOpen, settingsOpen, operatorOpen]);
 
   const refreshMessages = useCallback(
     async (chat: Chat, active = config, loadLiveHistory = false) => {
@@ -1744,6 +1747,7 @@ export default function Home() {
         operatorOpen ||
         newChatOpen ||
         dashboardOpen ||
+        teamChatOpen ||
         contactsOpen
       )
         return;
@@ -1761,6 +1765,7 @@ export default function Home() {
     operatorOpen,
     newChatOpen,
     dashboardOpen,
+    teamChatOpen,
     contactsOpen,
     flowMenuOpen,
     emojiOpen,
@@ -2454,6 +2459,7 @@ export default function Home() {
         operatorOpen ||
         newChatOpen ||
         dashboardOpen ||
+        teamChatOpen ||
         contactsOpen
       )
         return;
@@ -2476,6 +2482,7 @@ export default function Home() {
     operatorOpen,
     newChatOpen,
     dashboardOpen,
+    teamChatOpen,
     contactsOpen,
     config,
     operator,
@@ -2755,16 +2762,17 @@ export default function Home() {
         </div>
       </header>
       <section
-        className={`wa-shell ${dashboardOpen || contactsOpen ? "dashboard-is-open" : ""}`}
+        className={`wa-shell ${dashboardOpen || contactsOpen || teamChatOpen ? "dashboard-is-open" : ""}`}
       >
         <nav className="workspace-rail" aria-label="Navegação principal">
           <button
-            className={!dashboardOpen && !contactsOpen ? "active" : ""}
+            className={!dashboardOpen && !contactsOpen && !teamChatOpen ? "active" : ""}
             onClick={() => {
               setFilter("all");
               setSettingsOpen(false);
               setDashboardOpen(false);
               setContactsOpen(false);
+              setTeamChatOpen(false);
             }}
             title="Todas as conversas"
           >
@@ -2776,11 +2784,24 @@ export default function Home() {
             onClick={() => {
               setContactsOpen(true);
               setDashboardOpen(false);
+              setTeamChatOpen(false);
             }}
             title="Contatos"
           >
             <UsersRound size={22} />
             <span>Contatos</span>
+          </button>
+          <button
+            className={teamChatOpen ? "active" : ""}
+            onClick={() => {
+              setTeamChatOpen(true);
+              setContactsOpen(false);
+              setDashboardOpen(false);
+            }}
+            title="Chat interno da equipe"
+          >
+            <MessageCircle size={22} />
+            <span>Equipe</span>
           </button>
           <button
             className={dashboardOpen ? "active" : ""}
@@ -2793,6 +2814,7 @@ export default function Home() {
               }
               setDashboardOpen(true);
               setContactsOpen(false);
+              setTeamChatOpen(false);
             }}
             title="Dashboard dos chamados"
           >
@@ -2828,6 +2850,7 @@ export default function Home() {
             }}
           />
         )}
+        {teamChatOpen && <TeamChat baseUrl={config.baseUrl} token={operatorToken} />}
         {dashboardOpen && (
           <TicketDashboard
             warning={syncWarning}
