@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowDown, ArrowUp, AudioLines, CheckCircle2, Clock3, FileText, GitBranch,
-  GripVertical, Image as ImageIcon, ListChecks, MessageSquareText, Plus, Save,
+  GripVertical, Image as ImageIcon, ListChecks, MessageSquareText, Pencil, Plus, Save,
   Trash2, UserCheck, Video, X,
 } from "lucide-react";
 
@@ -72,21 +72,22 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const addBlock=(type:ConversationFlowStep["type"])=>{if(flow)patchFlow({steps:[...flow.steps,newBlock(type)]});};
   const removeBlock=(index:number)=>patchFlow({steps:flow.steps.filter((_,i)=>i!==index)});
   const moveBlock=(from:number,to:number)=>{if(to<0||to>=flow.steps.length||from===to)return;const steps=[...flow.steps], [item]=steps.splice(from,1);steps.splice(to,0,item);patchFlow({steps});};
-  const addFlow=()=>{setFlows(current=>[...current,blankFlow()]);setSelected(flows.length);};
+  const addFlow=()=>{setFlows(current=>[...current,blankFlow()]);setSelected(flows.length);setEditingDetails(true);};
   async function save(){if(!flow)return;const validation=validateFlow(flow);if(validation){setFeedback(validation);return;}setSaving(flow.id||"new");setFeedback("");try{const path=flow.id?`/admin/flows/${flow.id}`:"/admin/flows";const payload={name:flow.name,description:flow.description||"",active:flow.active,kind:flow.kind,steps:flow.steps,pollOptions:flow.kind==="evaluation"?defaultPollOptions:[]};const saved=normalizeFlow(await api(path,{method:flow.id?"PUT":"POST",body:JSON.stringify(payload)}));setFlows(current=>current.map((item,index)=>index===selected?saved:item));setFeedback(`Fluxo “${saved.name}” salvo.`);}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving("");}}
   async function remove(){if(!flow)return;if(!flow.id){setFlows(current=>current.filter((_,i)=>i!==selected));return;}if(!window.confirm(`Excluir o fluxo “${flow.name}”?`))return;setSaving(flow.id);try{await api(`/admin/flows/${flow.id}`,{method:"DELETE"});setFlows(current=>current.filter(item=>item.id!==flow.id));setFeedback("Fluxo excluído.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível excluir.");}finally{setSaving("");}}
   async function selectFile(index:number,file?:File){if(!file)return;if(file.size>8*1024*1024){setFeedback("O arquivo do fluxo pode ter no máximo 8 MB.");return;}const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");reader.onerror=()=>reject(new Error("Não foi possível ler o arquivo."));reader.readAsDataURL(file);});patchStep(index,{data,mimetype:file.type||"application/octet-stream",filename:file.name});}
-  const summary=useMemo(()=>flow?`${flow.steps.length} bloco${flow.steps.length===1?"":"s"}`:"",[flow]);
+  const [editingDetails,setEditingDetails]=useState(false);
 
   if(loading)return <div className="flow-builder-loading">Carregando seus fluxos…</div>;
   return <div className="flow-builder">
     <aside className="flow-library">
       <header><div><span>Automações</span><h2>Fluxos</h2></div><button onClick={addFlow} title="Criar fluxo"><Plus size={18}/></button></header>
-      <div className="flow-library-list">{flows.map((item,index)=><button key={item.id||`new-${index}`} className={selected===index?"active":""} onClick={()=>setSelected(index)}><span className="flow-library-icon"><GitBranch size={17}/></span><span><b>{item.name}</b><small>{item.description||`${item.steps.length} blocos configurados`}</small></span><i className={item.active?"online":""}/></button>)}</div>
+      <div className="flow-library-list">{flows.map((item,index)=><button key={item.id||`new-${index}`} className={selected===index?"active":""} onClick={()=>{setSelected(index);setEditingDetails(false);}}><span className="flow-library-icon"><GitBranch size={17}/></span><span><b>{item.name}</b><small>{item.description||`${item.steps.length} blocos configurados`}</small></span><i className={item.active?"online":""}/></button>)}</div>
       <button className="flow-new" onClick={addFlow}><Plus size={16}/>Novo fluxo</button>
     </aside>
     {flow?<section className="flow-workspace">
-      <header className="flow-toolbar"><div><input value={flow.name} maxLength={100} onChange={event=>patchFlow({name:event.target.value})}/><input value={flow.description||""} maxLength={240} onChange={event=>patchFlow({description:event.target.value})} placeholder="Descrição para a equipe"/><span>{summary}</span></div><label className="flow-active"><input type="checkbox" checked={flow.active} onChange={event=>patchFlow({active:event.target.checked})}/><span/>{flow.active?"Ativo":"Inativo"}</label><button className="flow-delete" onClick={()=>void remove()} disabled={!!saving}><Trash2 size={17}/></button><button className="solid-button" onClick={()=>void save()} disabled={!!saving}><Save size={17}/>{saving?"Salvando…":"Salvar fluxo"}</button></header>
+      <header className="flow-toolbar"><button className="flow-details-trigger" onClick={()=>setEditingDetails(current=>!current)} aria-expanded={editingDetails}><Pencil size={16}/>Editar detalhes</button><label className="flow-active"><input type="checkbox" checked={flow.active} onChange={event=>patchFlow({active:event.target.checked})}/><span/>{flow.active?"Ativo":"Inativo"}</label><button className="flow-delete" onClick={()=>void remove()} disabled={!!saving}><Trash2 size={17}/></button><button className="solid-button" onClick={()=>void save()} disabled={!!saving}><Save size={17}/>{saving?"Salvando…":"Salvar fluxo"}</button></header>
+      {editingDetails&&<div className="flow-details-editor"><label>Nome do fluxo<input value={flow.name} maxLength={100} onChange={event=>patchFlow({name:event.target.value})}/></label><label>Descrição<input value={flow.description||""} maxLength={240} onChange={event=>patchFlow({description:event.target.value})} placeholder="Descrição para a equipe"/></label></div>}
       {feedback&&<p className="settings-feedback flow-feedback" role="status">{feedback}<button onClick={()=>setFeedback("")}><X size={14}/></button></p>}
       <div className="flow-editor-layout">
         <div className="flow-canvas">

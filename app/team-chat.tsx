@@ -155,7 +155,6 @@ export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }
   const currentRoom = data.rooms.find(item => item.id === room);
   return <section className="team-chat" aria-label="Chat interno">
     <aside className="team-chat-rooms">
-      <header><span className="section-kicker">EQUIPE</span><h1>Chat interno</h1><small>Mensagens entre usuários do sistema</small></header>
       <div className="team-chat-room-list">
         {data.rooms.map(item => <button key={item.id} className={`team-chat-room${room === item.id ? " active" : ""}`} onClick={() => chooseRoom(item.id)}>
           <span className="team-chat-avatar">{item.id === "group" ? <UsersRound size={19} /> : item.displayName.trim().charAt(0).toUpperCase()}</span>

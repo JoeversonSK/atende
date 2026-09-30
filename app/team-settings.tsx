@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ShieldCheck, UsersRound } from "lucide-react";
 
 type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean; dashboardVisible:boolean };
 const columns = [
@@ -44,12 +43,10 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
     catch(e){setRecipients(current=>checked?current.filter(id=>id!==userId):[...new Set([...current,userId])]);setError(e instanceof Error?e.message:"Erro ao salvar.");}
     finally{setSavingRecipients(current=>current.filter(id=>id!==userId));}
   }
-  return <><h2>Equipe e permissões</h2><p>Gerencie os acessos e escolha quem recebe avisos de novas conversas em uma única tabela.</p>
+  return <><h2>Equipe e permissões</h2>
     {error&&<p className="form-error" role="alert">{error}</p>}
     {feedback&&<p className="team-feedback" role="status">{feedback}</p>}
     {loading?<p role="status">Carregando equipe…</p>:<>
-    <div className="team-heading"><UsersRound size={22}/><h3>Contas da equipe</h3><span>{users.length}</span></div>
-    <p>As alterações são salvas automaticamente. “Notificar” envia avisos de novas mensagens em conversas sem responsável; após a atribuição, só o responsável recebe.</p>
     <div className="team-table-scroll"><table className="team-table"><thead><tr><th scope="col">Pessoa</th><th scope="col">Função</th>{columns.slice(0,1).map(column=><th key={column.key} scope="col" title={column.hint}>{column.label}</th>)}<th scope="col" title="Receber avisos de novas mensagens em conversas sem responsável">Notificar</th>{columns.slice(1).map(column=><th key={column.key} scope="col" title={column.hint}>{column.label}</th>)}</tr></thead><tbody>{users.map(user=><tr key={user.id} className={user.active?"":"team-row-inactive"}>
       <td><div className="team-person"><span className="preview-avatar" aria-hidden="true">{user.displayName.slice(0,1)}</span><span><b>{user.displayName}</b><small>@{user.username}</small></span></div></td>
       <td><select aria-label={`Função de ${user.displayName}`} value={user.role} disabled={savingUsers.includes(user.id)} onChange={e=>changeUser(user,{role:e.target.value})}><option value="agent">Atendente</option><option value="admin">Administrador</option></select></td>
@@ -57,7 +54,6 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
       <td className="team-check-cell"><input type="checkbox" aria-label={`Notificar — ${user.displayName}`} title="Avisar sobre novas mensagens sem responsável" disabled={savingUsers.includes(user.id) || savingRecipients.includes(user.id) || !user.active} checked={recipients.includes(user.id)} onChange={e=>changeRecipient(user.id,e.target.checked)}/></td>
       {columns.slice(1).map(column=><td key={column.key} className="team-check-cell"><input type="checkbox" aria-label={`${column.label} — ${user.displayName}`} title={column.hint} disabled={savingUsers.includes(user.id) || (user.role==="admin" && (column.key==="canSend" || column.key==="canAssign"))} checked={user.role==="admin" && (column.key==="canSend" || column.key==="canAssign") ? true : user[column.key]!==false} onChange={e=>changeUser(user,{[column.key]:e.target.checked})}/></td>)}
     </tr>)}</tbody></table></div>
-    <p className="team-table-note"><ShieldCheck size={16}/> Arraste horizontalmente em telas menores para ver todas as permissões.</p>
     </>}
   </>;
 }

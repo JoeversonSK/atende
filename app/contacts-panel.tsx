@@ -82,7 +82,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
 
   return <section className="contacts-panel" aria-label="Contatos">
     <header>
-      <div><h1>Contatos</h1><p>{contacts.length - hiddenIds.filter(id => contacts.some(contact => contact.id === id)).length} contatos na central</p>{deleteError && <p className="contact-delete-error" role="alert">{deleteError}</p>}{reconcileMessage && <p role="status">{reconcileMessage}</p>}</div>
+      {(deleteError || reconcileMessage) && <div>{deleteError && <p className="contact-delete-error" role="alert">{deleteError}</p>}{reconcileMessage && <p role="status">{reconcileMessage}</p>}</div>}
       <div className="contact-header-actions">
         {canCreate && <button className="contact-reconcile-trigger" onClick={() => void reconcile()} disabled={reconciling} title="Associe importações às conversas antigas quando houver correspondência única de nome"><Merge size={18}/>{reconciling ? "Unificando…" : "Unificar duplicados"}</button>}
         <button className="contact-import-trigger" onClick={() => setImportOpen(true)} disabled={!canCreate}><FileUp size={18}/>Importar planilha</button>

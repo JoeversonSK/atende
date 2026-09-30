@@ -205,12 +205,6 @@ body .wa-sidebar {
   min-width: 280px;
   background: #fff;
 }
-body .wa-sidebar-header {
-  height: 99px;
-  min-height: 99px;
-  padding: 22px 22px 12px;
-  border: 0;
-}
 .section-kicker {
   display: block;
   font-size: 9px;
@@ -218,23 +212,6 @@ body .wa-sidebar-header {
   letter-spacing: 1.6px;
   color: #8a99a6;
   margin-bottom: 6px;
-}
-body .wa-sidebar-header h1 {
-  font-size: 23px;
-  letter-spacing: -0.7px;
-  font-weight: 700;
-  margin: 0;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-body .wa-sidebar-header h1 span {
-  font-size: 11px;
-  letter-spacing: 0;
-  background: #f0f4f6;
-  color: #7d8c97;
-  padding: 4px 7px;
-  border-radius: 7px;
 }
 body .wa-search-bar {
   padding: 8px 20px 14px;
@@ -945,7 +922,7 @@ body .settings-page {
 body .settings-topbar {
   height: 64px;
   display: grid;
-  grid-template-columns: 220px 1fr auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 16px;
   padding: 0 24px;
@@ -958,11 +935,6 @@ body .settings-topbar > button {
   gap: 8px;
   color: #547080;
   font-size: 13px;
-}
-body .settings-topbar h1 {
-  margin: 0;
-  font-size: 21px;
-  font-weight: 700;
 }
 body .settings-topbar > div {
   display: flex;
@@ -2233,47 +2205,15 @@ body .flow-builder {
   flex: 0 0 auto;
   align-items: center;
   gap: 10px;
-  min-height: 77px;
-  padding: 12px 20px;
+  min-height: 56px;
+  padding: 8px 16px;
   border-bottom: 1px solid #dce4e6;
   background: #fff;
 }
-.flow-toolbar > div {
-  display: grid;
-  min-width: 220px;
-  flex: 1;
-  grid-template-columns: minmax(150px, 380px) auto;
-  gap: 1px 12px;
-}
-.flow-toolbar input {
-  height: auto !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-.flow-toolbar > div input:first-child {
-  font-size: 17px;
-  font-weight: 800;
-  color: #213a47;
-}
-.flow-toolbar > div input:nth-child(2) {
-  grid-column: 1;
-  color: #74868d;
-  font-size: 11px;
-}
-.flow-toolbar > div > span {
-  grid-column: 2;
-  grid-row: 1/3;
-  align-self: center;
-  padding: 5px 8px;
-  border-radius: 10px;
-  background: #eef3f4;
-  color: #708188;
-  font-size: 10px;
-}
+.flow-details-trigger { display:flex; align-items:center; gap:7px; margin-right:auto; color:#486a74; font-size:12px; }
+.flow-details-editor { display:flex; gap:12px; padding:12px 16px; background:#f8fbfa; border-bottom:1px solid #dce4e6; }
+.flow-details-editor label { display:grid; gap:5px; flex:1; min-width:0; color:#526870; font-size:11px; }
+.flow-details-editor input { width:100%; padding:8px 10px; border:1px solid #dce4e6; border-radius:7px; background:#fff; color:#213a47; font:inherit; font-size:13px; }
 .flow-active {
   display: flex !important;
   align-items: center;
@@ -2328,7 +2268,7 @@ body .flow-builder {
 .flow-feedback {
   position: absolute;
   z-index: 8;
-  top: 84px;
+  top: 64px;
   right: 28px;
   display: flex;
   align-items: center;
@@ -2900,10 +2840,7 @@ body .flow-builder {
     top: 0;
     flex-wrap: wrap;
   }
-  .flow-toolbar > div {
-    min-width: 100%;
-    order: -1;
-  }
+  .flow-details-editor { flex-direction:column; }
   .flow-canvas {
     min-height: 600px;
     padding: 25px 12px 70px;

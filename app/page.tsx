@@ -2957,14 +2957,6 @@ export default function Home() {
           />
         )}
         <aside className="wa-sidebar">
-          <header className="wa-sidebar-header">
-            <div>
-              <span className="section-kicker">CAIXA DE ENTRADA</span>
-              <h1>
-                Conversas <span>{chats.length}</span>
-              </h1>
-            </div>
-          </header>
           <div className="wa-search-bar">
             <label>
               <Search size={18} />
