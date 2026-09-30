@@ -13,7 +13,7 @@ class RecipientEnabledDto { @IsBoolean() enabled!: boolean; }
 class ResetPasswordDto extends LoginDto { @IsString() @MinLength(32) @MaxLength(128) code!: string; }
 class OperationIntervalDto { @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) start!: string; @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) end!: string; }
 class OperationDayDto { @IsInt() @Min(0) @Max(6) weekday!: number; @IsBoolean() enabled!: boolean; @IsArray() @ValidateNested({each:true}) @Type(()=>OperationIntervalDto) intervals!: OperationIntervalDto[]; }
-class OperationHoursDto { @IsBoolean() enabled!: boolean; @IsArray() @ValidateNested({each:true}) @Type(()=>OperationDayDto) days!: OperationDayDto[]; }
+class OperationHoursDto { @IsBoolean() enabled!: boolean; @IsArray() @ValidateNested({each:true}) @Type(()=>OperationDayDto) days!: OperationDayDto[]; @IsBoolean() autoReplyEnabled!:boolean; @IsString() @MaxLength(4000) autoReplyMessage!:string; }
 class NotificationWebhookDto {
   @IsString() @IsNotEmpty() @MaxLength(100) name!:string;
   @IsIn(['discord','json']) destinationType!:'discord'|'json';

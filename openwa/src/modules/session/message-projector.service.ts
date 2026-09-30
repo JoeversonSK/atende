@@ -38,6 +38,7 @@ import {
   ackStatusTransitionFrom,
 } from '../message/message-status.util';
 import { DiscordUnassignedNotifier } from './discord-unassigned-notifier.service';
+import { OutOfHoursReplyService } from './out-of-hours-reply.service';
 
 /**
  * Projects engine message events into the `messages` table and out to webhooks/WebSocket.
@@ -124,6 +125,8 @@ export class MessageProjector {
     private readonly contactProfiles?: ContactProfileService,
     @Optional()
     private readonly discordNotifier?: DiscordUnassignedNotifier,
+    @Optional()
+    private readonly outOfHoursReply?: OutOfHoursReplyService,
   ) {
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
@@ -256,6 +259,7 @@ export class MessageProjector {
       }
     }
     if(outcome.persisted&&!incoming.fromMe)void this.discordNotifier?.notify(id,incoming).catch(err=>this.logger.error('Failed to notify Discord about an unassigned message',String(err)));
+    if(outcome.persisted&&!incoming.fromMe)void this.outOfHoursReply?.reply(id,engine,incoming).catch(err=>this.logger.error('Failed to send the out-of-hours reply',String(err)));
     if(outcome.persisted&&this.contactProfiles&&!incoming.fromMe&&incoming.type==='list_response'){
       void this.contactProfiles.handleFlowListResponse(id,engine,incoming.chatId,incoming.body||'').catch(err=>this.logger.error('Failed to continue an interactive conversation flow',String(err)));
     }

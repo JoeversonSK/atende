@@ -4,7 +4,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import { DataSource } from 'typeorm';
 
 export type OperatorUser = { id: string; username: string; displayName: string; role?: string; active?: boolean; canSend?: boolean; canAssign?: boolean; dashboardVisible?: boolean };
-export type OperationHours = { enabled: boolean; days: { weekday: number; enabled: boolean; intervals: { start: string; end: string }[] }[] };
+export type OperationHours = { enabled: boolean; days: { weekday: number; enabled: boolean; intervals: { start: string; end: string }[] }[]; autoReplyEnabled: boolean; autoReplyMessage: string };
 export type ConversationFlowStep = {
   id?:string;
   type?:'message'|'image'|'video'|'audio'|'document'|'poll'|'delay'|'action';
@@ -22,7 +22,7 @@ export type ConversationFlowStep = {
 export type ConversationFlowInput = { name:string; description?:string; active:boolean; kind:'regular'|'start'|'evaluation'; steps:ConversationFlowStep[]; pollOptions:string[] };
 export type NotificationWebhookInput = { name:string; destinationType:'discord'|'json'; url:string; active:boolean; onlyUnassigned:boolean; includeGroups:boolean; includeText:boolean; includeMedia:boolean; senderName:string; title:string; color:string; fields:string[] };
 const accessFields = 'id, username, display_name AS "displayName", role, active, can_send AS "canSend", can_assign AS "canAssign", dashboard_visible AS "dashboardVisible"';
-const defaultOperationHours = (): OperationHours => ({ enabled:true, days:Array.from({length:7},(_,weekday)=>({weekday,enabled:weekday<6,intervals:[{start:'08:00',end:weekday===5?'12:00':'18:00'}]})) });
+const defaultOperationHours = (): OperationHours => ({ enabled:true, days:Array.from({length:7},(_,weekday)=>({weekday,enabled:weekday<6,intervals:[{start:'08:00',end:weekday===5?'12:00':'18:00'}]})), autoReplyEnabled:false, autoReplyMessage:'' });
 
 @Injectable()
 export class OperatorAuthService implements OnModuleInit {
@@ -195,6 +195,7 @@ export class OperatorAuthService implements OnModuleInit {
     await this.requireAdmin(token);
     await this.ensureAccessSchema();
     const normalized=this.normalizeOperationHours(value);
+    if(normalized.autoReplyEnabled && !normalized.autoReplyMessage)throw new BadRequestException('Escreva a mensagem automática para o horário fechado.');
     await this.dataSource.query('UPDATE openwa.operator_settings SET operation_hours=$1::jsonb WHERE id=1',[JSON.stringify(normalized)]);
     return normalized;
   }
@@ -255,7 +256,7 @@ export class OperatorAuthService implements OnModuleInit {
     if(!source.length) return defaultOperationHours();
     const byDay=new Map(source.map(day=>[Number(day?.weekday),day]));
     const validTime=(time: unknown)=>typeof time==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(time);
-    return {enabled:input.enabled!==false,days:Array.from({length:7},(_,weekday)=>{
+    return {enabled:input.enabled!==false,autoReplyEnabled:input.autoReplyEnabled===true,autoReplyMessage:typeof input.autoReplyMessage==='string'?input.autoReplyMessage.trim().slice(0,4000):'',days:Array.from({length:7},(_,weekday)=>{
       const day=byDay.get(weekday);
       const intervals=Array.isArray(day?.intervals)?day.intervals.filter(interval=>validTime(interval?.start)&&validTime(interval?.end)&&interval.start<interval.end).slice(0,4).map(interval=>({start:interval.start,end:interval.end})):[];
       return {weekday,enabled:Boolean(day?.enabled)&&intervals.length>0,intervals:intervals.length?intervals:[{start:'08:00',end:weekday===5?'12:00':'18:00'}]};

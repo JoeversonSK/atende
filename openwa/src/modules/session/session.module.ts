@@ -21,6 +21,7 @@ import { ChatMediaModule } from '../chat-media/chat-media.module';
 import { AutomationModule } from '../automation/automation.module';
 import { PLUGIN_SESSION_PORT } from '../../core/plugins/plugin-host-ports';
 import { DiscordUnassignedNotifier } from './discord-unassigned-notifier.service';
+import { OutOfHoursReplyService } from './out-of-hours-reply.service';
 
 @Module({
   // WebhookModule/StatusStoreModule/ChatMediaModule/AutomationModule do not import SessionModule
@@ -46,6 +47,7 @@ import { DiscordUnassignedNotifier } from './discord-unassigned-notifier.service
     SessionOwnershipService,
     MessageProjector,
     DiscordUnassignedNotifier,
+    OutOfHoursReplyService,
     // Binds the core-owned plugin capability port to this module's service; resolved lazily by the
     // plugin runtime (PluginHostServices) so its provider cycle stays broken. An alias, not a
     // factory: Nest runs lifecycle hooks once per non-alias provider, so a factory that returned the
