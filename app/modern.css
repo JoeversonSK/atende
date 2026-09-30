@@ -236,16 +236,6 @@ body .wa-sidebar-header h1 span {
   padding: 4px 7px;
   border-radius: 7px;
 }
-.new-conversation-button {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #d7e7e1;
-  background: #f1faf6;
-  border-radius: 10px;
-  color: #087f6c;
-}
 body .wa-search-bar {
   padding: 8px 20px 14px;
   gap: 9px;
@@ -861,6 +851,23 @@ body .wa-modal > .wa-primary {
   border-radius: 10px;
   margin-bottom: 24px;
 }
+body .new-contact-modal { width:min(420px,calc(100vw - 32px)); border-radius:13px; position:relative; }
+body .new-contact-modal header { justify-content:center; padding:20px 48px; }
+body .new-contact-modal header h2 { font-size:18px; font-weight:650; color:#30333a; text-align:center; }
+body .new-contact-modal header button { position:absolute; right:16px; top:17px; padding:4px; }
+body .new-contact-modal header button svg { width:18px; height:18px; }
+.new-contact-fields { display:grid; gap:10px; padding:23px 42px 0; }
+.new-contact-fields>p:first-child { margin:0 0 2px; color:#64728b; font-size:14px; line-height:1.4; }
+body .new-contact-fields>input { width:100%; height:56px; margin:0; padding:0 13px; border:0; border-radius:13px; background:#f4f4f4; color:#263545; font-size:15px; outline:none; }
+body .new-contact-fields>input:focus,.new-contact-phone:focus-within { box-shadow:0 0 0 2px #9cc8f6; }
+.new-contact-phone { display:flex; align-items:center; gap:4px; height:56px; border-radius:13px; background:#f4f4f4; }
+.new-contact-phone select { width:104px; flex:none; height:100%; padding:0 4px 0 11px; border:0; background:transparent; color:#4a5666; font:inherit; font-size:14px; outline:none; }
+body .new-contact-phone input { min-width:0; flex:1; height:100%; margin:0; padding:0 13px 0 4px; border:0; background:transparent; color:#263545; font-size:15px; outline:none; }
+body .new-contact-fields .new-contact-error { margin:0; color:#b43e3e; font-size:12px; }
+body .new-contact-modal>.wa-primary { width:calc(100% - 84px); height:56px; margin:24px 42px 30px; border-radius:12px; background:#9cc8f6; color:#fff; font-size:15px; font-weight:650; }
+body .new-contact-modal>.wa-primary:hover:not(:disabled) { background:#76b4f4; }
+body .new-contact-modal>.wa-primary:disabled { opacity:.65; cursor:wait; }
+@media(max-width:480px){.new-contact-fields{padding-left:22px;padding-right:22px}body .new-contact-modal>.wa-primary{width:calc(100% - 44px);margin-left:22px;margin-right:22px}}
 body .wa-backdrop {
   background: #142e4560;
   backdrop-filter: blur(4px);

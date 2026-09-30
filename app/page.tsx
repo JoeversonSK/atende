@@ -40,7 +40,6 @@ import {
   Pause,
   Phone,
   Play,
-  Plus,
   Search,
   Send,
   Settings,
@@ -764,7 +763,10 @@ export default function Home() {
     useState<NotificationPreferences>(defaultNotificationPreferences);
   const [qr, setQr] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
-  const [contactName, setContactName] = useState("");
+  const [contactFirstName, setContactFirstName] = useState("");
+  const [contactLastName, setContactLastName] = useState("");
+  const [contactCountryCode, setContactCountryCode] = useState("55");
+  const [contactFormError, setContactFormError] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
@@ -2603,16 +2605,27 @@ export default function Home() {
     }
   }
   async function startChat() {
-    const number = phone.replace(/\D/g, "");
+    const countryCode = contactCountryCode.replace(/\D/g, "");
+    const typedNumber = phone.replace(/\D/g, "");
+    const nationalMin = ({55:10,1:10,351:9,34:9,54:10} as Record<string,number>)[contactCountryCode] || 9;
+    const nationalMax = ({55:11,1:10,351:9,34:9,54:11} as Record<string,number>)[contactCountryCode] || 11;
+    const number = phone.trim().startsWith("+") || (typedNumber.startsWith(countryCode) && typedNumber.length > nationalMax)
+      ? typedNumber
+      : `${countryCode}${typedNumber}`;
+    const fullName = [contactFirstName.trim(), contactLastName.trim()].filter(Boolean).join(" ");
     if (savingContact) return;
-    if (!/^\d{10,15}$/.test(number)) {
-      setNotice(
-        "Informe um número válido com DDI e DDD, entre 10 e 15 dígitos.",
-      );
+    setContactFormError("");
+    if (!contactFirstName.trim()) {
+      setContactFormError("Informe o primeiro nome do contato.");
+      return;
+    }
+    const nationalNumber = number.startsWith(countryCode) ? number.slice(countryCode.length) : "";
+    if (!/^\d{10,15}$/.test(number) || nationalNumber.length < nationalMin || nationalNumber.length > nationalMax) {
+      setContactFormError("Informe um número válido com DDD.");
       return;
     }
     if (!config.sessionId) {
-      setNotice("Configure a conexão WhatsApp antes de cadastrar contatos.");
+      setContactFormError("Configure a conexão WhatsApp antes de cadastrar contatos.");
       return;
     }
     setSavingContact(true);
@@ -2628,7 +2641,7 @@ export default function Home() {
           ...profile,
           data: {
             ...profile.data,
-            name: contactName.trim() || profile.data.name || number,
+            name: fullName,
             phone: number,
           },
         }),
@@ -2644,13 +2657,16 @@ export default function Home() {
         ],
       }));
       setPhone("");
-      setContactName("");
+      setContactFirstName("");
+      setContactLastName("");
+      setContactCountryCode("55");
+      setContactFormError("");
       setNewChatOpen(false);
       setContactsOpen(true);
       setDashboardOpen(false);
       setNotice("Contato salvo para toda a equipe.");
     } catch (error) {
-      setNotice(
+      setContactFormError(
         error instanceof Error
           ? error.message
           : "Não foi possível salvar o contato.",
@@ -2948,17 +2964,6 @@ export default function Home() {
                 Conversas <span>{chats.length}</span>
               </h1>
             </div>
-            <button
-              className="new-conversation-button"
-              onClick={() => {
-                setContactsOpen(true);
-                setDashboardOpen(false);
-              }}
-              aria-label="Contatos"
-              title="Contatos"
-            >
-              <Plus size={21} />
-            </button>
           </header>
           <div className="wa-search-bar">
             <label>
@@ -3692,39 +3697,28 @@ export default function Home() {
       )}
       {newChatOpen && (
         <div className="wa-backdrop">
-          <section className="wa-modal" role="dialog" aria-modal="true">
+          <form className="wa-modal new-contact-modal" role="dialog" aria-modal="true" aria-labelledby="new-contact-title" onSubmit={(event) => { event.preventDefault(); void startChat(); }}>
             <header>
-              <h2>Criar contato</h2>
-              <button onClick={() => setNewChatOpen(false)}>
+              <h2 id="new-contact-title">Adicionar novo contato</h2>
+              <button type="button" onClick={() => setNewChatOpen(false)} aria-label="Fechar">
                 <X />
               </button>
             </header>
-            <p>Use o número com DDI e DDD. Exemplo: 5511999999999.</p>
-            <label>
-              Nome do contato
-              <input
-                value={contactName}
-                onChange={(event) => setContactName(event.target.value)}
-                placeholder="Opcional"
-              />
-            </label>
-            <label>
-              Número do WhatsApp
-              <input
-                autoFocus
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-                placeholder="5511999999999"
-              />
-            </label>
+            <div className="new-contact-fields">
+              <p>Por favor adicione o nome e número de WhatsApp do contato que você deseja criar.</p>
+              <input autoFocus aria-label="Primeiro nome" autoComplete="given-name" maxLength={80} value={contactFirstName} onChange={(event) => setContactFirstName(event.target.value)} placeholder="Primeiro nome" />
+              <input aria-label="Segundo nome" autoComplete="family-name" maxLength={80} value={contactLastName} onChange={(event) => setContactLastName(event.target.value)} placeholder="Segundo nome" />
+              <div className="new-contact-phone"><select aria-label="Código do país" value={contactCountryCode} onChange={(event) => setContactCountryCode(event.target.value)}><option value="55">🇧🇷 +55</option><option value="1">🇺🇸 +1</option><option value="351">🇵🇹 +351</option><option value="34">🇪🇸 +34</option><option value="54">🇦🇷 +54</option></select><input aria-label="Número do WhatsApp com DDD" type="tel" inputMode="tel" autoComplete="tel-national" maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="DDD + número" /></div>
+              {contactFormError && <p className="new-contact-error" role="alert">{contactFormError}</p>}
+            </div>
             <button
+              type="submit"
               className="wa-primary"
-              onClick={startChat}
-              disabled={savingContact || !phone.replace(/\D/g, "")}
+              disabled={savingContact}
             >
-              {savingContact ? "Salvando…" : "Salvar contato"}
+              {savingContact ? "Criando…" : "Criar contato"}
             </button>
-          </section>
+          </form>
         </div>
       )}
       {(settingsOpen || operatorOpen) && operator && (
