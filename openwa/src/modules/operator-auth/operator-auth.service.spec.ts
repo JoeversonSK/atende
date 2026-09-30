@@ -29,4 +29,18 @@ describe('OperatorAuthService unassigned notifications', () => {
     await expect(service.setRecipients('token',[first,second])).rejects.toBeInstanceOf(ConflictException);
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE openwa.operator_settings'),expect.anything());
   });
+
+  it('toggles one recipient without overwriting the others', async () => {
+    let saved=[first];
+    const query=jest.fn().mockImplementation((sql:string,params?:unknown[]) => {
+      if(sql.includes('SELECT id FROM openwa.operator_users')) return Promise.resolve([{id:second}]);
+      if(sql.includes('SELECT unassigned_user_ids')) return Promise.resolve([{unassigned_user_ids:saved}]);
+      if(sql.includes('UPDATE openwa.operator_settings')) { saved=params?.[0] as string[]; return Promise.resolve([]); }
+      return Promise.resolve([]);
+    });
+    const service=new OperatorAuthService({transaction: (work:(db:unknown)=>Promise<unknown>)=>work({query})} as never);
+    jest.spyOn(service,'requireAdmin').mockResolvedValue({id:first,username:'admin',displayName:'Admin'});
+    expect(await service.setRecipientEnabled('token',second,true)).toEqual({unassignedUserIds:[first,second]});
+    expect(await service.setRecipientEnabled('token',first,false)).toEqual({unassignedUserIds:[second]});
+  });
 });

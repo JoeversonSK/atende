@@ -172,6 +172,19 @@ export class OperatorAuthService implements OnModuleInit {
       return {unassignedUserIds:uniqueIds};
     });
   }
+  async setRecipientEnabled(token: string,userId: string,enabled: boolean) {
+    await this.requireAdmin(token);
+    return this.dataSource.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(7349201)');
+      await this.requireAdmin(token);
+      if(enabled && !(await db.query('SELECT id FROM openwa.operator_users WHERE id=$1 AND active=true',[userId])).length) throw new ConflictException('Selecione uma conta ativa.');
+      const [settings]=await db.query('SELECT unassigned_user_ids FROM openwa.operator_settings WHERE id=1');
+      const current:string[]=settings?.unassigned_user_ids ?? [];
+      const next=enabled ? [...new Set([...current,userId])] : current.filter(id=>id!==userId);
+      await db.query('UPDATE openwa.operator_settings SET unassigned_user_ids=$1::text[],unassigned_user_id=NULL WHERE id=1',[next]);
+      return {unassignedUserIds:next};
+    });
+  }
   async operationHours(token: string) {
     await this.me(token);
     await this.ensureAccessSchema();

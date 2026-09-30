@@ -84,31 +84,12 @@ body .wa-top-actions .finish-ticket:disabled{opacity:.55;cursor:default}
 @media(max-width:850px){body .wa-sidebar{flex-basis:100%;width:100%}.auth-page{grid-template-columns:1fr}.auth-story{display:none}.auth-form-area{min-height:100dvh;padding:30px 22px}.settings-page{flex-direction:column}.settings-nav{flex-basis:auto;padding:16px 20px}.settings-nav h1{margin:12px 0}.settings-nav>p,.settings-user{display:none}.settings-nav nav{display:flex;overflow:auto;gap:4px}.settings-nav nav button{white-space:nowrap}.settings-nav>.back-link:last-child{position:absolute;right:20px;top:18px}.settings-content{padding:24px 20px;overflow:visible}.settings-card{padding:22px}.settings-content h2{font-size:26px}}
 /* Team administration */
 .settings-card select { width:100%; border:1px solid #d9e4e1; border-radius:10px; padding:12px; background:#fff; color:#183c34; font:inherit; }
-.team-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:18px; max-width:1100px; }
-.team-grid .settings-card { margin:0; min-width:0; }
 .team-heading { display:flex; align-items:center; gap:10px; margin-top:32px; color:#174b3e; }
 .team-heading span { border-radius:20px; background:#e1efe9; padding:3px 10px; }
-.team-member .profile-heading { align-items:center; flex-wrap:wrap; }
-.team-member .profile-heading h3 { overflow-wrap:anywhere; }
-.settings-card .team-check { display:flex; align-items:center; gap:10px; font-weight:400; }
-.settings-card .team-check input { width:17px; height:17px; accent-color:#16866d; }
-.member-status { margin-left:auto; padding:4px 9px; border-radius:20px; font-size:11px; color:#176d51; background:#e4f5ec; }
-.member-status.inactive { background:#f5e8e8; color:#a33; }
 .team-feedback { padding:12px 16px; border-radius:10px; color:#176d51; background:#e4f5ec; }
-.settings-card.team-recipient-card { max-width:none; padding:26px 30px; }
-.team-recipient-card .profile-heading { margin-bottom:18px; color:#11745f; }
-.team-recipient-card .profile-heading>div { color:#193d32; }
-.team-recipient-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; }
-.team-recipient-list label { display:flex; align-items:center; gap:11px; min-width:0; padding:12px 14px; border:1px solid #e0e9e5; border-radius:10px; cursor:pointer; background:#fafcfb; }
-.team-recipient-list label:has(input:checked) { border-color:#90cbbb; background:#eff8f4; }
-.team-recipient-list input,.team-check-cell input { width:18px; height:18px; accent-color:#11866e; cursor:pointer; flex:none; }
-.team-recipient-list span { min-width:0; }
-.team-recipient-list b,.team-recipient-list small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.team-recipient-list b { font-size:13px; color:#203e35; }
-.team-recipient-list small { font-size:11px; color:#718279; margin-top:2px; }
-.team-recipient-card .team-recipient-help { margin:16px 0; }
+.team-check-cell input { width:18px; height:18px; accent-color:#11866e; cursor:pointer; }
 .team-table-scroll { width:100%; overflow-x:auto; border:1px solid #e0e9e5; border-radius:12px; background:#fff; }
-.team-table { width:100%; min-width:820px; border-collapse:collapse; font-size:13px; }
+.team-table { width:100%; min-width:920px; border-collapse:collapse; font-size:13px; }
 .team-table th { padding:15px 14px; text-align:center; white-space:nowrap; font-weight:600; color:#315749; background:#f5f9f7; border-bottom:1px solid #dce7e2; }
 .team-table th:first-child,.team-table td:first-child { text-align:left; min-width:230px; }
 .team-table td { padding:11px 14px; text-align:center; border-bottom:1px solid #edf1ee; }
@@ -121,9 +102,6 @@ body .wa-top-actions .finish-ticket:disabled{opacity:.55;cursor:default}
 .team-person b,.team-person small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .team-person small { color:#74857e; margin-top:2px; }
 .team-table select { width:135px; max-width:none; border:1px solid #dbe6e0; border-radius:7px; padding:8px; color:#234a3b; background:#fff; }
-.team-save-button { padding:8px 13px; border:1px solid #b9d9ce; border-radius:7px; color:#08765e; font-weight:600; white-space:nowrap; }
-.team-save-button:hover { background:#e9f6f0; }
-.team-save-button:disabled { opacity:.5; cursor:default; }
 .team-table-note { display:flex; gap:6px; align-items:center; color:#74857e; font-size:12px; }
 body .recovery-page { display:block; min-height:100dvh; background:#f1f6f4; }
 .recovery-page .auth-form-area { min-height:100dvh; padding:32px 20px; }
