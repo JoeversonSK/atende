@@ -2,11 +2,17 @@ import { BadRequestException, Body, Controller, Delete, Get, Headers, Injectable
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
+import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/auth.decorators';
 import { OperatorAuthService } from './operator-auth.service';
 
 type Room = { id: string; displayName: string; lastMessage: string | null; lastAt: Date | null; unread: number };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const pollingThrottle = {
+  short: { limit: 30, ttl: 1000 },
+  medium: { limit: 600, ttl: 60000 },
+  long: { limit: 30000, ttl: 3600000 },
+};
 
 @Injectable()
 export class TeamChatService {
@@ -157,9 +163,18 @@ export class TeamChatService {
 
   async alerts(token: string, afterAt?: string, afterId?: string) {
     const user = await this.user(token);
+    const [unread] = await this.db.query(
+      `SELECT COUNT(*)::int AS count FROM openwa.team_messages m
+       LEFT JOIN openwa.team_message_reads rd ON rd.user_id=$1
+         AND rd.room_key=CASE WHEN m.recipient_id IS NULL THEN 'group' ELSE m.sender_id END
+       WHERE m.sender_id<>$1 AND m.deleted_at IS NULL AND (m.recipient_id IS NULL OR m.recipient_id=$1)
+         AND m.created_at>COALESCE(rd.last_read_at,'epoch'::timestamptz)`,
+      [user.id],
+    );
+    const unreadCount = Number(unread?.count || 0);
     if (!afterAt) {
       const [{ now }] = await this.db.query("SELECT to_char(NOW() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS now");
-      return { cursorAt: now, cursorId: '', alerts: [] };
+      return { cursorAt: now, cursorId: '', alerts: [], unreadCount };
     }
     const parsed = new Date(afterAt);
     if (!Number.isFinite(parsed.getTime()) || (afterId && !uuid.test(afterId)))
@@ -176,7 +191,7 @@ export class TeamChatService {
       [user.id, afterAt, afterId || ''],
     );
     const last = alerts.at(-1);
-    return { cursorAt: last?.createdAt || afterAt, cursorId: last?.id || afterId || '', alerts };
+    return { cursorAt: last?.createdAt || afterAt, cursorId: last?.id || afterId || '', alerts, unreadCount };
   }
 
   async markRead(token: string, room: string) {
@@ -195,7 +210,9 @@ export class TeamChatService {
 @Controller('operator-auth/team-chat')
 export class TeamChatController {
   constructor(private readonly chat: TeamChatService) {}
+  @Throttle(pollingThrottle)
   @Get('rooms') rooms(@Headers('x-atende-token') token = '') { return this.chat.rooms(token); }
+  @Throttle(pollingThrottle)
   @Get('messages') messages(@Headers('x-atende-token') token = '', @Query('room') room = '', @Query('before') before?: string) {
     return this.chat.messages(token, room, before);
   }
@@ -208,6 +225,7 @@ export class TeamChatController {
   @Delete('messages/:id') remove(@Headers('x-atende-token') token = '', @Param('id') id = '') {
     return this.chat.remove(token, id);
   }
+  @Throttle(pollingThrottle)
   @Get('alerts') alerts(@Headers('x-atende-token') token = '', @Query('afterAt') afterAt?: string, @Query('afterId') afterId?: string) {
     return this.chat.alerts(token, afterAt, afterId);
   }

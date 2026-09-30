@@ -8,6 +8,7 @@ describe('internal team chat', () => {
 
   function setup(active = true, ownsMessage = true) {
     const query = jest.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('SELECT COUNT(*)::int AS count FROM openwa.team_messages')) return [{ count: 2 }];
       if (sql.includes('SELECT id FROM openwa.operator_users WHERE id=')) return active ? [{ id: params?.[0] }] : [];
       if (sql.includes('username=ANY')) return [{ id: bob }];
       if (sql.includes('SELECT recipient_id AS "recipientId"')) return ownsMessage ? [{ recipientId: null }] : [];
@@ -63,7 +64,7 @@ describe('internal team chat', () => {
   it('anchors notification polling to the exact stored message instead of millisecond-rounded JSON time', async () => {
     const { chat, query } = setup();
     const preciseTime = '2026-09-30T13:10:05.973824Z';
-    await chat.alerts('token', preciseTime, messageId);
+    await expect(chat.alerts('token', preciseTime, messageId)).resolves.toMatchObject({ unreadCount: 2 });
     expect(query).toHaveBeenCalledWith(expect.stringContaining('SELECT anchor.created_at,anchor.id FROM openwa.team_messages anchor WHERE anchor.id=$3'),
       [alice, preciseTime, messageId]);
   });

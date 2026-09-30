@@ -979,17 +979,13 @@ export default function Home() {
       polling = true;
       try {
         const query = cursorAt ? `?afterAt=${encodeURIComponent(cursorAt)}&afterId=${encodeURIComponent(cursorId)}` : "";
-        const [alertsResponse, roomsResponse] = await Promise.all([
-          fetch(`${root}/alerts${query}`, { headers }),
-          fetch(`${root}/rooms`, { headers }),
-        ]);
-        if (!alertsResponse.ok || !roomsResponse.ok) return;
-        const result = await alertsResponse.json() as { cursorAt: string; cursorId: string; alerts: { id: string; recipientId: string | null; senderName: string; body: string; mentioned: boolean }[] };
-        const roomsResult = await roomsResponse.json() as { rooms: { unread: number }[] };
+        const alertsResponse = await fetch(`${root}/alerts${query}`, { headers });
+        if (!alertsResponse.ok) return;
+        const result = await alertsResponse.json() as { cursorAt: string; cursorId: string; unreadCount: number; alerts: { id: string; recipientId: string | null; senderName: string; body: string; mentioned: boolean }[] };
         if (stopped) return;
         cursorAt = result.cursorAt;
         cursorId = result.cursorId;
-        setTeamUnread(roomsResult.rooms.reduce((total, room) => total + Number(room.unread || 0), 0));
+        setTeamUnread(Number(result.unreadCount || 0));
         for (const item of result.alerts) {
           const alert: TeamAlert = { id: item.id, room: item.recipientId || "group", senderName: item.senderName, body: item.body, mentioned: item.mentioned };
           setTeamAlerts(current => [...current, alert].slice(-4));
