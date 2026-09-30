@@ -15,8 +15,10 @@ export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:P
    const profile=profiles.get(c.id),a=activity.get(c.id),owner=owners[c.id]||(a?.assigneeId&&a.assigneeName?{assigneeId:a.assigneeId,assigneeName:a.assigneeName,updatedAt:a.assignedAt||undefined}:undefined);
    return {...c,name:profile?.name||c.name,owner,closed:profile?.status==="closed",type:profile?.serviceType||"remote",priority:profile?.priority||"normal",seconds:elapsed(Date.parse(owner?.updatedAt||""),now),queueSeconds:elapsed(Number(a?.queueSince)*1000,now),customerSeconds:Number(a?.outgoing)>Number(a?.incoming)?elapsed(Number(a?.outgoing)*1000,now):null};
  });
- const active=rows.filter(r=>!r.closed&&r.owner),queue=rows.filter(r=>!r.closed&&!r.owner&&r.queueSeconds!==null).sort((a,b)=>(b.queueSeconds??-1)-(a.queueSeconds??-1));
- const completed=overview.completed||[];
+ const visibleAgentIds=new Set(overview.agents.map(agent=>agent.id));
+ const active=rows.filter(r=>!r.closed&&r.owner&&r.owner.assigneeId&&visibleAgentIds.has(r.owner.assigneeId));
+ const queue=rows.filter(r=>!r.closed&&!r.owner&&r.queueSeconds!==null).sort((a,b)=>(b.queueSeconds??-1)-(a.queueSeconds??-1));
+ const completed=(overview.completed||[]).filter(item=>item.assigneeId&&visibleAgentIds.has(item.assigneeId));
  const analysts=new Map(overview.agents.map(a=>[a.id,{id:a.id,name:a.displayName,active:0,count:0,seconds:0}]));
  for(const r of active){const id=r.owner.assigneeId||"";if(analysts.has(id))analysts.get(id)!.active++;}
  for(const c of completed){const id=c.assigneeId||"";if(analysts.has(id)){const a=analysts.get(id)!;a.count+=c.count;a.seconds+=Number(c.totalSeconds);}}

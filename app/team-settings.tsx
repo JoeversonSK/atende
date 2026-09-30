@@ -50,7 +50,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
       <label className="team-check"><input type="checkbox" checked={user.active} onChange={e=>edit(user.id,{active:e.target.checked})}/>Conta ativa</label>
       <label className="team-check"><input type="checkbox" disabled={user.role==="admin"} checked={user.role==="admin"||user.canSend} onChange={e=>edit(user.id,{canSend:e.target.checked})}/>Enviar mensagens e arquivos</label>
       <label className="team-check"><input type="checkbox" disabled={user.role==="admin"} checked={user.role==="admin"||user.canAssign} onChange={e=>edit(user.id,{canAssign:e.target.checked})}/>Assumir e remover atribuições</label>
-      <label className="team-check"><input type="checkbox" checked={user.dashboardVisible!==false} onChange={e=>edit(user.id,{dashboardVisible:e.target.checked})}/>Exibir nos atendimentos realizados do dashboard</label>
+      <label className="team-check"><input type="checkbox" checked={user.dashboardVisible!==false} onChange={e=>edit(user.id,{dashboardVisible:e.target.checked})}/>Exibir atendimentos desta pessoa no dashboard</label>
       <button className="solid-button" disabled={!!saving} onClick={()=>save(user)}>{saving===user.id?"Salvando…":"Salvar permissões"}</button>
     </section>)}</div></>}
   </>;
