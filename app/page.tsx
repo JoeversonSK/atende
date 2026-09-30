@@ -744,6 +744,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [contactsOpen, setContactsOpen] = useState(false);
+  const [contactsReady, setContactsReady] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
   const [messageAlerts, setMessageAlerts] = useState<
     { id: string; chatId: string; name: string; body: string }[]
@@ -1017,6 +1018,22 @@ export default function Home() {
     );
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (!contactsOpen) {
+      setContactsReady(false);
+      return;
+    }
+    // Give the browser a paint with the loading view before mounting thousands of contact rows.
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setContactsReady(true));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [contactsOpen]);
 
   const refreshChats = useCallback(
     async (active = config) => {
@@ -2873,7 +2890,16 @@ export default function Home() {
             <span>Ajustes</span>
           </button>
         </nav>
-        {contactsOpen && (
+        {contactsOpen && !contactsReady && (
+          <section className="contacts-loading" role="status" aria-live="polite" aria-busy="true">
+            <div className="contacts-loading-card">
+              <LoaderCircle className="wa-spin" size={34} aria-hidden="true" />
+              <h1>Carregando contatos…</h1>
+              <p>Preparando a lista e as etiquetas. Aguarde um instante.</p>
+            </div>
+          </section>
+        )}
+        {contactsOpen && contactsReady && (
           <ContactsPanel
             contacts={contactRows}
             canCreate={operator.role === "admin" || operator.canAssign === true}
