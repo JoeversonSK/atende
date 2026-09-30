@@ -77,6 +77,7 @@ type Message = {
   identityIds?: string[];
 };
 type MessageSource = "database" | "history" | "optimistic" | "both";
+type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
 type MessageWithTimestamp = Message & {
   timestamp: number;
   source: MessageSource;
@@ -682,6 +683,9 @@ export default function Home() {
   const [profileReload, setProfileReload] = useState(0);
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [teamChatOpen, setTeamChatOpen] = useState(false);
+  const [teamRoom, setTeamRoom] = useState("group");
+  const [teamUnread, setTeamUnread] = useState(0);
+  const [teamAlerts, setTeamAlerts] = useState<TeamAlert[]>([]);
   const [syncWarning, setSyncWarning] = useState("");
   const [transferId, setTransferId] = useState("");
   const readVersions = useRef(new Map<string, number>());
@@ -964,6 +968,50 @@ export default function Home() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!operatorToken) { setTeamUnread(0); setTeamAlerts([]); return; }
+    let stopped = false, polling = false, cursorAt = "", cursorId = "";
+    const root = `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/team-chat`;
+    const headers = { "X-Atende-Token": operatorToken };
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const query = cursorAt ? `?afterAt=${encodeURIComponent(cursorAt)}&afterId=${encodeURIComponent(cursorId)}` : "";
+        const [alertsResponse, roomsResponse] = await Promise.all([
+          fetch(`${root}/alerts${query}`, { headers }),
+          fetch(`${root}/rooms`, { headers }),
+        ]);
+        if (!alertsResponse.ok || !roomsResponse.ok) return;
+        const result = await alertsResponse.json() as { cursorAt: string; cursorId: string; alerts: { id: string; recipientId: string | null; senderName: string; body: string; mentioned: boolean }[] };
+        const roomsResult = await roomsResponse.json() as { rooms: { unread: number }[] };
+        if (stopped) return;
+        cursorAt = result.cursorAt;
+        cursorId = result.cursorId;
+        setTeamUnread(roomsResult.rooms.reduce((total, room) => total + Number(room.unread || 0), 0));
+        for (const item of result.alerts) {
+          const alert: TeamAlert = { id: item.id, room: item.recipientId || "group", senderName: item.senderName, body: item.body, mentioned: item.mentioned };
+          setTeamAlerts(current => [...current, alert].slice(-4));
+          window.setTimeout(() => setTeamAlerts(current => current.filter(existing => existing.id !== item.id)), 8000);
+          const preferences = notificationPreferencesRef.current;
+          if (!notificationsRef.current || !preferences.notifyMessages) continue;
+          playNotificationSound();
+          if (preferences.desktop && window.isSecureContext && typeof Notification !== "undefined" && Notification.permission === "granted") {
+            const desktop = new Notification(item.mentioned ? `${item.senderName} mencionou você` : `Mensagem da equipe · ${item.senderName}`, {
+              body: preferences.showPreview ? item.body : "Nova mensagem interna",
+              tag: `atende-team-${item.id}`,
+            });
+            desktop.onclick = () => { window.focus(); setTeamRoom(alert.room); setTeamChatOpen(true); setContactsOpen(false); setDashboardOpen(false); desktop.close(); };
+          }
+        }
+      } catch { /* A próxima atualização tenta novamente quando a rede voltar. */ }
+      finally { polling = false; }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 4000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [config.baseUrl, operatorToken]);
 
   useEffect(() => {
     if (!notice) return;
@@ -2794,6 +2842,7 @@ export default function Home() {
           <button
             className={teamChatOpen ? "active" : ""}
             onClick={() => {
+              setTeamRoom("group");
               setTeamChatOpen(true);
               setContactsOpen(false);
               setDashboardOpen(false);
@@ -2802,6 +2851,7 @@ export default function Home() {
           >
             <MessageCircle size={22} />
             <span>Equipe</span>
+            {teamUnread > 0 && <b className="team-rail-unread" aria-label={`${teamUnread} mensagens internas não lidas`}>{teamUnread > 99 ? "99+" : teamUnread}</b>}
           </button>
           <button
             className={dashboardOpen ? "active" : ""}
@@ -2850,7 +2900,7 @@ export default function Home() {
             }}
           />
         )}
-        {teamChatOpen && <TeamChat baseUrl={config.baseUrl} token={operatorToken} />}
+        {teamChatOpen && <TeamChat baseUrl={config.baseUrl} token={operatorToken} initialRoom={teamRoom} onRoomChange={setTeamRoom} />}
         {dashboardOpen && (
           <TicketDashboard
             warning={syncWarning}
@@ -3568,6 +3618,13 @@ export default function Home() {
         )}
       </section>
       <div className="message-alerts" aria-live="polite">
+        {teamAlerts.map(alert => <article key={alert.id}>
+          <button className="message-alert-open" onClick={() => { setTeamRoom(alert.room); setTeamChatOpen(true); setContactsOpen(false); setDashboardOpen(false); setTeamAlerts(current => current.filter(item => item.id !== alert.id)); }}>
+            <b>{alert.mentioned ? `${alert.senderName} mencionou você` : `Equipe · ${alert.senderName}`}</b>
+            <span>{alert.body}</span>
+          </button>
+          <button aria-label="Dispensar notificação da equipe" onClick={() => setTeamAlerts(current => current.filter(item => item.id !== alert.id))}><X size={16} /></button>
+        </article>)}
         {messageAlerts.map((alert) => (
           <article key={alert.id}>
             <button

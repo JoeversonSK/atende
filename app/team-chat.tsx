@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MessageCircle, Send, UsersRound } from "lucide-react";
+import { Check, MessageCircle, Pencil, Send, Trash2, UsersRound, X } from "lucide-react";
 
 type Room = { id: string; displayName: string; lastMessage: string | null; lastAt: string | null; unread: number };
-type Member = { id: string; displayName: string };
-type TeamMessage = { id: string; senderId: string; senderName: string; recipientId: string | null; body: string; createdAt: string };
+type Member = { id: string; username: string; displayName: string };
+type TeamMessage = { id: string; senderId: string; senderName: string; recipientId: string | null; body: string; createdAt: string; editedAt: string | null; deletedAt: string | null; mentionIds: string[] };
 type RoomsResponse = { userId: string; members: Member[]; rooms: Room[] };
 
 const mergeMessages = (existing: TeamMessage[], incoming: TeamMessage[]) => {
@@ -14,11 +14,13 @@ const mergeMessages = (existing: TeamMessage[], incoming: TeamMessage[]) => {
 };
 const clock = (value: string | null) => value ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : "";
 
-export function TeamChat({ baseUrl, token }: { baseUrl: string; token: string }) {
-  const [room, setRoom] = useState("group");
+export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }: { baseUrl: string; token: string; initialRoom?: string; onRoomChange?: (room: string) => void }) {
+  const [room, setRoom] = useState(initialRoom);
   const [data, setData] = useState<RoomsResponse>({ userId: "", members: [], rooms: [] });
   const [messages, setMessages] = useState<TeamMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editDraft, setEditDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [hasOlder, setHasOlder] = useState(false);
@@ -26,9 +28,15 @@ export function TeamChat({ baseUrl, token }: { baseUrl: string; token: string })
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const roomRef = useRef(room);
   roomRef.current = room;
+  useEffect(() => { setRoom(initialRoom); }, [initialRoom]);
+  const chooseRoom = (next: string) => { setRoom(next); onRoomChange?.(next); };
   const root = `${baseUrl.replace(/\/$/, "")}/api/operator-auth/team-chat`;
+  const mentionQuery = room === "group" ? draft.match(/(?:^|\s)@([a-z0-9._-]*)$/i)?.[1].toLowerCase() : undefined;
+  const mentionOptions = mentionQuery === undefined ? [] : data.members.filter(member => member.id !== data.userId &&
+    (member.username.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery))).slice(0, 8);
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const response = await fetch(`${root}${path}`, {
@@ -108,12 +116,48 @@ export function TeamChat({ baseUrl, token }: { baseUrl: string; token: string })
     finally { setBusy(false); }
   }
 
+  function selectMention(member: Member) {
+    setDraft(current => current.replace(/(^|\s)@[a-z0-9._-]*$/i, `$1@${member.username} `));
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  async function saveEdit(message: TeamMessage) {
+    if (!editDraft.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const edited = await api<TeamMessage>(`/messages/${encodeURIComponent(message.id)}`, { method: "PATCH", body: JSON.stringify({ body: editDraft }) });
+      setMessages(current => current.map(item => item.id === edited.id ? edited : item));
+      setEditingId("");
+      await refreshRooms();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível editar a mensagem."); }
+    finally { setBusy(false); }
+  }
+
+  async function removeMessage(message: TeamMessage) {
+    if (busy || !window.confirm("Excluir esta mensagem do chat da equipe?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      const deleted = await api<TeamMessage>(`/messages/${encodeURIComponent(message.id)}`, { method: "DELETE" });
+      setMessages(current => current.map(item => item.id === deleted.id ? deleted : item));
+      if (editingId === message.id) setEditingId("");
+      await refreshRooms();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível excluir a mensagem."); }
+    finally { setBusy(false); }
+  }
+
+  const renderBody = (value: string) => value.split(/(@[a-z0-9._-]+)/gi).map((part, index) => {
+    const mentioned = part.startsWith("@") && data.members.some(member => member.username.toLowerCase() === part.slice(1).toLowerCase());
+    return mentioned ? <mark className="team-chat-mention" key={index}>{part}</mark> : part;
+  });
+
   const currentRoom = data.rooms.find(item => item.id === room);
   return <section className="team-chat" aria-label="Chat interno">
     <aside className="team-chat-rooms">
       <header><span className="section-kicker">EQUIPE</span><h1>Chat interno</h1><small>Mensagens entre usuários do sistema</small></header>
       <div className="team-chat-room-list">
-        {data.rooms.map(item => <button key={item.id} className={`team-chat-room${room === item.id ? " active" : ""}`} onClick={() => setRoom(item.id)}>
+        {data.rooms.map(item => <button key={item.id} className={`team-chat-room${room === item.id ? " active" : ""}`} onClick={() => chooseRoom(item.id)}>
           <span className="team-chat-avatar">{item.id === "group" ? <UsersRound size={19} /> : item.displayName.trim().charAt(0).toUpperCase()}</span>
           <span className="team-chat-room-text"><b>{item.displayName}</b><small>{item.lastMessage || (item.id === "group" ? "Todos os usuários ativos" : "Inicie uma conversa")}</small></span>
           <span className="team-chat-room-meta"><small>{clock(item.lastAt)}</small>{item.unread > 0 && <b>{item.unread}</b>}</span>
@@ -124,11 +168,16 @@ export function TeamChat({ baseUrl, token }: { baseUrl: string; token: string })
       <header className="team-chat-main-header"><span className="team-chat-avatar">{room === "group" ? <UsersRound size={19} /> : (currentRoom?.displayName || "").charAt(0).toUpperCase()}</span><div><b>{currentRoom?.displayName || "Conversa"}</b><small>{room === "group" ? `${data.members.length} usuários ativos` : "Conversa individual"}</small></div></header>
       <div className="team-chat-history" ref={scrollRef}>
         {hasOlder && <button className="team-chat-older" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Carregando…" : "Carregar mensagens anteriores"}</button>}
-        {loading ? <p className="team-chat-empty">Carregando mensagens…</p> : !messages.length ? <p className="team-chat-empty"><MessageCircle size={27} />Ainda não há mensagens nesta conversa.</p> : messages.map(message => <article key={message.id} className={`team-chat-message${message.senderId === data.userId ? " mine" : ""}`}><b>{message.senderId === data.userId ? "Você" : message.senderName}</b><p>{message.body}</p><time>{clock(message.createdAt)}</time></article>)}
+        {loading ? <p className="team-chat-empty">Carregando mensagens…</p> : !messages.length ? <p className="team-chat-empty"><MessageCircle size={27} />Ainda não há mensagens nesta conversa.</p> : messages.map(message => <article key={message.id} className={`team-chat-message${message.senderId === data.userId ? " mine" : ""}${message.deletedAt ? " deleted" : ""}`}>
+          <div className="team-chat-message-top"><b>{message.senderId === data.userId ? "Você" : message.senderName}</b>{message.senderId === data.userId && !message.deletedAt && <span className="team-chat-message-actions"><button title="Editar mensagem" aria-label="Editar mensagem" onClick={() => { setEditingId(message.id); setEditDraft(message.body); }}><Pencil size={14} /></button><button title="Excluir mensagem" aria-label="Excluir mensagem" onClick={() => void removeMessage(message)}><Trash2 size={14} /></button></span>}</div>
+          {editingId === message.id ? <div className="team-chat-edit"><textarea aria-label="Editar mensagem" maxLength={4000} value={editDraft} onChange={event => setEditDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void saveEdit(message); } }} /><div><button onClick={() => setEditingId("")}><X size={14} /> Cancelar</button><button disabled={busy || !editDraft.trim()} onClick={() => void saveEdit(message)}><Check size={14} /> Salvar</button></div></div> : <p>{message.deletedAt ? "Mensagem excluída" : renderBody(message.body)}</p>}
+          <time>{message.editedAt && !message.deletedAt ? "editada · " : ""}{clock(message.createdAt)}</time>
+        </article>)}
         <div ref={bottomRef} />
       </div>
       {error && <p className="team-chat-error" role="alert">{error}</p>}
-      <div className="team-chat-composer"><textarea aria-label="Mensagem para a equipe" placeholder="Escreva uma mensagem para a equipe…" maxLength={4000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} /><button aria-label="Enviar mensagem" disabled={busy || !draft.trim()} onClick={() => void send()}><Send size={19} /></button></div>
+      {mentionOptions.length > 0 && <div className="team-chat-mention-list" role="listbox" aria-label="Mencionar usuário">{mentionOptions.map(member => <button key={member.id} role="option" aria-selected="false" onClick={() => selectMention(member)}><b>{member.displayName}</b><small>@{member.username}</small></button>)}</div>}
+      <div className="team-chat-composer"><textarea ref={composerRef} aria-label="Mensagem para a equipe" placeholder={room === "group" ? "Escreva uma mensagem ou use @ para mencionar…" : "Escreva uma mensagem…"} maxLength={4000} value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); if (mentionOptions.length) selectMention(mentionOptions[0]); else void send(); } }} /><button aria-label="Enviar mensagem" disabled={busy || !draft.trim()} onClick={() => void send()}><Send size={19} /></button></div>
     </div>
   </section>;
 }
