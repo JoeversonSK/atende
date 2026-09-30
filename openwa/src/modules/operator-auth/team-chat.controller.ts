@@ -158,7 +158,7 @@ export class TeamChatService {
   async alerts(token: string, afterAt?: string, afterId?: string) {
     const user = await this.user(token);
     if (!afterAt) {
-      const [{ now }] = await this.db.query('SELECT NOW() AS now');
+      const [{ now }] = await this.db.query("SELECT to_char(NOW() AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS now");
       return { cursorAt: now, cursorId: '', alerts: [] };
     }
     const parsed = new Date(afterAt);
@@ -169,12 +169,14 @@ export class TeamChatService {
         m.body,u.display_name AS "senderName",(m.mention_ids ? $1) AS mentioned
        FROM openwa.team_messages m JOIN openwa.operator_users u ON u.id=m.sender_id
        WHERE m.sender_id<>$1 AND m.deleted_at IS NULL AND (m.recipient_id IS NULL OR m.recipient_id=$1)
-         AND (m.created_at,m.id)>($2::timestamptz,$3::varchar)
+         AND (($3::varchar='' AND m.created_at>$2::timestamptz)
+           OR ($3::varchar<>'' AND (m.created_at,m.id)>(
+             SELECT anchor.created_at,anchor.id FROM openwa.team_messages anchor WHERE anchor.id=$3)))
        ORDER BY m.created_at,m.id LIMIT 100`,
-      [user.id, parsed.toISOString(), afterId || ''],
+      [user.id, afterAt, afterId || ''],
     );
     const last = alerts.at(-1);
-    return { cursorAt: last?.createdAt || parsed.toISOString(), cursorId: last?.id || afterId || '', alerts };
+    return { cursorAt: last?.createdAt || afterAt, cursorId: last?.id || afterId || '', alerts };
   }
 
   async markRead(token: string, room: string) {

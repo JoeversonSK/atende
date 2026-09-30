@@ -59,4 +59,12 @@ describe('internal team chat', () => {
     await expect(denied.chat.edit('token', messageId, 'Outro texto')).rejects.toBeInstanceOf(NotFoundException);
     await expect(denied.chat.remove('token', messageId)).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('anchors notification polling to the exact stored message instead of millisecond-rounded JSON time', async () => {
+    const { chat, query } = setup();
+    const preciseTime = '2026-09-30T13:10:05.973824Z';
+    await chat.alerts('token', preciseTime, messageId);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('SELECT anchor.created_at,anchor.id FROM openwa.team_messages anchor WHERE anchor.id=$3'),
+      [alice, preciseTime, messageId]);
+  });
 });
