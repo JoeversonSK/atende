@@ -8,7 +8,7 @@ class RegisterDto extends LoginDto { @IsString() @IsNotEmpty() @MaxLength(160) d
 class ProfileDto { @IsString() @IsNotEmpty() @MaxLength(160) displayName!: string; }
 class QuickReplyDto { @IsString() @IsNotEmpty() @MaxLength(61) shortcut!:string; @IsString() @IsNotEmpty() @MaxLength(10000) text!:string; }
 class UserAccessDto { @IsIn(['admin','agent']) role!: string; @IsBoolean() active!: boolean; @IsBoolean() canSend!: boolean; @IsBoolean() canAssign!: boolean; @IsBoolean() dashboardVisible!: boolean; }
-class RecipientDto { @IsOptional() @IsUUID() userId?: string|null; }
+class RecipientDto { @IsArray() @ArrayMaxSize(100) @IsUUID('4',{each:true}) userIds!: string[]; }
 class ResetPasswordDto extends LoginDto { @IsString() @MinLength(32) @MaxLength(128) code!: string; }
 class OperationIntervalDto { @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) start!: string; @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) end!: string; }
 class OperationDayDto { @IsInt() @Min(0) @Max(6) weekday!: number; @IsBoolean() enabled!: boolean; @IsArray() @ValidateNested({each:true}) @Type(()=>OperationIntervalDto) intervals!: OperationIntervalDto[]; }
@@ -48,7 +48,7 @@ export class OperatorAuthController { constructor(private readonly auth: Operato
   @Get('connection') async connection(@Headers('x-atende-token') token='') { const connection = await this.auth.connectionContext(token); return { sessionId: connection.sessionId }; }
   @Post('reset-password') resetPassword(@Body() dto: ResetPasswordDto) { return this.auth.resetPassword(dto.username,dto.code,dto.password); }
   @Put('admin/users/:id') updateUser(@Headers('x-atende-token') token='',@Param('id') id: string,@Body() dto: UserAccessDto) { return this.auth.updateUser(token,id,dto); }
-  @Put('admin/notifications') recipient(@Headers('x-atende-token') token='',@Body() dto: RecipientDto) { return this.auth.setRecipient(token,dto.userId ?? null); }
+  @Put('admin/notifications') recipient(@Headers('x-atende-token') token='',@Body() dto: RecipientDto) { return this.auth.setRecipients(token,dto.userIds); }
   @Get('operation-hours') operationHours(@Headers('x-atende-token') token='') { return this.auth.operationHours(token); }
   @Put('admin/operation-hours') updateOperationHours(@Headers('x-atende-token') token='',@Body() dto: OperationHoursDto) { return this.auth.updateOperationHours(token,dto); }
   @Get('flows') flows(@Headers('x-atende-token') token='') { return this.auth.conversationFlows(token); }

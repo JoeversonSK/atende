@@ -102,6 +102,9 @@ export class OperatorAuthService implements OnModuleInit {
       await db.query('SELECT pg_advisory_xact_lock(7349201)');
       await db.query("ALTER TABLE openwa.operator_users ADD COLUMN IF NOT EXISTS role varchar(16) NOT NULL DEFAULT 'agent', ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_send boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_assign boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS dashboard_visible boolean NOT NULL DEFAULT true");
       await db.query('CREATE TABLE IF NOT EXISTS openwa.operator_settings (id integer PRIMARY KEY CHECK (id=1), unassigned_user_id varchar(36) REFERENCES openwa.operator_users(id) ON DELETE SET NULL)');
+      await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS unassigned_user_ids text[]');
+      await db.query("UPDATE openwa.operator_settings SET unassigned_user_ids=CASE WHEN unassigned_user_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[unassigned_user_id] END WHERE unassigned_user_ids IS NULL");
+      await db.query("ALTER TABLE openwa.operator_settings ALTER COLUMN unassigned_user_ids SET DEFAULT ARRAY[]::text[]");
       await db.query("ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS operation_hours jsonb NOT NULL DEFAULT '{\"enabled\":true,\"days\":[]}'::jsonb");
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS flows_seeded boolean NOT NULL DEFAULT false');
       await db.query('CREATE TABLE IF NOT EXISTS openwa.quick_replies (id varchar(36) PRIMARY KEY,shortcut varchar(60) NOT NULL UNIQUE,text varchar(10000) NOT NULL,updated_at timestamptz NOT NULL DEFAULT NOW())');
@@ -136,7 +139,7 @@ export class OperatorAuthService implements OnModuleInit {
   async requireAdmin(token: string) { const user=await this.me(token); if(user.role!=='admin') throw new ForbiddenException('Apenas administradores podem gerenciar a equipe.'); return user; }
   async administration(token: string) {
     await this.requireAdmin(token);
-    return {users: await this.dataSource.query(`SELECT ${accessFields} FROM openwa.operator_users ORDER BY created_at,id`),unassignedUserId:(await this.dataSource.query('SELECT unassigned_user_id FROM openwa.operator_settings WHERE id=1'))[0]?.unassigned_user_id ?? null};
+    return {users: await this.dataSource.query(`SELECT ${accessFields} FROM openwa.operator_users ORDER BY created_at,id`),unassignedUserIds:(await this.dataSource.query('SELECT unassigned_user_ids FROM openwa.operator_settings WHERE id=1'))[0]?.unassigned_user_ids ?? []};
   }
   async updateUser(token: string,id: string,update: {role: string;active: boolean;canSend: boolean;canAssign: boolean;dashboardVisible:boolean}) {
     await this.requireAdmin(token);
@@ -150,18 +153,23 @@ export class OperatorAuthService implements OnModuleInit {
         if(admins.length<=1) throw new ConflictException('Mantenha pelo menos um administrador ativo.');
       }
       const [user]=await db.query(`WITH changed AS (UPDATE openwa.operator_users SET role=$2,active=$3,can_send=$4,can_assign=$5,dashboard_visible=$6 WHERE id=$1 RETURNING *) SELECT ${accessFields} FROM changed`,[id,update.role,update.active,update.canSend,update.canAssign,update.dashboardVisible]);
-      if(!update.active) { await db.query('DELETE FROM openwa.operator_sessions WHERE user_id=$1',[id]); await db.query('UPDATE openwa.operator_settings SET unassigned_user_id=NULL WHERE unassigned_user_id=$1',[id]); }
+      if(!update.active) { await db.query('DELETE FROM openwa.operator_sessions WHERE user_id=$1',[id]); await db.query('UPDATE openwa.operator_settings SET unassigned_user_id=NULL WHERE unassigned_user_id=$1',[id]); await db.query('UPDATE openwa.operator_settings SET unassigned_user_ids=array_remove(unassigned_user_ids,$1) WHERE id=1',[id]); }
       return user;
     });
   }
-  async setRecipient(token: string,userId: string|null) {
+  async setRecipients(token: string,userIds: string[]) {
     await this.requireAdmin(token);
     return this.dataSource.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(7349201)');
       await this.requireAdmin(token);
-      if(userId && !(await db.query('SELECT id FROM openwa.operator_users WHERE id=$1 AND active=true',[userId])).length) throw new ConflictException('Selecione uma conta ativa.');
-      await db.query('UPDATE openwa.operator_settings SET unassigned_user_id=$1 WHERE id=1',[userId]);
-      return {unassignedUserId:userId};
+      const uniqueIds=[...new Set(userIds)];
+      if(uniqueIds.length!==userIds.length) throw new BadRequestException('Selecione cada pessoa apenas uma vez.');
+      if(uniqueIds.length) {
+        const active=await db.query('SELECT id FROM openwa.operator_users WHERE id=ANY($1::text[]) AND active=true',[uniqueIds]);
+        if(active.length!==uniqueIds.length) throw new ConflictException('Selecione apenas contas ativas.');
+      }
+      await db.query('UPDATE openwa.operator_settings SET unassigned_user_ids=$1::text[],unassigned_user_id=NULL WHERE id=1',[uniqueIds]);
+      return {unassignedUserIds:uniqueIds};
     });
   }
   async operationHours(token: string) {
@@ -220,8 +228,9 @@ export class OperatorAuthService implements OnModuleInit {
     const user=await this.me(token);
     if(!chatId || /@(g.us|broadcast|newsletter)$/.test(chatId)) return {allowed:false};
     const [assigned]=await this.dataSource.query('SELECT assignee_id FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId]);
-    const recipient=assigned?.assignee_id || (await this.dataSource.query('SELECT unassigned_user_id FROM openwa.operator_settings WHERE id=1'))[0]?.unassigned_user_id;
-    return {allowed:recipient===user.id};
+    if(assigned?.assignee_id) return {allowed:assigned.assignee_id===user.id};
+    const recipients=(await this.dataSource.query('SELECT unassigned_user_ids FROM openwa.operator_settings WHERE id=1'))[0]?.unassigned_user_ids ?? [];
+    return {allowed:recipients.includes(user.id)};
   }
   private passwordHash(password: string, salt: string) { return scryptSync(password, salt, 64).toString('hex'); }
   private verifyPassword(password: string, salt: string, expected: string) { const actual = Buffer.from(this.passwordHash(password, salt), 'hex'); const expectedBuffer = Buffer.from(expected, 'hex'); return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer); }
