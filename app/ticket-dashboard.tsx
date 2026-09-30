@@ -1,6 +1,6 @@
 "use client";
-import {useEffect,useState} from "react";
-import {ArrowLeft,Search} from "lucide-react";
+import {useEffect,useRef,useState} from "react";
+import {Maximize2,Minimize2} from "lucide-react";
 import {clockDuration,elapsed,type SupportOverview} from "./dashboard-model";
 export {emptyOverview,type SupportOverview} from "./dashboard-model";
 
@@ -8,7 +8,22 @@ type Owner={assigneeId?:string;assigneeName:string;updatedAt?:string};
 type Props={chats:{id:string;name:string}[];owners:Record<string,Owner>;overview:SupportOverview;onOpen:(id:string)=>void;onClose:()=>void;warning?:string};
 export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:Props){
  const [now,setNow]=useState(Date.now()),[search,setSearch]=useState("");
+ const boardRef=useRef<HTMLElement>(null);
+ const [fullscreen,setFullscreen]=useState(false);
+ const [fullscreenError,setFullscreenError]=useState("");
  useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[]);
+ useEffect(()=>{
+  const sync=()=>setFullscreen(document.fullscreenElement===boardRef.current);
+  document.addEventListener("fullscreenchange",sync);
+  return()=>document.removeEventListener("fullscreenchange",sync);
+ },[]);
+ async function toggleFullscreen(){
+  setFullscreenError("");
+  try {
+   if(document.fullscreenElement===boardRef.current) await document.exitFullscreen();
+   else await boardRef.current?.requestFullscreen();
+  } catch { setFullscreenError("Não foi possível ativar a tela cheia neste navegador."); }
+ }
  const profiles=new Map(overview.contacts.map(c=>[c.chatId,c.data]));
  const activity=new Map(overview.activity.map(c=>[c.chatId,c]));
  const rows=chats.filter(c=>!/@(g\.us|broadcast|newsletter)$/.test(c.id)).map(c=>{
@@ -27,7 +42,9 @@ export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:P
  const matches=(name:string)=>name.toLocaleLowerCase().includes(search.toLocaleLowerCase());
  const time=new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(now)).split(":");
  const date=new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date(now));
- return <section className="ticket-dashboard operations-board" aria-label="Dashboard dos chamados">
+ return <section ref={boardRef} className="ticket-dashboard operations-board" aria-label="Dashboard dos chamados">
+  <div className="board-view-controls"><button type="button" onClick={()=>void toggleFullscreen()} aria-label={fullscreen?"Sair da tela cheia":"Exibir dashboard em tela cheia"} title={fullscreen?"Sair da tela cheia (Esc)":"Exibir dashboard em tela cheia"}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}<span>{fullscreen?"Sair da tela cheia":"Tela cheia"}</span></button></div>
+  {fullscreenError&&<p className="board-fullscreen-error" role="alert">{fullscreenError}</p>}
   {warning&&<p className="sync-warning" role="status">{warning}</p>}
   <div className="board-grid">
    <div className="board-column board-left-column">

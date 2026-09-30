@@ -3126,6 +3126,39 @@ body .operations-board {
   overflow: auto;
   min-height: 0;
 }
+body .operations-board:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  background: #111;
+}
+body .operations-board::backdrop {
+  background: #111;
+}
+body .board-view-controls {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+}
+body .operations-board .board-view-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid #454545;
+  border-radius: 7px;
+  background: #252525;
+  color: #f0f0f0;
+  font-size: 12px;
+}
+body .operations-board .board-view-controls button:hover {
+  background: #333;
+}
+body .operations-board .board-fullscreen-error {
+  margin: 0;
+  color: #ffb9b9;
+  font-size: 12px;
+}
 body .board-toolbar {
   display: flex;
   align-items: center;
