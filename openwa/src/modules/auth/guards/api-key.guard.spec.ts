@@ -154,6 +154,35 @@ describe('ApiKeyGuard', () => {
     await expect(guard.canActivate(context)).resolves.toBe(true);
   });
 
+  it('allows an Atende operator credential to forward a message', async () => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
+    (authService.validateApiKey as jest.Mock).mockResolvedValue(createMockApiKey());
+    const context = createMockContext(
+      { 'x-api-key': 'atende_operator-token', 'x-atende-token': 'operator-token' },
+      { sessionId: 'sess-1' },
+      '127.0.0.1',
+      'POST',
+      '/api/sessions/sess-1/messages/forward',
+    );
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(authService.validateApiKey).toHaveBeenCalledWith('atende_operator-token', '127.0.0.1', 'sess-1');
+  });
+
+  it('still rejects an Atende operator credential without the matching login token', async () => {
+    reflector.getAllAndOverride.mockReturnValue(undefined);
+    const context = createMockContext(
+      { 'x-api-key': 'atende_operator-token', 'x-atende-token': 'another-token' },
+      { sessionId: 'sess-1' },
+      '127.0.0.1',
+      'POST',
+      '/api/sessions/sess-1/messages/forward',
+    );
+
+    await expect(guard.canActivate(context)).rejects.toThrow('Faça login para continuar.');
+    expect(authService.validateApiKey).not.toHaveBeenCalled();
+  });
+
   it('keeps unrelated routes blocked for an Atende operator credential', async () => {
     reflector.getAllAndOverride.mockReturnValue(undefined);
     const context = createMockContext(

@@ -64,7 +64,7 @@ export class ApiKeyGuard implements CanActivate {
           /^\/sessions\/[^/]+\/(chats|messages|contacts|conversations)(\/|$)/.test(path));
       const sending =
         request.method === 'POST' &&
-        /^\/sessions\/[^/]+\/messages\/send-(text|image|video|audio|document|sticker|poll)$/.test(path);
+        /^\/sessions\/[^/]+\/messages\/(?:send-(text|image|video|audio|document|sticker|poll)|forward)$/.test(path);
       const preparingMedia =
         (request.method === 'GET' && /^\/sessions\/[^/]+\/media\/convert$/.test(path)) ||
         (request.method === 'POST' && /^\/sessions\/[^/]+\/media\/convert\/(voice|video)$/.test(path));
