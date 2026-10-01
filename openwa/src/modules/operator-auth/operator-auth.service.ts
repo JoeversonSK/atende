@@ -298,7 +298,7 @@ export class OperatorAuthService implements OnModuleInit {
     const host=url.hostname.toLowerCase();
     if(host==='localhost'||host==='127.0.0.1'||host==='::1'||/^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[01])\./.test(host))throw new ConflictException('O webhook precisa usar um endereço público.');
     if(input.destinationType==='discord'&&(!/(^|\.)discord(?:app)?\.com$/.test(host)||!url.pathname.startsWith('/api/webhooks/')))throw new ConflictException('Informe um webhook válido do Discord.');
-    const allowed=['contactName','phone','message','messageType','receivedAt'];
+    const allowed=['contactName','phone','message','messageType','receivedAt','contactProfile','messageDetails','assignment'];
     const fields=[...new Set((Array.isArray(input.fields)?input.fields:[]).filter(field=>allowed.includes(field)))];
     if(!fields.length)throw new ConflictException('Escolha pelo menos uma informação para enviar.');
     return {name:String(input.name||'').trim().slice(0,100),destinationType:input.destinationType==='json'?'json':'discord',url:url.toString(),active:input.active!==false,onlyUnassigned:input.onlyUnassigned!==false,includeGroups:input.includeGroups===true,includeText:input.includeText!==false,includeMedia:input.includeMedia!==false,senderName:String(input.senderName||'Atende').trim().slice(0,80)||'Atende',title:String(input.title||'Nova mensagem').trim().slice(0,120)||'Nova mensagem',color:/^#[0-9a-f]{6}$/i.test(String(input.color||''))?input.color:'#0b917a',fields};

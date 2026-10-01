@@ -19,4 +19,17 @@ describe('DiscordUnassignedNotifier',()=>{
     await expect(service.notify('session',incoming)).resolves.toBe(true);
     expect(global.fetch).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/discord\.com\/api\/webhooks\//),expect.objectContaining({method:'POST'}));
   });
+
+  it('includes the full contact profile and message details only when selected for JSON',async()=>{
+    const jsonHook={...hook,destination_type:'json',only_unassigned:false,fields:['contactProfile','messageDetails','assignment']};
+    const query=jest.fn().mockResolvedValueOnce([jsonHook]).mockResolvedValueOnce([{assignee_id:'agent-1',assignee_name:'Wesley'}])
+      .mockResolvedValueOnce([{name:'Cliente',phone:'5511999999999',data:{name:'Cliente',custom:[{id:'1',label:'Vencimento',value:'10/10'}]}}]);
+    const service=new DiscordUnassignedNotifier({query} as never);
+    await expect(service.notify('session',incoming)).resolves.toBe(true);
+    const request=(global.fetch as jest.Mock).mock.calls[0][1];
+    const body=JSON.parse(request.body);
+    expect(body.contactProfile.custom[0].value).toBe('10/10');
+    expect(body.assignment).toEqual({id:'agent-1',name:'Wesley'});
+    expect(body.messageDetails).toMatchObject({id:'m1',type:'chat',body:'Preciso de ajuda'});
+  });
 });

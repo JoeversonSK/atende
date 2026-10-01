@@ -174,6 +174,21 @@ export class ContactImportService {
     await this.auth.requirePermission(token, 'canAssign');
     const context = await this.auth.connectionContext(token);
     if (context.sessionId !== session) throw new BadRequestException('Sessão do WhatsApp inválida.');
+    const result = await this.importAuthorized(context, session, input);
+    return { created: result.created, updated: result.updated, assigned: result.assigned };
+  }
+
+  /** Reuse the same phone/LID reconciliation for server-owned sheet automations. */
+  async importFromAutomation(session: string, input: unknown) {
+    const context = { sessionId: session, user: { id: 'automation', displayName: 'Automação' } };
+    return this.importAuthorized(context, session, input);
+  }
+
+  private async importAuthorized(
+    context: { sessionId: string; user: { id: string; displayName: string } },
+    session: string,
+    input: unknown,
+  ) {
     const source = input && typeof input === 'object' && 'contacts' in input ? (input as { contacts: unknown }).contacts : null;
     if (!Array.isArray(source) || !source.length || source.length > 200)
       throw new BadRequestException('Envie de 1 a 200 contatos por vez.');
@@ -383,7 +398,7 @@ export class ContactImportService {
         });
       } catch { /* The import is committed; a notification failure must not invite a duplicate retry. */ }
     }
-    return outcome;
+    return { ...outcome, contacts: plans.map(plan => ({ phone: plan.row.phone, chatId: plan.chatId })) };
   }
 }
 
