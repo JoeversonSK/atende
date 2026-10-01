@@ -290,6 +290,8 @@ interface BaileysContextCarrier {
     quotedMessage?: unknown;
     expiration?: number | null;
     mentionedJid?: string[] | null;
+    isForwarded?: boolean | null;
+    forwardingScore?: number | null;
   } | null;
 }
 
@@ -315,6 +317,7 @@ export interface BaileysMessageContext {
   ephemeralDuration?: number;
   /** @mentioned JIDs from `contextInfo.mentionedJid`. */
   mentionedJids?: string[];
+  forwarded?: boolean;
   /** Styling of an extended-text (status) message: proto `backgroundArgb` (fixed32 ARGB). */
   backgroundArgb?: number;
   /** Styling of an extended-text (status) message: proto `font` (WhatsApp font index). */
@@ -345,6 +348,7 @@ export function extractBaileysContext(content: BaileysContextContent): BaileysMe
   const context: BaileysMessageContext = {
     ephemeralDuration: contextInfo?.expiration ?? undefined,
     mentionedJids: contextInfo?.mentionedJid ?? undefined,
+    forwarded: contextInfo?.isForwarded === true || (contextInfo?.forwardingScore ?? 0) > 0,
     backgroundArgb: typeof extText?.backgroundArgb === 'number' ? extText.backgroundArgb : undefined,
     font: typeof extText?.font === 'number' ? extText.font : undefined,
   };
@@ -411,6 +415,7 @@ export interface BaileysIncomingFields {
   location?: IncomingMessage['location'];
   /** Pre-extracted quoted message context. Populated by the adapter when `contextInfo` is present. */
   quotedMessage?: IncomingMessage['quotedMessage'];
+  forwarded?: boolean;
   /** Pre-extracted commerce ids. Populated by the adapter for `orderMessage` / `productMessage`. */
   order?: IncomingMessage['order'];
   product?: IncomingMessage['product'];
@@ -495,6 +500,10 @@ export function buildIncomingMessageFromBaileys(
 
   if (fields.quotedMessage) {
     incoming.quotedMessage = fields.quotedMessage;
+  }
+
+  if (fields.forwarded) {
+    incoming.forwarded = true;
   }
 
   if (fields.order) {

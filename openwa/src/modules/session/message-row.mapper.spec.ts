@@ -20,6 +20,11 @@ describe('buildMessageMetadata', () => {
     expect(buildMessageMetadata(msg({ quotedMessage } as Partial<IncomingMessage>))).toEqual({ quotedMessage });
   });
 
+  it('stores a forwarded marker without adding one to ordinary messages', () => {
+    expect(buildMessageMetadata(msg({ forwarded: true }))).toEqual({ forwarded: true });
+    expect(buildMessageMetadata(msg({ forwarded: false }))).toBeUndefined();
+  });
+
   it('stores call metadata', () => {
     const call = { video: false, missed: false };
 

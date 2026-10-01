@@ -66,6 +66,7 @@ export interface RawMessageFields {
   type: string;
   timestamp: number;
   fromMe: boolean;
+  isForwarded?: boolean;
   /** Set on group messages: the participant WID that actually sent the message. */
   author?: string;
   /** WIDs @mentioned in the message; whatsapp-web.js attaches this to every Message. */
@@ -108,6 +109,7 @@ export function buildIncomingMessageBase(msg: RawMessageFields): IncomingMessage
     type: mapWwebjsMessageType(msg.type),
     timestamp: msg.timestamp,
     fromMe: msg.fromMe,
+    ...(msg.isForwarded ? { forwarded: true } : {}),
     isGroup: chatId.endsWith('@g.us'),
     kind: chatKind(chatId),
     // Flag status/story broadcasts here (the engine-specific `status@broadcast` pseudo-JID stays in

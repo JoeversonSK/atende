@@ -934,6 +934,7 @@ export class BaileysEvents {
         media,
         location,
         quotedMessage: context.quotedMessage,
+        forwarded: context.forwarded,
         order: commerce.order,
         product: commerce.product,
         isCatalogShare: isBaileysCatalogShare(normalized),

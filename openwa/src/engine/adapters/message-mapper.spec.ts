@@ -33,6 +33,11 @@ describe('buildIncomingMessageBase', () => {
     expect(buildIncomingMessageBase({ ...base, from: '12036@g.us' }).kind).toBe('group');
   });
 
+  it('preserves the forwarded flag when WhatsApp marks a message', () => {
+    expect(buildIncomingMessageBase({ ...base, isForwarded: true }).forwarded).toBe(true);
+    expect(buildIncomingMessageBase(base).forwarded).toBeUndefined();
+  });
+
   it('reads a renamed `$1` id when the dependency has not normalized it (#747)', () => {
     // The live inbound path. Without this, every arriving message on a renamed build carries
     // `id: undefined` — no dedup key, no reply target, nothing to match an ack against.

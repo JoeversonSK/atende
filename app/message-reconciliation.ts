@@ -7,6 +7,8 @@ export type ReconciledMessage = {
   historyTimestamp?: number;
   historyOrder?: number;
   media?: { data?: string };
+  quotedMessage?: { id: string; body: string };
+  forwarded?: boolean;
 };
 
 export function messageTimestamp(value: unknown): number {
@@ -36,6 +38,8 @@ export function reconcileMessages<T extends ReconciledMessage>(messages: T[]): T
         source: previous.source === combined.source ? combined.source : "both",
         ...(history ? { timestamp: history.historyTimestamp!, time: history.time, historyTimestamp: history.historyTimestamp, historyOrder: combined.historyOrder ?? previous.historyOrder } : {}),
         media: combined.media?.data ? combined.media : previous.media?.data ? previous.media : combined.media || previous.media,
+        quotedMessage: combined.quotedMessage?.body ? combined.quotedMessage : previous.quotedMessage?.body ? previous.quotedMessage : combined.quotedMessage || previous.quotedMessage,
+        forwarded: combined.forwarded || previous.forwarded,
       };
       rows.delete(index);
     }

@@ -100,6 +100,8 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /** WhatsApp marks this copy as forwarded from another conversation. */
+  forwarded?: boolean;
   /** User-facing chat kind of the conversation this message belongs to (derived from `chatId`). */
   kind: ChatKind;
   /**

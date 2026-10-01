@@ -40,6 +40,7 @@ import {
   Pause,
   Phone,
   Play,
+  Reply,
   Search,
   Send,
   Settings,
@@ -68,11 +69,14 @@ type MessageMedia = {
 };
 type Message = {
   id: string;
+  waMessageId?: string;
   body: string;
   time: string;
   mine: boolean;
   type: string;
   media?: MessageMedia;
+  quotedMessage?: { id: string; body: string };
+  forwarded?: boolean;
   identityIds?: string[];
 };
 type MessageSource = "database" | "history" | "optimistic" | "both";
@@ -375,6 +379,13 @@ function toMessage(
           omitted: mediaValue?.omitted === true,
         }
       : undefined;
+  const quotedValue = value.quotedMessage && typeof value.quotedMessage === "object"
+    ? value.quotedMessage as Record<string, unknown>
+    : metadata?.quotedMessage && typeof metadata.quotedMessage === "object"
+      ? metadata.quotedMessage as Record<string, unknown>
+      : null;
+  const quotedId = quotedValue ? serializedMessageId(quotedValue.id) : "";
+  const waMessageId = serializedMessageId(value.waMessageId || value.messageId || (source === "history" ? value.id : null));
   const rawIds = [value.waMessageId, value.messageId, value.id]
     .map(serializedMessageId)
     .filter(Boolean);
@@ -382,6 +393,7 @@ function toMessage(
   const identityIds = [...new Set(rawIds.flatMap(messageIdentityIds))];
   return {
     id,
+    ...(waMessageId ? { waMessageId } : {}),
     identityIds: identityIds.length ? identityIds : [id],
     body: String(value.body || value.text || value.content || fallback),
     mine:
@@ -392,6 +404,8 @@ function toMessage(
     ...(source === "history" && timestamp ? { historyTimestamp: timestamp } : {}),
     type,
     media,
+    ...(quotedId ? { quotedMessage: { id: quotedId, body: String(quotedValue?.body || "") } } : {}),
+    ...(value.forwarded === true || value.isForwarded === true || metadata?.forwarded === true ? { forwarded: true } : {}),
     source,
   };
 }
@@ -699,6 +713,7 @@ export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [selected, setSelected] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const profileDirtyRef = useRef(false);
   const [assignments, setAssignments] = useState<Record<string, Assignment>>(
@@ -1765,6 +1780,7 @@ export default function Home() {
     setTransferId("");
     void markRead(chat.id);
     setSelected(chat);
+    setReplyingTo(null);
     setEmojiOpen(false);
     setAssignment(null);
     setChats((current) =>
@@ -1800,6 +1816,7 @@ export default function Home() {
     )
       return;
     setSelected(null);
+    setReplyingTo(null);
   }
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1819,6 +1836,10 @@ export default function Home() {
         setEmojiOpen(false);
         return;
       }
+      if (replyingTo) {
+        setReplyingTo(null);
+        return;
+      }
       closeConversation();
     };
     window.addEventListener("keydown", closeOnEscape);
@@ -1832,6 +1853,7 @@ export default function Home() {
     contactsOpen,
     flowMenuOpen,
     emojiOpen,
+    replyingTo,
   ]);
   async function loadAssignment(chat: Chat, active = config) {
     if (!active.apiKey || !active.sessionId) return;
@@ -2070,6 +2092,7 @@ export default function Home() {
     }
     const target = selected;
     const originalText = draft.trim();
+    const replyTarget = replyingTo?.waMessageId;
     const signedText = `*${operator.displayName}:*\n\n${originalText}`;
     const optimisticId = `optimistic-${eventId()}`;
     const optimisticTimestamp = Date.now();
@@ -2081,6 +2104,7 @@ export default function Home() {
       time: messageDateTime(new Date(optimisticTimestamp)),
       timestamp: optimisticTimestamp,
       type: "text",
+      ...(replyTarget ? { quotedMessage: { id: replyTarget, body: replyingTo?.body || "" } } : {}),
       source: "optimistic",
     };
     const optimisticList = mergeMessages([
@@ -2090,6 +2114,7 @@ export default function Home() {
     historyCacheRef.current.set(target.id, optimisticList);
     if (selectedRef.current?.id === target.id) setMessages(optimisticList);
     setDraft("");
+    setReplyingTo(null);
     setEmojiOpen(false);
     try {
       const response = await request(
@@ -2097,7 +2122,7 @@ export default function Home() {
         `/sessions/${encodeURIComponent(config.sessionId)}/messages/send-text`,
         {
           method: "POST",
-          body: JSON.stringify({ chatId: target.id, text: signedText }),
+          body: JSON.stringify({ chatId: target.id, text: signedText, ...(replyTarget ? { quotedMessageId: replyTarget } : {}) }),
         },
       );
       const result = (await response.json().catch(() => null)) as {
@@ -2117,6 +2142,7 @@ export default function Home() {
             ? {
                 ...message,
                 id: confirmedId || message.id,
+                waMessageId: confirmedId || message.waMessageId,
                 identityIds: confirmedId
                   ? [
                       ...new Set([
@@ -2144,6 +2170,7 @@ export default function Home() {
       if (selectedRef.current?.id === target.id) {
         setMessages(withoutFailed);
         setDraft((current) => current || originalText);
+        if (replyTarget) setReplyingTo((current) => current || replyingTo);
       }
       setNotice(
         error instanceof Error
@@ -3276,12 +3303,19 @@ export default function Home() {
                 ) : messages.length ? (
                   messages.map((message) => {
                     const hasAttachment = Boolean(message.media);
+                    const quotedId = message.quotedMessage?.id;
+                    const quotedOriginal = quotedId
+                      ? messages.find((candidate) => candidate.waMessageId === quotedId || candidate.identityIds?.includes(quotedId))
+                      : undefined;
                     return (
                       <div
                         key={message.id}
+                        id={`wa-message-${message.id}`}
                         className={`wa-message ${message.mine ? "mine" : ""}`}
                       >
                         <article>
+                          {message.forwarded && <span className="wa-forwarded-label"><Reply size={13} />Encaminhada</span>}
+                          {message.quotedMessage && <button type="button" className="wa-quoted-message" onClick={() => quotedOriginal && document.getElementById(`wa-message-${quotedOriginal.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} title={quotedOriginal ? "Ir para a mensagem original" : undefined}><b>{quotedOriginal ? quotedOriginal.mine ? "Você" : selected.name : "Mensagem respondida"}</b><span>{quotedOriginal?.body || message.quotedMessage.body || "Mensagem original"}</span></button>}
                           <MessageAttachment
                             message={message}
                             config={config}
@@ -3300,7 +3334,8 @@ export default function Home() {
                               ].includes(message.body)
                             ) && <MessageText text={message.body} />}
                           <footer>
-                            {message.time}
+                            {message.waMessageId && <button type="button" className="wa-message-reply" title="Responder a esta mensagem" aria-label="Responder a esta mensagem" onClick={() => { setReplyingTo(message); requestAnimationFrame(() => composerInputRef.current?.focus()); }}><Reply size={14} />Responder</button>}
+                            <span>{message.time}</span>
                             {message.mine && <CheckCheck size={15} />}
                           </footer>
                         </article>
@@ -3314,6 +3349,7 @@ export default function Home() {
                 )}
                 <div ref={bottomRef} />
               </div>
+              {replyingTo && <div className="wa-reply-composer-preview"><Reply size={17}/><div><b>Respondendo à mensagem</b><span>{replyingTo.body || "Mídia"}</span></div><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancelar resposta"><X size={17}/></button></div>}
               <footer className="wa-composer">
                 <button
                   className={flowMenuOpen ? "active" : ""}

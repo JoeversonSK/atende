@@ -195,6 +195,14 @@ describe('extractBaileysContext (quoted body shares the live body extractor)', (
   });
 });
 
+describe('forwarded-message context', () => {
+  it('recognizes both WhatsApp forwarding indicators', () => {
+    expect(extractBaileysContext({ extendedTextMessage: { contextInfo: { isForwarded: true } } }).forwarded).toBe(true);
+    expect(extractBaileysContext({ imageMessage: { contextInfo: { forwardingScore: 2 } } }).forwarded).toBe(true);
+    expect(extractBaileysContext({ extendedTextMessage: { contextInfo: {} } }).forwarded).toBe(false);
+  });
+});
+
 describe('buildIncomingMessageFromBaileys', () => {
   const base: BaileysIncomingFields = {
     id: 'MSG1',
@@ -215,6 +223,11 @@ describe('buildIncomingMessageFromBaileys', () => {
     expect(r.type).toBe('text');
     expect(r.isGroup).toBe(false);
     expect(r.fromMe).toBe(false);
+  });
+
+  it('passes the forwarded marker into the neutral message', () => {
+    expect(buildIncomingMessageFromBaileys({ ...base, forwarded: true }).forwarded).toBe(true);
+    expect(buildIncomingMessageFromBaileys(base).forwarded).toBeUndefined();
   });
 
   it('stamps kind from the chat JID', () => {
