@@ -32,6 +32,7 @@ import {
   CheckCheck,
   CircleAlert,
   Filter,
+  Forward,
   GitBranch,
   LoaderCircle,
   MessageCircle,
@@ -714,6 +715,11 @@ export default function Home() {
   const [selected, setSelected] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [forwardTarget, setForwardTarget] = useState<{ message: Message; chatId: string } | null>(null);
+  const [forwardSearch, setForwardSearch] = useState("");
+  const [forwardToIds, setForwardToIds] = useState<string[]>([]);
+  const [forwardBusy, setForwardBusy] = useState(false);
+  const [forwardError, setForwardError] = useState("");
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const profileDirtyRef = useRef(false);
   const [assignments, setAssignments] = useState<Record<string, Assignment>>(
@@ -1781,6 +1787,7 @@ export default function Home() {
     void markRead(chat.id);
     setSelected(chat);
     setReplyingTo(null);
+    setForwardTarget(null);
     setEmojiOpen(false);
     setAssignment(null);
     setChats((current) =>
@@ -1817,6 +1824,7 @@ export default function Home() {
       return;
     setSelected(null);
     setReplyingTo(null);
+    setForwardTarget(null);
   }
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -1836,6 +1844,10 @@ export default function Home() {
         setEmojiOpen(false);
         return;
       }
+      if (forwardTarget) {
+        if (!forwardBusy) setForwardTarget(null);
+        return;
+      }
       if (replyingTo) {
         setReplyingTo(null);
         return;
@@ -1853,6 +1865,8 @@ export default function Home() {
     contactsOpen,
     flowMenuOpen,
     emojiOpen,
+    forwardTarget,
+    forwardBusy,
     replyingTo,
   ]);
   async function loadAssignment(chat: Chat, active = config) {
@@ -2754,6 +2768,60 @@ export default function Home() {
     }
     return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [chats, overview.contacts]);
+  const forwardCandidates = useMemo(() => {
+    const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+    const query = normalize(forwardSearch.trim());
+    return contactRows.filter(contact => contact.id !== forwardTarget?.chatId && /@(c\.us|lid)$/.test(contact.id) && (!query || normalize(`${contact.name} ${contact.phone || ""} ${contact.id}`).includes(query)));
+  }, [contactRows, forwardTarget?.chatId, forwardSearch]);
+  function openForward(message: Message) {
+    if (!selected || !message.waMessageId) return;
+    if (operator?.role !== "admin" && operator?.canSend === false) {
+      setNotice("Sua conta não tem permissão para encaminhar mensagens.");
+      return;
+    }
+    setForwardTarget({ message, chatId: selected.id });
+    setForwardSearch("");
+    setForwardToIds([]);
+    setForwardError("");
+  }
+  function toggleForwardRecipient(chatId: string) {
+    if (!forwardToIds.includes(chatId) && forwardToIds.length >= 10) {
+      setForwardError("Selecione no máximo 10 contatos por envio.");
+      return;
+    }
+    setForwardToIds(current => current.includes(chatId) ? current.filter(id => id !== chatId) : [...current, chatId]);
+    setForwardError("");
+  }
+  async function sendForward() {
+    if (!forwardTarget?.message.waMessageId || !forwardToIds.length || forwardBusy) return;
+    const target = forwardTarget;
+    const recipients = [...forwardToIds];
+    setForwardBusy(true);
+    setForwardError("");
+    let delivered = 0;
+    const failed: { id: string; name: string; reason: string }[] = [];
+    for (const toChatId of recipients) {
+      try {
+        const response = await request(config, `/sessions/${encodeURIComponent(config.sessionId)}/messages/forward`, {
+          method: "POST",
+          body: JSON.stringify({ fromChatId: target.chatId, toChatId, messageId: target.message.waMessageId }),
+        });
+        if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+        delivered++;
+      } catch (error) {
+        failed.push({ id: toChatId, name: contactRows.find(contact => contact.id === toChatId)?.name || toChatId, reason: error instanceof Error ? error.message : "Falha ao encaminhar" });
+      }
+    }
+    if (delivered) void refreshChats().catch(() => undefined);
+    if (failed.length) {
+      setForwardToIds(failed.map(item => item.id));
+      setForwardError(`${delivered} enviado(s). Falha para: ${failed.map(item => `${item.name} (${item.reason})`).join("; ")}. Apenas os contatos com falha continuam selecionados.`);
+    } else {
+      setForwardTarget(null);
+      setNotice(`Mensagem encaminhada para ${delivered} contato${delivered === 1 ? "" : "s"}.`);
+    }
+    setForwardBusy(false);
+  }
   const tagsByChat = useMemo(
     () => new Map(contactRows.map((contact) => [contact.id, contact.tags])),
     [contactRows],
@@ -3335,6 +3403,7 @@ export default function Home() {
                             ) && <MessageText text={message.body} />}
                           <footer>
                             {message.waMessageId && <button type="button" className="wa-message-reply" title="Responder a esta mensagem" aria-label="Responder a esta mensagem" onClick={() => { setReplyingTo(message); requestAnimationFrame(() => composerInputRef.current?.focus()); }}><Reply size={14} />Responder</button>}
+                            {message.waMessageId && <button type="button" className="wa-message-forward" title="Encaminhar mensagem para contatos" aria-label="Encaminhar mensagem para contatos" onClick={() => openForward(message)}><Forward size={14} />Encaminhar</button>}
                             <span>{message.time}</span>
                             {message.mine && <CheckCheck size={15} />}
                           </footer>
@@ -3721,6 +3790,23 @@ export default function Home() {
           <button aria-label="Dispensar aviso" onClick={() => setNotice("")}>
             <X size={15} />
           </button>
+        </div>
+      )}
+      {forwardTarget && (
+        <div className="wa-backdrop forward-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !forwardBusy) setForwardTarget(null); }}>
+          <form className="forward-modal" role="dialog" aria-modal="true" aria-labelledby="forward-title" onSubmit={event => { event.preventDefault(); void sendForward(); }}>
+            <header><div><h2 id="forward-title">Encaminhar mensagem</h2><p>Escolha até 10 contatos para receber a mensagem original.</p></div><button type="button" onClick={() => setForwardTarget(null)} disabled={forwardBusy} aria-label="Fechar"><X size={20}/></button></header>
+            <div className="forward-preview"><Forward size={17}/><span>{forwardTarget.message.body || ({ image: "Foto", video: "Vídeo", audio: "Áudio", voice: "Áudio", document: "Arquivo" } as Record<string, string>)[forwardTarget.message.type] || "Mensagem"}</span></div>
+            <label className="forward-search"><Search size={17}/><input autoFocus aria-label="Buscar contato para encaminhar" value={forwardSearch} onChange={event => setForwardSearch(event.target.value)} placeholder="Buscar contato ou número"/></label>
+            {forwardToIds.length > 0 && <div className="forward-selected">{forwardToIds.map(id => <button key={id} type="button" disabled={forwardBusy} onClick={() => toggleForwardRecipient(id)}>{contactRows.find(contact => contact.id === id)?.name || id}<X size={13}/></button>)}</div>}
+            <div className="forward-contact-list" role="group" aria-label="Contatos de destino">
+              {forwardCandidates.slice(0,80).map(contact => <label key={contact.id} className="forward-contact"><input type="checkbox" disabled={forwardBusy} checked={forwardToIds.includes(contact.id)} onChange={() => toggleForwardRecipient(contact.id)}/><span className="forward-contact-avatar">{contact.name.charAt(0).toUpperCase()}</span><span className="forward-contact-name"><b>{contact.name}</b><small>{contact.phone || contact.id.replace(/@.*/, "")}</small></span></label>)}
+              {!forwardCandidates.length && <p className="forward-empty">Nenhum contato encontrado.</p>}
+              {forwardCandidates.length > 80 && <p className="forward-more">Mostrando os primeiros 80 contatos. Refine a busca para encontrar outros.</p>}
+            </div>
+            {forwardError && <p className="forward-error" role="alert">{forwardError}</p>}
+            <footer><button type="button" onClick={() => setForwardTarget(null)} disabled={forwardBusy}>Cancelar</button><button type="submit" disabled={forwardBusy || !forwardToIds.length}><Forward size={17}/>{forwardBusy ? "Encaminhando…" : `Encaminhar para ${forwardToIds.length}`}</button></footer>
+          </form>
         </div>
       )}
       {newChatOpen && (

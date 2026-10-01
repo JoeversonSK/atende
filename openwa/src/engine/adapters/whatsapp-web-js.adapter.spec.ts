@@ -918,6 +918,19 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
     expect(result.id).not.toMatch(/^fwd_/);
   });
 
+  it('can forward a media message outside the 100 most recent messages', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const sourceChat = { fetchMessages: jest.fn(({ limit }: { limit: number }) => Promise.resolve(limit === 100 ? [] : [{ id: { _serialized: 'OLDER_AUDIO' }, forward }])) };
+    const destChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'FORWARDED_AUDIO' }, timestamp: 200 }]) };
+    const client = { getChatById: jest.fn((id: string) => Promise.resolve(id === 'dest@c.us' ? destChat : sourceChat)) };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'OLDER_AUDIO');
+
+    expect(sourceChat.fetchMessages).toHaveBeenCalledWith({ limit: 2000 });
+    expect(forward).toHaveBeenCalledWith('dest@c.us');
+    expect(result.id).toBe('FORWARDED_AUDIO');
+  });
+
   it('returns an explicit-unknown id (empty, not a real/synthetic id) when the sent copy cannot be identified', async () => {
     // Empty id leaves the forward row's waMessageId unset, so no ack can mis-match it (a source/synthetic
     // id could cross-drive another row's delivery status).

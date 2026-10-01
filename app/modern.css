@@ -564,15 +564,43 @@ body .wa-message footer {
 .wa-message.mine .wa-quoted-message { background:#d2eadd; }
 .wa-quoted-message b { color:#087f70; font-size:11px; }
 .wa-quoted-message span { overflow:hidden; color:#5b6d76; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.wa-message-reply { display:flex; align-items:center; gap:3px; margin-right:auto; color:#567d81; font-size:10px; }
-.wa-message-reply:hover,.wa-message-reply:focus-visible { color:#087f70; text-decoration:underline; }
-body .wa-message footer .wa-message-reply svg { color:currentColor; }
+.wa-message-reply,.wa-message-forward { display:flex; align-items:center; gap:3px; color:#567d81; font-size:10px; }
+.wa-message-forward { margin-right:auto; }
+.wa-message-reply:hover,.wa-message-reply:focus-visible,.wa-message-forward:hover,.wa-message-forward:focus-visible { color:#087f70; text-decoration:underline; }
+body .wa-message footer .wa-message-reply svg,body .wa-message footer .wa-message-forward svg { color:currentColor; }
 .wa-reply-composer-preview { display:flex; align-items:center; gap:10px; padding:9px 22px; border-top:1px solid #dce8e4; background:#f5faf8; color:#087f70; }
 .wa-reply-composer-preview > div { display:grid; gap:2px; min-width:0; flex:1; }
 .wa-reply-composer-preview b { font-size:11px; }
 .wa-reply-composer-preview span { overflow:hidden; color:#526c70; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .wa-reply-composer-preview > button { display:grid; place-items:center; width:28px; height:28px; border-radius:6px; color:#526c70; }
 .wa-reply-composer-preview > button:hover { background:#e3efea; }
+.forward-backdrop { z-index:250; }
+.forward-modal { display:flex; flex-direction:column; width:min(520px,100%); max-height:min(85vh,760px); overflow:hidden; border-radius:14px; background:#fff; box-shadow:0 18px 60px #102d3c45; color:#173146; }
+.forward-modal > header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:21px 24px 16px; border-bottom:1px solid #e3ebec; }
+.forward-modal h2 { margin:0; font-size:19px; }
+.forward-modal header p { margin:5px 0 0; color:#728692; font-size:12px; }
+.forward-modal header button { color:#607987; }
+.forward-preview { display:flex; align-items:center; gap:9px; margin:16px 24px 12px; padding:10px 12px; border-left:3px solid #0b927c; border-radius:6px; background:#eef7f3; color:#4a6571; font-size:12px; }
+.forward-preview span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.forward-search { display:flex; align-items:center; gap:9px; margin:0 24px 12px; padding:9px 12px; border:1px solid #dce7e9; border-radius:9px; color:#718894; }
+.forward-search input { flex:1; min-width:0; border:0; outline:0; background:transparent; font:inherit; font-size:13px; }
+.forward-selected { display:flex; gap:6px; flex-wrap:wrap; max-height:76px; overflow:auto; padding:0 24px 10px; }
+.forward-selected button { display:flex; align-items:center; gap:4px; max-width:100%; padding:5px 8px; border-radius:7px; background:#e6f3ee; color:#087f70; font-size:11px; }
+.forward-contact-list { min-height:100px; overflow:auto; border-top:1px solid #edf1f2; }
+.forward-contact { display:flex; align-items:center; gap:11px; padding:10px 24px; cursor:pointer; }
+.forward-contact:hover { background:#f3f8f6; }
+.forward-contact input { width:17px; height:17px; flex:none; accent-color:#087f70; }
+.forward-contact-avatar { display:grid; place-items:center; width:35px; height:35px; flex:none; border-radius:50%; background:#e0eee9; color:#0a806d; font-weight:700; }
+.forward-contact-name { display:grid; min-width:0; gap:2px; }
+.forward-contact-name b,.forward-contact-name small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.forward-contact-name b { font-size:13px; }
+.forward-contact-name small { color:#82939b; font-size:11px; }
+.forward-empty,.forward-more { padding:14px 24px; color:#718894; font-size:12px; }
+.forward-error { max-height:100px; overflow:auto; margin:0; padding:10px 24px; background:#fff1ed; color:#a34337; font-size:12px; }
+.forward-modal > footer { display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:14px 24px; border-top:1px solid #e3ebec; }
+.forward-modal > footer button { display:flex; align-items:center; gap:7px; padding:9px 13px; border-radius:8px; font-size:12px; }
+.forward-modal > footer button[type="submit"] { background:#087f70; color:#fff; }
+.forward-modal > footer button:disabled { opacity:.55; cursor:wait; }
 body .wa-composer {
   margin: 0;
   min-height: 85px;

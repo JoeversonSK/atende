@@ -573,8 +573,15 @@ export class WwebjsMessaging {
     this.host.ensureReady();
     try {
       const chat = await this.client().getChatById(fromChatId);
-      const messages = await chat.fetchMessages({ limit: 100 });
-      const msgToForward = messages.find(m => m.id._serialized === messageId);
+      const recent = await chat.fetchMessages({ limit: 100 });
+      // The operator can view up to 2,000 messages in a conversation. Search that same range only
+      // when the quick recent lookup misses, so an older image/audio/file remains forwardable.
+      const hasMessageId = (m: { id: { _serialized: string } }) => {
+        const id = m.id as { _serialized?: string; $1?: string };
+        return (id._serialized ?? id.$1) === messageId;
+      };
+      const msgToForward = recent.find(hasMessageId)
+        ?? (await chat.fetchMessages({ limit: 2000 })).find(hasMessageId);
 
       if (!msgToForward) {
         throw new MessageNotFoundError(messageId);
