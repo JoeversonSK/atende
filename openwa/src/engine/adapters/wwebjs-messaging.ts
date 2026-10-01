@@ -591,10 +591,33 @@ export class WwebjsMessaging {
       // it (and self-heal a stale mapping) via sendResolved. Capture the id actually sent to so the
       // id-recovery below reads back from the SAME (resolved) chat, not the raw @c.us (#583 R1).
       let resolvedTo = toChatId;
-      await this.sendResolved(toChatId, to => {
-        resolvedTo = to;
-        return msgToForward.forward(to);
-      });
+      try {
+        await this.sendResolved(toChatId, to => {
+          resolvedTo = to;
+          return msgToForward.forward(to);
+        });
+      } catch (error) {
+        // Some WA Web builds no longer expose WAWebChatForwardMessage. The library then throws
+        // before sending anything. Copy the original payload in that specific case so text and
+        // attachments remain forwardable; never retry an ambiguous failure (which could duplicate).
+        if (!(error instanceof Error) || !/Cannot read properties of undefined \(reading 'forwardMessages'\)/.test(error.message)) {
+          throw error;
+        }
+        const type = msgToForward.type;
+        if (msgToForward.hasMedia && ['image', 'video', 'audio', 'ptt', 'document'].includes(type)) {
+          const media = await msgToForward.downloadMedia();
+          if (!media) throw new Error('A mídia original não está mais disponível para encaminhamento.');
+          return toMessageResult(await this.sendResolved(toChatId, to => this.client().sendMessage(to, media, {
+            ...(type === 'ptt' ? { sendAudioAsVoice: true } : {}),
+            ...(type === 'document' ? { sendMediaAsDocument: true } : {}),
+            ...(msgToForward.body ? { caption: msgToForward.body } : {}),
+          })));
+        }
+        if (type === 'chat' && msgToForward.body) {
+          return toMessageResult(await this.sendResolved(toChatId, to => this.client().sendMessage(to, msgToForward.body)));
+        }
+        throw new Error('Este tipo de mensagem não pode ser encaminhado nesta versão do WhatsApp Web.');
+      }
 
       // whatsapp-web.js's forward() returns void, so BEST-EFFORT recover the REAL id of the sent copy by
       // reading it back from the destination chat (the most recent outgoing message). The delivery-ack

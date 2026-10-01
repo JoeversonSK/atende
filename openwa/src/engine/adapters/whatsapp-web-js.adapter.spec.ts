@@ -931,6 +931,54 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
     expect(result.id).toBe('FORWARDED_AUDIO');
   });
 
+  it.each([
+    ['image', 'image/png', false, false],
+    ['video', 'video/mp4', false, false],
+    ['audio', 'audio/ogg', false, false],
+    ['ptt', 'audio/ogg', true, false],
+    ['document', 'application/pdf', false, true],
+  ])('copies %s media when WA Web has no native forward module', async (type, mimetype, voice, document) => {
+    const failure = new TypeError("Cannot read properties of undefined (reading 'forwardMessages')");
+    const media = { mimetype, data: 'YQ==', filename: 'file' };
+    const downloadMedia = jest.fn().mockResolvedValue(media);
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, type, body: 'Legenda', hasMedia: true, downloadMedia, forward: jest.fn().mockRejectedValue(failure) }]) };
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'COPY1' }, timestamp: 200 });
+    const client = { getChatById: jest.fn().mockResolvedValue(sourceChat), sendMessage };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(downloadMedia).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith('dest@c.us', media, {
+      caption: 'Legenda',
+      ...(voice ? { sendAudioAsVoice: true } : {}),
+      ...(document ? { sendMediaAsDocument: true } : {}),
+    });
+    expect(result.id).toBe('COPY1');
+  });
+
+  it('copies text only when the native forward module is missing', async () => {
+    const failure = new TypeError("Cannot read properties of undefined (reading 'forwardMessages')");
+    const forward = jest.fn().mockRejectedValue(failure);
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, type: 'chat', body: 'Uber', hasMedia: false, forward }]) };
+    const sendMessage = jest.fn().mockResolvedValue({ id: { _serialized: 'COPY1' }, timestamp: 200 });
+    const client = { getChatById: jest.fn().mockResolvedValue(sourceChat), sendMessage };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(sendMessage).toHaveBeenCalledWith('dest@c.us', 'Uber');
+    expect(result.id).toBe('COPY1');
+  });
+
+  it('does not copy after an ambiguous native-forward failure', async () => {
+    const failure = new Error('Connection interrupted');
+    const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, forward: jest.fn().mockRejectedValue(failure) }]) };
+    const sendMessage = jest.fn();
+    const client = { getChatById: jest.fn().mockResolvedValue(sourceChat), sendMessage };
+
+    await expect(readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1')).rejects.toThrow('Connection interrupted');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('returns an explicit-unknown id (empty, not a real/synthetic id) when the sent copy cannot be identified', async () => {
     // Empty id leaves the forward row's waMessageId unset, so no ack can mis-match it (a source/synthetic
     // id could cross-drive another row's delivery status).
