@@ -15,9 +15,17 @@ type SheetRule = {
   id: string; name: string; spreadsheetId: string; range: string; phoneColumn: string;
   mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean;
   intervalMinutes: number; lastRunAt?: string | null; lastError?: string | null;
+  mode: 'contacts' | 'cnpjCall'; detailsRange: string; controlCnpjColumn: string;
+  detailsCnpjColumn: string; calledColumn: string; calledValue: string;
 };
-type SheetRows = { headers: string[]; rows: Record<string, string>[] };
+type SheetRows = { headers: string[]; rows: Record<string, string>[]; rowNumbers: number[] };
 const editableFields = new Set(['name', 'firstName', 'lastName', 'email', 'company', 'document', 'address', 'tags']);
+export const normalizeCnpj = (value: unknown) => String(value ?? '').replace(/\D/g, '');
+const columnLetter = (index: number) => {
+  let result = '';
+  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) result = String.fromCharCode(65 + (value - 1) % 26) + result;
+  return result;
+};
 
 @Injectable()
 export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
@@ -37,8 +45,16 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       phone_column varchar(120) NOT NULL, mappings jsonb NOT NULL DEFAULT '[]'::jsonb,
       message_template text NOT NULL DEFAULT '', send_message boolean NOT NULL DEFAULT false,
       active boolean NOT NULL DEFAULT false, interval_minutes integer NOT NULL DEFAULT 60,
+      mode varchar(20) NOT NULL DEFAULT 'contacts', details_range varchar(160) NOT NULL DEFAULT '',
+      control_cnpj_column varchar(120) NOT NULL DEFAULT '', details_cnpj_column varchar(120) NOT NULL DEFAULT '',
+      called_column varchar(120) NOT NULL DEFAULT '', called_value varchar(120) NOT NULL DEFAULT '',
       last_run_at timestamptz, last_error text, created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW())`);
+    for (const [name, definition] of Object.entries({ mode: "varchar(20) NOT NULL DEFAULT 'contacts'", details_range: "varchar(160) NOT NULL DEFAULT ''",
+      control_cnpj_column: "varchar(120) NOT NULL DEFAULT ''", details_cnpj_column: "varchar(120) NOT NULL DEFAULT ''",
+      called_column: "varchar(120) NOT NULL DEFAULT ''", called_value: "varchar(120) NOT NULL DEFAULT ''" })) {
+      await this.db.query(`ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS ${name} ${definition}`);
+    }
     await this.db.query(`CREATE TABLE IF NOT EXISTS openwa.sheet_automation_rows (
       automation_id varchar(36) NOT NULL REFERENCES openwa.sheet_automations(id) ON DELETE CASCADE,
       phone varchar(20) NOT NULL, fingerprint varchar(64) NOT NULL, status varchar(20) NOT NULL,
@@ -63,12 +79,15 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const rows = await this.db.query(`SELECT id,name,spreadsheet_id AS "spreadsheetId",sheet_range AS range,
       phone_column AS "phoneColumn",mappings,message_template AS "messageTemplate",
       send_message AS "sendMessage",active,interval_minutes AS "intervalMinutes",
+      mode,details_range AS "detailsRange",control_cnpj_column AS "controlCnpjColumn",
+      details_cnpj_column AS "detailsCnpjColumn",called_column AS "calledColumn",called_value AS "calledValue",
       last_run_at AS "lastRunAt",last_error AS "lastError" FROM openwa.sheet_automations
       WHERE session_id=$1 ORDER BY created_at DESC`, [sessionId]);
     const failures = rows.length ? await this.db.query(`SELECT r.automation_id AS "automationId",r.phone,
-      COALESCE(r.error,CASE WHEN r.status='sending' THEN 'Execução interrompida; confira o WhatsApp antes de alterar a linha para tentar novamente.' END) AS error
+      COALESCE(r.error,CASE WHEN r.status='sending' THEN 'Execução interrompida; confira o WhatsApp antes de tentar novamente.'
+        WHEN r.status='sent_pending_sheet' THEN 'Mensagem enviada; aguardando a marcação da planilha. Não reenvie manualmente.' END) AS error
       FROM openwa.sheet_automation_rows r JOIN openwa.sheet_automations a ON a.id=r.automation_id
-      WHERE a.session_id=$1 AND r.status IN ('send_failed','sending') ORDER BY r.processed_at DESC LIMIT 100`, [sessionId]) : [];
+      WHERE a.session_id=$1 AND r.status IN ('send_failed','sending','sent_pending_sheet') ORDER BY r.processed_at DESC LIMIT 100`, [sessionId]) : [];
     return { serviceAccountEmail: this.credentials()?.client_email || null,
       rules: rows.map((rule: SheetRule) => ({ ...rule, failures: failures.filter((item: { automationId: string }) => item.automationId === rule.id) })) };
   }
@@ -79,6 +98,12 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const match = link.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
     const spreadsheetId = match ? match[1] : link;
     const range = String(row.range || 'A1:Z201').trim();
+    const mode = row.mode === 'cnpjCall' ? 'cnpjCall' : 'contacts';
+    const detailsRange = String(row.detailsRange || '').trim();
+    const controlCnpjColumn = String(row.controlCnpjColumn || 'CNPJ').trim();
+    const detailsCnpjColumn = String(row.detailsCnpjColumn || 'CNPJ').trim();
+    const calledColumn = String(row.calledColumn || 'Chamado').trim();
+    const calledValue = String(row.calledValue || 'Nós chamamos').trim();
     const phoneColumn = String(row.phoneColumn || '').trim();
     const mappings = (Array.isArray(row.mappings) ? row.mappings : []).map((item: unknown) => {
       const value = item && typeof item === 'object' ? item as Record<string, unknown> : {};
@@ -87,13 +112,19 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const messageTemplate = String(row.messageTemplate || '').trim();
     const intervalMinutes = Number(row.intervalMinutes || 60);
     if (!name || !/^[A-Za-z0-9_-]{20,160}$/.test(spreadsheetId)) throw new BadRequestException('Informe o nome e um link ou ID válido do Google Sheets.');
-    if (range.length > 160 || !/^(?:[^\r\n!]{1,80}!)?[A-Z]{1,2}1:[A-Z]{1,2}\d{1,4}$/.test(range) || Number(range.match(/\d+$/)?.[0]) > 1001)
+    const validRange = (value: string) => value.length <= 160 && /^(?:[^\r\n!]{1,80}!)?[A-Z]{1,2}1:[A-Z]{1,2}\d{1,4}$/.test(value) && Number(value.match(/\d+$/)?.[0]) <= 1001;
+    if (!validRange(range))
       throw new BadRequestException('Use um intervalo com cabeçalho na linha 1 e até 1.000 contatos (ex.: A1:Z201).');
-    if (!phoneColumn || phoneColumn.length > 120 || mappings.length > 40 || mappings.some(item => item.column.length > 120 || !(editableFields.has(item.target) || /^custom:.{1,80}$/.test(item.target))))
+    if (mode === 'cnpjCall' && (!validRange(detailsRange) || !range.includes('!') || !detailsRange.includes('!') ||
+      !controlCnpjColumn || !detailsCnpjColumn || !calledColumn || !calledValue ||
+      [controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue].some(value => value.length > 120)))
+      throw new BadRequestException('Informe as duas abas, as colunas de CNPJ e Chamado e o valor a registrar.');
+    if (mode === 'contacts' && (!phoneColumn || phoneColumn.length > 120 || mappings.length > 40 || mappings.some(item => item.column.length > 120 || !(editableFields.has(item.target) || /^custom:.{1,80}$/.test(item.target)))))
       throw new BadRequestException('Revise o mapeamento das colunas e informe a coluna do telefone.');
-    if (messageTemplate.length > 4000 || (row.sendMessage === true && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
+    if (messageTemplate.length > 4000 || ((row.sendMessage === true || mode === 'cnpjCall') && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
     if (![15, 30, 60, 180, 360, 1440].includes(intervalMinutes)) throw new BadRequestException('Intervalo de atualização inválido.');
-    return { name, spreadsheetId, range, phoneColumn, mappings, messageTemplate, sendMessage: row.sendMessage === true, active: row.active === true, intervalMinutes };
+    return { name, spreadsheetId, range, phoneColumn, mappings, messageTemplate, sendMessage: mode === 'cnpjCall' || row.sendMessage === true,
+      active: row.active === true, intervalMinutes, mode, detailsRange, controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue };
   }
   async save(token: string, input: unknown, id?: string) {
     await this.auth.requireAdmin(token);
@@ -102,18 +133,24 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     if (value.active && !this.credentials()) throw new ConflictException('Configure a conta de serviço do Google antes de ativar a automação.');
     const ruleId = id || randomUUID();
     if (id) {
+      const [existing] = await this.db.query('SELECT mode FROM openwa.sheet_automations WHERE id=$1 AND session_id=$2', [id, sessionId]);
+      if (existing && existing.mode !== value.mode) throw new ConflictException('Crie outra automação para usar um tipo diferente.');
       const result = await this.db.query(`UPDATE openwa.sheet_automations SET name=$3,spreadsheet_id=$4,sheet_range=$5,
         phone_column=$6,mappings=$7::jsonb,message_template=$8,send_message=$9,active=$10,
-        interval_minutes=$11,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
+        interval_minutes=$11,mode=$12,details_range=$13,control_cnpj_column=$14,details_cnpj_column=$15,
+        called_column=$16,called_value=$17,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
-          JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes]);
+          JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
+          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue]);
       if (!result.length) throw new ConflictException('Automação não encontrada.');
     } else {
       await this.db.query(`INSERT INTO openwa.sheet_automations
-        (id,session_id,name,spreadsheet_id,sheet_range,phone_column,mappings,message_template,send_message,active,interval_minutes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11)`,
+        (id,session_id,name,spreadsheet_id,sheet_range,phone_column,mappings,message_template,send_message,active,interval_minutes,
+        mode,details_range,control_cnpj_column,details_cnpj_column,called_column,called_value)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
-          JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes]);
+          JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
+          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue]);
     }
     return { id: ruleId };
   }
@@ -124,12 +161,16 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     if (!rows.length) throw new ConflictException('Automação não encontrada.');
     return { success: true };
   }
-  private async fetchSheet(rule: Pick<SheetRule, 'spreadsheetId' | 'range'>): Promise<SheetRows> {
+  private async googleToken(write = false) {
     const credentials = this.credentials();
     if (!credentials) throw new ConflictException('Configure a conta de serviço do Google para ler planilhas privadas.');
-    const google = new GoogleAuth({ credentials, scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] });
+    const google = new GoogleAuth({ credentials, scopes: [write ? 'https://www.googleapis.com/auth/spreadsheets' : 'https://www.googleapis.com/auth/spreadsheets.readonly'] });
     const accessToken = await google.getAccessToken();
     if (!accessToken) throw new ConflictException('Não foi possível autenticar a conta de serviço do Google.');
+    return accessToken;
+  }
+  private async fetchSheet(rule: Pick<SheetRule, 'spreadsheetId' | 'range'>): Promise<SheetRows> {
+    const accessToken = await this.googleToken();
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/${encodeURIComponent(rule.range)}?valueRenderOption=FORMATTED_VALUE`;
     const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new ConflictException(response.status === 403 || response.status === 404
@@ -141,13 +182,156 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     if (values.length > 1001 || values[0].length > 52) throw new BadRequestException('Limite de 1.000 linhas e 52 colunas por automação.');
     const headers = values[0].map(value => String(value ?? '').trim());
     if (headers.some(value => !value || value.length > 120) || new Set(headers).size !== headers.length) throw new BadRequestException('O cabeçalho deve ter nomes únicos e não vazios.');
-    const rows = values.slice(1).filter(row => row.some(value => String(value ?? '').trim())).map(row => Object.fromEntries(headers.map((header, index) => [header, String(row[index] ?? '').trim().slice(0, 4000)])));
-    return { headers, rows };
+    const rows: Record<string, string>[] = [], rowNumbers: number[] = [];
+    values.slice(1).forEach((row, index) => {
+      if (!row.some(value => String(value ?? '').trim())) return;
+      rows.push(Object.fromEntries(headers.map((header, column) => [header, String(row[column] ?? '').trim().slice(0, 4000)])));
+      rowNumbers.push(index + 2);
+    });
+    return { headers, rows, rowNumbers };
+  }
+  private async writeCalled(rule: SheetRule, sheet: SheetRows, rowNumber: number, expectedCnpj: string) {
+    const index = sheet.headers.indexOf(rule.calledColumn);
+    const cnpjIndex = sheet.headers.indexOf(rule.controlCnpjColumn);
+    if (index < 0 || cnpjIndex < 0) throw new BadRequestException('Coluna CNPJ ou Chamado não encontrada.');
+    const firstColumn = rule.range.split('!')[1].match(/^[A-Z]+/)![0];
+    const offset = [...firstColumn].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+    const cnpjCell = `${rule.range.split('!')[0]}!${columnLetter(offset + cnpjIndex)}${rowNumber}`;
+    const cell = `${rule.range.split('!')[0]}!${columnLetter(offset + index)}${rowNumber}`;
+    const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/`;
+    const accessToken = await this.googleToken(true);
+    const currentCnpj = await fetch(`${base}${encodeURIComponent(cnpjCell)}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
+    if (!currentCnpj.ok) throw new ConflictException(`Não foi possível confirmar o CNPJ na linha ${rowNumber} (HTTP ${currentCnpj.status}).`);
+    const currentCnpjValue = await currentCnpj.json() as { values?: string[][] };
+    if (normalizeCnpj(currentCnpjValue.values?.[0]?.[0]) !== expectedCnpj)
+      throw new ConflictException(`A linha ${rowNumber} mudou na planilha; Chamado não foi alterado para evitar marcar outro cliente.`);
+    const current = await fetch(`${base}${encodeURIComponent(cell)}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
+    if (!current.ok) throw new ConflictException(`Não foi possível conferir ${cell} antes da atualização (HTTP ${current.status}).`);
+    const currentValue = await current.json() as { values?: string[][] };
+    const value = String(currentValue.values?.[0]?.[0] || '').trim();
+    if (value === rule.calledValue) return;
+    if (value) throw new ConflictException(`${cell} já contém “${value}”; não foi sobrescrito.`);
+    const response = await fetch(`${base}${encodeURIComponent(cell)}?valueInputOption=RAW`, { method: 'PUT',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ range: cell, majorDimension: 'ROWS', values: [[rule.calledValue]] }), signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new ConflictException(`Mensagem enviada, mas não foi possível atualizar ${cell} (HTTP ${response.status}). Confira a permissão de edição da conta de serviço.`);
+  }
+  private async prepareCnpjCalls(rule: Omit<SheetRule, 'id'>, control: SheetRows, details: SheetRows, sessionId: string) {
+    if (!control.headers.includes(rule.controlCnpjColumn) || !control.headers.includes(rule.calledColumn) ||
+      !details.headers.includes(rule.detailsCnpjColumn))
+      throw new BadRequestException('Confira as colunas CNPJ e Chamado nas duas abas.');
+    const placeholders = [...rule.messageTemplate.matchAll(/{{\s*([^{}]{1,120})\s*}}/g)].map(match => match[1].trim());
+    if (placeholders.some(key => !control.headers.includes(key) && !details.headers.includes(key)))
+      throw new BadRequestException('A mensagem usa uma coluna inexistente nas abas da planilha.');
+    const detailByCnpj = new Map<string, Record<string, string>[]>();
+    for (const row of details.rows) {
+      const cnpj = normalizeCnpj(row[rule.detailsCnpjColumn]);
+      if (cnpj.length !== 14) continue;
+      detailByCnpj.set(cnpj, [...(detailByCnpj.get(cnpj) || []), row]);
+    }
+    const profiles = await this.db.query(`SELECT chat_id AS "chatId",data FROM openwa.contact_profiles
+      WHERE session_id=$1 AND COALESCE((data->>'directoryHidden')::boolean,false)=false`, [sessionId]) as { chatId: string; data: ContactData }[];
+    const contactByCnpj = new Map<string, string[]>();
+    for (const profile of profiles) {
+      if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
+      const values = [profile.data?.document, ...(Array.isArray(profile.data?.custom) ? profile.data.custom
+        .filter(item => item.label?.trim().toLowerCase() === 'cnpj').map(item => item.value) : [])];
+      for (const cnpj of new Set(values.map(normalizeCnpj).filter(value => value.length === 14)))
+        contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
+    }
+    const occurrences = new Map<string, number>();
+    for (const row of control.rows) {
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      if (cnpj.length === 14) occurrences.set(cnpj, (occurrences.get(cnpj) || 0) + 1);
+    }
+    const calls: { cnpj: string; chatId: string; values: Record<string, string>; rowNumber: number }[] = [];
+    const issues: { row: number; cnpj: string; reason: string }[] = [];
+    let missing = 0, ambiguous = 0, alreadyCalled = 0;
+    control.rows.forEach((row, index) => {
+      if (row[rule.calledColumn]) { alreadyCalled++; return; }
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      const issue = (reason: string) => { if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason }); };
+      if (cnpj.length !== 14) { missing++; issue('CNPJ ausente ou inválido'); return; }
+      const matches = contactByCnpj.get(cnpj) || [];
+      const data = detailByCnpj.get(cnpj) || [];
+      if (occurrences.get(cnpj) !== 1 || matches.length > 1 || data.length > 1) { ambiguous++; issue('CNPJ duplicado na planilha ou em contatos'); return; }
+      if (!matches.length || !data.length) { missing++; issue(!matches.length ? 'Contato não encontrado pelo CNPJ' : 'CNPJ não encontrado na aba de dados'); return; }
+      const values = { ...row, ...data[0] };
+      if (placeholders.some(key => !values[key]?.trim())) { missing++; issue('Campo usado na mensagem está vazio'); return; }
+      calls.push({ cnpj, chatId: matches[0], values, rowNumber: control.rowNumbers[index] });
+    });
+    return { calls, issues, missing, ambiguous, alreadyCalled };
+  }
+  private async executeCnpjCalls(sessionId: string, id: string, rule: SheetRule, control: SheetRows) {
+    for (const row of control.rows) {
+      if (row[rule.calledColumn] !== rule.calledValue) continue;
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      if (cnpj.length === 14) await this.db.query(`UPDATE openwa.sheet_automation_rows SET status='sent',error=NULL
+        WHERE automation_id=$1 AND phone=$2 AND status='sent_pending_sheet'`, [id, cnpj]);
+    }
+    const details = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.detailsRange });
+    const prepared = await this.prepareCnpjCalls(rule, control, details, sessionId);
+    let sent = 0, marked = 0, failed = 0, skipped = 0, pending = 0;
+    for (const call of prepared.calls) {
+      const [previous] = await this.db.query('SELECT status FROM openwa.sheet_automation_rows WHERE automation_id=$1 AND phone=$2', [id, call.cnpj]);
+      if (previous?.status === 'sent_pending_sheet') {
+        try {
+          await this.writeCalled(rule, control, call.rowNumber, call.cnpj);
+          await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, call.cnpj, 'sent']);
+          marked++;
+        } catch (error) {
+          failed++;
+          await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
+            [id, call.cnpj, error instanceof Error ? error.message.slice(0, 500) : 'Falha ao atualizar a planilha']);
+        }
+        continue;
+      }
+      if (previous) { skipped++; continue; }
+      if (sent >= 50) { pending++; continue; }
+      const text = this.render(rule.messageTemplate, call.values);
+      if (!text) { failed++; continue; }
+      const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
+        (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
+        [id, call.cnpj, createHash('sha256').update(JSON.stringify(call.values)).digest('hex')]);
+      if (!claimed.length) { skipped++; continue; }
+      try {
+        await this.modules.get(MessageService, { strict: false }).sendText(sessionId, { chatId: call.chatId, text });
+      } catch (error) {
+        failed++;
+        await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=$4 WHERE automation_id=$1 AND phone=$2',
+          [id, call.cnpj, 'send_failed', error instanceof Error ? error.message.slice(0, 500) : 'Falha ao enviar']);
+        continue;
+      }
+      sent++;
+      await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
+        [id, call.cnpj, 'sent_pending_sheet']);
+      try {
+        await this.writeCalled(rule, control, call.rowNumber, call.cnpj);
+        await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3 WHERE automation_id=$1 AND phone=$2', [id, call.cnpj, 'sent']);
+        marked++;
+      } catch (error) {
+        failed++;
+        await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
+          [id, call.cnpj, error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado']);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
+      [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
+    return { total: control.rows.length, eligible: prepared.calls.length, missing: prepared.missing,
+      ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped };
   }
   async preview(token: string, input: unknown) {
     await this.auth.requireAdmin(token);
     const rule = this.normalize(input);
     const sheet = await this.fetchSheet(rule);
+    if (rule.mode === 'cnpjCall') {
+      const details = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.detailsRange });
+      const prepared = await this.prepareCnpjCalls(rule, sheet, details, (await this.auth.connectionContext(token)).sessionId);
+      return { headers: sheet.headers, samples: prepared.calls.slice(0, 5).map(item => ({ ...item.values, 'Contato': item.chatId, 'Linha': String(item.rowNumber) })),
+        total: sheet.rows.length, eligible: prepared.calls.length, missing: prepared.missing, ambiguous: prepared.ambiguous,
+        alreadyCalled: prepared.alreadyCalled, issues: prepared.issues };
+    }
     if (!sheet.headers.includes(rule.phoneColumn) || rule.mappings.some(mapping => !sheet.headers.includes(mapping.column)))
       throw new BadRequestException('Uma coluna mapeada não existe no cabeçalho da planilha.');
     if (rule.sendMessage && [...rule.messageTemplate.matchAll(/{{\s*([^{}]{1,120})\s*}}/g)].some(match => !sheet.headers.includes(match[1].trim())))
@@ -173,8 +357,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       if (!raw) throw new ConflictException('Automação não encontrada.');
       const rule: SheetRule = { id, name: raw.name, spreadsheetId: raw.spreadsheet_id, range: raw.sheet_range,
         phoneColumn: raw.phone_column, mappings: raw.mappings, messageTemplate: raw.message_template,
-        sendMessage: raw.send_message, active: raw.active, intervalMinutes: raw.interval_minutes };
+        sendMessage: raw.send_message, active: raw.active, intervalMinutes: raw.interval_minutes,
+        mode: raw.mode, detailsRange: raw.details_range, controlCnpjColumn: raw.control_cnpj_column,
+        detailsCnpjColumn: raw.details_cnpj_column, calledColumn: raw.called_column, calledValue: raw.called_value };
       const sheet = await this.fetchSheet(rule);
+      if (rule.mode === 'cnpjCall') return await this.executeCnpjCalls(sessionId, id, rule, sheet);
       if (!sheet.headers.includes(rule.phoneColumn) || rule.mappings.some(mapping => !sheet.headers.includes(mapping.column)))
         throw new BadRequestException('Uma coluna mapeada não existe no cabeçalho da planilha.');
       if (rule.sendMessage && [...rule.messageTemplate.matchAll(/{{\s*([^{}]{1,120})\s*}}/g)].some(match => !sheet.headers.includes(match[1].trim())))
