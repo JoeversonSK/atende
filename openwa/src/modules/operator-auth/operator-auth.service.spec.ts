@@ -44,13 +44,14 @@ describe('OperatorAuthService unassigned notifications', () => {
     expect(await service.setRecipientEnabled('token',first,false)).toEqual({unassignedUserIds:[second]});
   });
 
-  it('registra pausa de 15 minutos somente para a própria conta', async () => {
-    const query=jest.fn().mockResolvedValue([]);
-    const service=new OperatorAuthService({query} as never);
-    jest.spyOn(service,'me').mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana'})
-      .mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana',activityStatus:'break'});
-    expect(await service.setActivity('token','break')).toMatchObject({activityStatus:'break'});
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("INTERVAL '15 minutes'"),[first,'break','']);
+    it('registra pausa de 15 minutos somente para a própria conta', async () => {
+      const query=jest.fn().mockResolvedValue([]);
+      const transaction=jest.fn(async (work:(db:{query:typeof query})=>Promise<unknown>)=>work({query}));
+      const service=new OperatorAuthService({query,transaction} as never);
+      jest.spyOn(service,'me').mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana'})
+        .mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana',activityStatus:'break'});
+      expect(await service.setActivity('token','break')).toMatchObject({activityStatus:'break'});
+      expect(query).toHaveBeenCalledWith(expect.stringContaining("INTERVAL '15 minutes'"),[first,'break','']);
   });
 
   it('exige uma descrição para outra atividade', async () => {
@@ -76,5 +77,32 @@ describe('OperatorAuthService unassigned notifications', () => {
     jest.spyOn(service,'requirePermission').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
     await expect(service.assignmentTarget('token',first)).rejects.toBeInstanceOf(ForbiddenException);
     await expect(service.assignmentTarget('token',first)).resolves.toMatchObject({id:first});
+  });
+
+  it('registra início e fim de atendimento externo sem criar conversa', async () => {
+    const startedAt=new Date('2026-10-02T12:00:00Z');
+    const endedAt=new Date('2026-10-02T12:30:00Z');
+    const query=jest.fn().mockImplementation((sql:string) => {
+      if(sql.includes('SELECT activity_status')) return Promise.resolve([{status:'available',until:null}]);
+      if(sql.includes('INSERT INTO openwa.operator_onsite_visits')) return Promise.resolve([{id:'visit-1',clientName:'Cliente A',startedAt,endedAt:null}]);
+      if(sql.includes('UPDATE openwa.operator_onsite_visits')) return Promise.resolve([{id:'visit-1',clientName:'Cliente A',startedAt,endedAt,durationSeconds:1800}]);
+      return Promise.resolve([]);
+    });
+    const transaction=jest.fn(async (work:(db:{query:typeof query})=>Promise<unknown>)=>work({query}));
+    const service=new OperatorAuthService({query,transaction} as never);
+    jest.spyOn(service,'connectionContext').mockResolvedValue({user:{id:first,username:'ana',displayName:'Ana'},sessionId:'session',expiresAt:new Date()});
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    expect(await service.startOnsite('token',' Cliente A ')).toMatchObject({clientName:'Cliente A',endedAt:null});
+    expect(await service.finishOnsite('token','visit-1')).toMatchObject({durationSeconds:1800});
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("activity_status='onsite'"),[first,'Cliente A']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("activity_status='available'"),[first]);
+  });
+
+  it('não permite mudar a atividade durante um atendimento externo', async () => {
+    const query=jest.fn().mockImplementation((sql:string) => Promise.resolve(sql.includes('SELECT id FROM openwa.operator_onsite_visits')?[{id:'visit-1'}]:[]));
+    const service=new OperatorAuthService({transaction:(work:(db:unknown)=>Promise<unknown>)=>work({query})} as never);
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    await expect(service.setActivity('token','available')).rejects.toBeInstanceOf(ConflictException);
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE openwa.operator_users'),expect.anything());
   });
 });

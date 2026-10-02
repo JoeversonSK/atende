@@ -7,6 +7,7 @@ import { connectionOrigin } from "./connection-origin";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
 import { ContactProfile } from "./contact-profile";
+import { clockDuration } from "./dashboard-model";
 import { messageTimestamp, reconcileMessages } from "./message-reconciliation";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
@@ -103,7 +104,7 @@ type Operator = {
   active?: boolean;
   canSend?: boolean;
   canAssign?: boolean;
-  activityStatus?: 'available' | 'break' | 'meeting' | 'away' | 'custom';
+  activityStatus?: 'available' | 'break' | 'meeting' | 'away' | 'custom' | 'onsite';
   activityNote?: string;
   activityUntil?: string | null;
 };
@@ -735,6 +736,10 @@ export default function Home() {
   const [activityNoteDraft, setActivityNoteDraft] = useState("");
   const [activityBusy, setActivityBusy] = useState(false);
   const [activityError, setActivityError] = useState("");
+  const [onsiteClient, setOnsiteClient] = useState("");
+  const [onsiteVisits, setOnsiteVisits] = useState<{id:string;clientName:string;startedAt:string;endedAt:string|null;durationSeconds?:number|null}[]>([]);
+  const [onsiteLoading, setOnsiteLoading] = useState(false);
+  useEffect(() => { setOnsiteVisits([]); }, [operatorToken]);
   const [registering, setRegistering] = useState(false);
   const [operatorUsername, setOperatorUsername] = useState("");
   const [operatorName, setOperatorName] = useState("");
@@ -2876,6 +2881,45 @@ export default function Home() {
     finally { setActivityBusy(false); }
   }
 
+  useEffect(() => {
+    if (!activityMenuOpen || !operatorToken) return;
+    const abort = new AbortController();
+    setOnsiteLoading(true);
+    fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/onsite`, {
+      headers: { "X-Atende-Token": operatorToken }, signal: abort.signal,
+    }).then(async response => {
+      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+      return response.json() as Promise<typeof onsiteVisits>;
+    }).then(visits => setOnsiteVisits(visits))
+      .catch(error => { if (!abort.signal.aborted) setActivityError(error instanceof Error ? error.message : "Não foi possível carregar os atendimentos externos."); })
+      .finally(() => { if (!abort.signal.aborted) setOnsiteLoading(false); });
+    return () => abort.abort();
+  }, [activityMenuOpen, operatorToken, config.baseUrl]);
+
+  async function changeOnsiteVisit(id?: string) {
+    if (!operatorToken || activityBusy) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/onsite${id ? `/${encodeURIComponent(id)}/finish` : ""}`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
+        ...(!id ? { body: JSON.stringify({ clientName: onsiteClient.trim() }) } : {}),
+      });
+      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+      const visit = await response.json() as typeof onsiteVisits[number];
+      setOnsiteVisits(current => id ? current.map(item => item.id === id ? visit : item) : [visit, ...current]);
+      const me = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me`, {headers:{"X-Atende-Token":operatorToken}});
+      if (me.ok) {
+        const user = await me.json() as Operator;
+        setOperator(user);
+        persistOperator({user,token:operatorToken});
+      }
+      setOnsiteClient("");
+      void refreshChats().catch(() => undefined);
+    } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar o atendimento externo."); }
+    finally { setActivityBusy(false); }
+  }
+
   async function logout() {
     try {
       await fetch(
@@ -2939,11 +2983,12 @@ export default function Home() {
             <button type="button" className={`activity-toggle ${operator.activityStatus && operator.activityStatus !== "available" ? "away" : ""}`}
               aria-expanded={activityMenuOpen} onClick={() => { setActivityMenuOpen(value => !value); setActivityError(""); }}>
               <span className="activity-dot" />
-              {operator.activityStatus === "break" ? "Pausa de 15 min" : operator.activityStatus === "meeting" ? "Em reunião" : operator.activityStatus === "away" ? "Ausente" : operator.activityStatus === "custom" ? operator.activityNote || "Outra atividade" : "Disponível"}
+              {operator.activityStatus === "break" ? "Pausa de 15 min" : operator.activityStatus === "meeting" ? "Em reunião" : operator.activityStatus === "away" ? "Ausente" : operator.activityStatus === "onsite" ? "Em cliente" : operator.activityStatus === "custom" ? operator.activityNote || "Outra atividade" : "Disponível"}
             </button>
             {activityMenuOpen && <div className="activity-menu">
               <strong>O que você está fazendo?</strong>
               <p>Durante uma atividade, você não recebe novos atendimentos nem avisos de mensagens.</p>
+              {operator.activityStatus !== "onsite" && <>
               <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("available")}>Disponível para atender</button>
               <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("break")}>Descanso · 15 minutos</button>
               <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("meeting")}>Em reunião</button>
@@ -2952,6 +2997,18 @@ export default function Home() {
                 <label htmlFor="activity-note">Outra atividade</label>
                 <div><input id="activity-note" maxLength={120} required value={activityNoteDraft} onChange={event => setActivityNoteDraft(event.target.value)} placeholder="Ex.: treinamento"/><button type="submit" disabled={activityBusy}>Informar</button></div>
               </form>
+              </>}
+              <div className="activity-onsite">
+                <strong>Atendimento em cliente</strong>
+                {onsiteLoading ? <p>Carregando atendimentos...</p> : onsiteVisits.find(visit => !visit.endedAt) ? (() => {
+                  const visit = onsiteVisits.find(item => !item.endedAt)!;
+                  return <><p><b>{visit.clientName}</b><br/>Início: {new Date(visit.startedAt).toLocaleString("pt-BR")}</p><button type="button" disabled={activityBusy} onClick={() => void changeOnsiteVisit(visit.id)}>Finalizar atendimento externo</button></>;
+                })() : operator.activityStatus === "onsite" ? <p>Não foi possível identificar o atendimento em andamento. Atualize a página.</p> : <form onSubmit={event => { event.preventDefault(); void changeOnsiteVisit(); }}>
+                  <label htmlFor="onsite-client">Cliente atendido</label>
+                  <div><input id="onsite-client" maxLength={160} required value={onsiteClient} onChange={event => setOnsiteClient(event.target.value)} placeholder="Nome do cliente"/><button type="submit" disabled={activityBusy}>Iniciar</button></div>
+                </form>}
+                {onsiteVisits.filter(visit => visit.endedAt).slice(0,3).map(visit => <p className="activity-onsite-history" key={visit.id}><b>{visit.clientName}</b><br/>{new Date(visit.startedAt).toLocaleString("pt-BR")} → {new Date(visit.endedAt!).toLocaleString("pt-BR")}<br/>Duração: {clockDuration(visit.durationSeconds ?? null)}</p>)}
+              </div>
               {activityError && <small role="alert">{activityError}</small>}
             </div>}
           </div>

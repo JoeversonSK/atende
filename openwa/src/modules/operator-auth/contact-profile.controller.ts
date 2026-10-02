@@ -565,11 +565,25 @@ export class ContactProfileService implements OnModuleInit {
       WHERE a."chatId" NOT LIKE '%@g.us' AND a."chatId" NOT LIKE '%@broadcast' AND a."chatId" NOT LIKE '%@newsletter'`,
       [session],
     );
-    const completed = await this.db.query(
-      `SELECT c.assignee_id AS "assigneeId",COALESCE(u.display_name,c.assignee_name,'Sem responsável') AS "assigneeName",COUNT(*)::int AS count,SUM(c.duration_seconds)::bigint AS "totalSeconds" FROM openwa.support_completions c LEFT JOIN openwa.operator_users u ON u.id=c.assignee_id WHERE c.session_id=$1 AND (c.closed_at AT TIME ZONE 'America/Sao_Paulo')::date=(NOW() AT TIME ZONE 'America/Sao_Paulo')::date GROUP BY c.assignee_id,COALESCE(u.display_name,c.assignee_name,'Sem responsável')`,
-      [session],
+    const onsiteActive = await this.db.query(
+      `SELECT v.id,v.user_id AS "assigneeId",u.display_name AS "assigneeName",v.client_name AS "clientName",v.started_at AS "startedAt"
+       FROM openwa.operator_onsite_visits v JOIN openwa.operator_users u ON u.id=v.user_id
+       WHERE v.session_id=$1 AND v.ended_at IS NULL AND u.active=true AND u.dashboard_visible=true ORDER BY v.started_at`, [session],
     );
-    return { contacts, agents, activity, completed };
+    const completed = await this.db.query(
+      `WITH finished AS (
+        SELECT assignee_id,assignee_name,duration_seconds,closed_at FROM openwa.support_completions WHERE session_id=$1
+        UNION ALL
+        SELECT v.user_id,u.display_name,GREATEST(0,EXTRACT(EPOCH FROM (v.ended_at-v.started_at))::integer),v.ended_at
+        FROM openwa.operator_onsite_visits v JOIN openwa.operator_users u ON u.id=v.user_id
+        WHERE v.session_id=$1 AND v.ended_at IS NOT NULL
+       ) SELECT c.assignee_id AS "assigneeId",COALESCE(u.display_name,c.assignee_name,'Sem responsável') AS "assigneeName",
+         COUNT(*)::int AS count,SUM(c.duration_seconds)::bigint AS "totalSeconds"
+       FROM finished c LEFT JOIN openwa.operator_users u ON u.id=c.assignee_id
+       WHERE (c.closed_at AT TIME ZONE 'America/Sao_Paulo')::date=(NOW() AT TIME ZONE 'America/Sao_Paulo')::date
+       GROUP BY c.assignee_id,COALESCE(u.display_name,c.assignee_name,'Sem responsável')`, [session],
+    );
+    return { contacts, agents, activity, completed, onsiteActive };
   }
   constructor(
     @InjectDataSource('data') private readonly db: DataSource,

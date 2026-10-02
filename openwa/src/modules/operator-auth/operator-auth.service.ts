@@ -3,7 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
 
-export type OperatorActivity = 'available' | 'break' | 'meeting' | 'away' | 'custom';
+export type OperatorActivity = 'available' | 'break' | 'meeting' | 'away' | 'custom' | 'onsite';
 export type OperatorUser = { id: string; username: string; displayName: string; role?: string; active?: boolean; canSend?: boolean; canAssign?: boolean; dashboardVisible?: boolean; activityStatus?: OperatorActivity; activityNote?: string; activityUntil?: string | null };
 export type OperationHours = { enabled: boolean; days: { weekday: number; enabled: boolean; intervals: { start: string; end: string }[] }[]; autoReplyEnabled: boolean; autoReplyMessage: string };
 export type ConversationFlowStep = {
@@ -96,11 +96,56 @@ export class OperatorAuthService implements OnModuleInit {
   async setActivity(token: string, status: OperatorActivity, noteInput = '') {
     const user = await this.me(token);
     const note = noteInput.trim();
+    if (status === 'onsite') throw new BadRequestException('Inicie um atendimento externo para usar essa atividade.');
     if (status === 'custom' && (!note || note.length > 120)) throw new BadRequestException('Descreva a atividade em até 120 caracteres.');
-    await this.dataSource.query(`UPDATE openwa.operator_users SET activity_status=$2,activity_note=$3,
-      activity_until=CASE WHEN $2='break' THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,activity_updated_at=NOW()
-      WHERE id=$1 AND active=true`, [user.id, status, status === 'custom' ? note : '']);
+    await this.dataSource.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [user.id]);
+      const active = await db.query('SELECT id FROM openwa.operator_onsite_visits WHERE user_id=$1 AND ended_at IS NULL', [user.id]);
+      if (active.length) throw new ConflictException('Finalize o atendimento externo antes de mudar sua atividade.');
+      await db.query(`UPDATE openwa.operator_users SET activity_status=$2::text,activity_note=$3,
+        activity_until=CASE WHEN $2::text='break' THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,activity_updated_at=NOW()
+        WHERE id=$1 AND active=true`, [user.id, status, status === 'custom' ? note : '']);
+    });
     return this.me(token);
+  }
+  async startOnsite(token: string, clientInput: string) {
+    const context = await this.connectionContext(token);
+    const user = context.user;
+    const clientName = clientInput.trim();
+    if (!clientName || clientName.length > 160) throw new BadRequestException('Informe o cliente atendido em até 160 caracteres.');
+    return this.dataSource.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [user.id]);
+      const [operator] = await db.query('SELECT activity_status AS status,activity_until AS "until" FROM openwa.operator_users WHERE id=$1 AND active=true FOR UPDATE', [user.id]);
+      if (!operator) throw new ForbiddenException('Conta inativa.');
+      if (operator.status !== 'available' && (!operator.until || new Date(operator.until).getTime() > Date.now()))
+        throw new ConflictException('Marque-se como Disponível antes de iniciar um atendimento externo.');
+      const existing = await db.query('SELECT id FROM openwa.operator_onsite_visits WHERE user_id=$1 AND ended_at IS NULL', [user.id]);
+      if (existing.length) throw new ConflictException('Já existe um atendimento externo em andamento.');
+      const [visit] = await db.query(`INSERT INTO openwa.operator_onsite_visits (id,session_id,user_id,client_name)
+        VALUES ($1,$2,$3,$4) RETURNING id,client_name AS "clientName",started_at AS "startedAt",ended_at AS "endedAt"`,
+        [randomUUID(),context.sessionId,user.id,clientName]);
+      await db.query("UPDATE openwa.operator_users SET activity_status='onsite',activity_note=$2,activity_until=NULL,activity_updated_at=NOW() WHERE id=$1", [user.id,clientName.slice(0,120)]);
+      return visit;
+    });
+  }
+  async finishOnsite(token: string, id: string) {
+    const user = await this.me(token);
+    return this.dataSource.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [user.id]);
+      const [visit] = await db.query(`UPDATE openwa.operator_onsite_visits SET ended_at=NOW()
+        WHERE id=$1 AND user_id=$2 AND ended_at IS NULL
+        RETURNING id,client_name AS "clientName",started_at AS "startedAt",ended_at AS "endedAt",
+          EXTRACT(EPOCH FROM (ended_at-started_at))::integer AS "durationSeconds"`, [id,user.id]);
+      if (!visit) throw new ConflictException('Atendimento externo não encontrado ou já finalizado.');
+      await db.query("UPDATE openwa.operator_users SET activity_status='available',activity_note='',activity_until=NULL,activity_updated_at=NOW() WHERE id=$1", [user.id]);
+      return visit;
+    });
+  }
+  async onsiteVisits(token: string) {
+    const user = await this.me(token);
+    return this.dataSource.query(`SELECT id,client_name AS "clientName",started_at AS "startedAt",ended_at AS "endedAt",
+      CASE WHEN ended_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM (ended_at-started_at))::integer END AS "durationSeconds"
+      FROM openwa.operator_onsite_visits WHERE user_id=$1 ORDER BY started_at DESC LIMIT 20`, [user.id]);
   }
   async logout(token: string) { await this.dataSource.query('DELETE FROM openwa.operator_sessions WHERE token_hash = $1', [this.tokenHash(token)]); }
   private async issue(user: OperatorUser) { const token = randomBytes(32).toString('base64url'); await this.dataSource.query("INSERT INTO openwa.operator_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 days')", [this.tokenHash(token), user.id]); return { user: await this.me(token), token }; }
@@ -117,6 +162,10 @@ export class OperatorAuthService implements OnModuleInit {
       await db.query('SELECT pg_advisory_xact_lock(7349201)');
       await db.query("ALTER TABLE openwa.operator_users ADD COLUMN IF NOT EXISTS role varchar(16) NOT NULL DEFAULT 'agent', ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_send boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_assign boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS dashboard_visible boolean NOT NULL DEFAULT true");
       await db.query("ALTER TABLE openwa.operator_users ADD COLUMN IF NOT EXISTS activity_status varchar(16) NOT NULL DEFAULT 'available', ADD COLUMN IF NOT EXISTS activity_note varchar(120) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS activity_until timestamptz, ADD COLUMN IF NOT EXISTS activity_updated_at timestamptz NOT NULL DEFAULT NOW()");
+      await db.query(`CREATE TABLE IF NOT EXISTS openwa.operator_onsite_visits (
+        id varchar(36) PRIMARY KEY,session_id varchar(255) NOT NULL,user_id varchar(36) NOT NULL REFERENCES openwa.operator_users(id) ON DELETE CASCADE,
+        client_name varchar(160) NOT NULL,started_at timestamptz NOT NULL DEFAULT NOW(),ended_at timestamptz)`);
+      await db.query('CREATE UNIQUE INDEX IF NOT EXISTS operator_onsite_active_idx ON openwa.operator_onsite_visits(user_id) WHERE ended_at IS NULL');
       await db.query('CREATE TABLE IF NOT EXISTS openwa.operator_settings (id integer PRIMARY KEY CHECK (id=1), unassigned_user_id varchar(36) REFERENCES openwa.operator_users(id) ON DELETE SET NULL)');
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS unassigned_user_ids text[]');
       await db.query("UPDATE openwa.operator_settings SET unassigned_user_ids=CASE WHEN unassigned_user_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[unassigned_user_id] END WHERE unassigned_user_ids IS NULL");
