@@ -1,4 +1,4 @@
-import { SheetAutomationService, normalizeCnpj } from './sheet-automation.controller';
+import { SheetAutomationService, extractCnpjs, normalizeCnpj, normalizeCompanyName, previousMonthSheet } from './sheet-automation.controller';
 
 describe('SheetAutomationService mapping and safety', () => {
   const service = new SheetAutomationService({} as never, {} as never, {} as never, {} as never);
@@ -39,6 +39,101 @@ describe('SheetAutomationService mapping and safety', () => {
     jest.spyOn(checked as any, 'fetchSheet').mockResolvedValue({ headers: ['Telefone', 'Primeiro nome', 'Etiquetas', 'Vencimento'], rows: [] });
     await expect(checked.preview('admin-token', { ...draft, messageTemplate: 'Olá, {{Coluna ausente}}' }))
       .rejects.toThrow('não existe no cabeçalho');
+  });
+});
+
+describe('Arquivos mensais', () => {
+  const draft = {
+    name: 'Arquivos mensais', spreadsheetId: '1A234567890abcdefghijklmnop', mode: 'monthlyCall',
+    range: 'MES_ANTERIOR!A1:M1001', detailsRange: 'Clientes!A1:F1001', phoneColumn: '', mappings: [],
+    controlNameColumn: 'EMPRESA', controlCnpjColumn: 'CNPJ', detailsNameColumn: 'Cliente',
+    legalNameColumn: 'Razão Social planilha Clientes Compufour', detailsCnpjColumn: 'CNPJ',
+    calledColumn: 'Chamado', calledValue: 'Nós chamamos',
+    messageTemplate: 'Olá, acesso remoto de {{Razões sociais}}?', sendMessage: true, active: false, intervalMinutes: 60,
+  };
+  const control = { headers: ['EMPRESA', 'CNPJ', 'Chamado'], rows: [
+    { EMPRESA: 'TUTTI FRUTTI', CNPJ: '48.102.421/0001-50', Chamado: '' },
+    { EMPRESA: 'OXENTE TERERÊ', CNPJ: '45.499.311/0001-85', Chamado: '' },
+    { EMPRESA: 'ANNA X', CNPJ: '33.317.715/0001-21', Chamado: '' },
+  ], rowNumbers: [2, 3, 4] };
+  const details = { headers: ['Cliente', 'Razão Social planilha Clientes Compufour'], rows: [
+    { Cliente: 'Tutti Frutti', 'Razão Social planilha Clientes Compufour': 'CLAUDIO PIRES DE OLIVEIRA' },
+    { Cliente: 'Oxente Terere', 'Razão Social planilha Clientes Compufour': 'RAYELE PEREIRA SILVA' },
+    { Cliente: 'ANNA', 'Razão Social planilha Clientes Compufour': 'ANNA LTDA' },
+  ], rowNumbers: [2, 3, 4] };
+  it('usa o mês anterior no fuso de São Paulo, inclusive na virada do ano', () => {
+    expect(previousMonthSheet(new Date('2026-10-02T12:00:00Z'))).toBe('Setembro2026');
+    expect(previousMonthSheet(new Date('2027-01-15T12:00:00Z'))).toBe('Dezembro2026');
+  });
+  it('extrai vários CNPJs do mesmo contato e normaliza nomes sem acentos', () => {
+    expect(extractCnpjs('48.102.421/0001-50, 45499311000185')).toEqual(['48102421000150', '45499311000185']);
+    expect(normalizeCompanyName('OXENTE TERERÊ ↻')).toBe('OXENTE TERERE');
+  });
+  it('agrupa duas razões sociais do mesmo contato em uma mensagem e bloqueia X', async () => {
+    const db = { query: jest.fn().mockResolvedValue([
+      { chatId: '558899999999@c.us', data: { document: '48.102.421/0001-50, 45.499.311/0001-85', custom: [] } },
+      { chatId: '558888888888@c.us', data: { document: '33.317.715/0001-21', custom: [] } },
+    ]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const prepared = await service.prepareMonthlyCalls(draft, control, details, 'sessao');
+    expect(prepared.calls.filter((call: { chatId: string }) => !prepared.blockedContacts.has(call.chatId))).toHaveLength(1);
+    expect(prepared.calls[0]).toMatchObject({ chatId: '558899999999@c.us', cnpjs: ['48102421000150', '45499311000185'],
+      names: ['CLAUDIO PIRES DE OLIVEIRA', 'RAYELE PEREIRA SILVA'] });
+    expect(prepared.issues).toContainEqual({ row: 4, cnpj: '33.317.715/0001-21', reason: 'Empresa bloqueada pelo marcador X; não chamar' });
+    expect(service.monthlyMessage(draft, prepared.calls[0].names, prepared.calls[0].cnpjs))
+      .toBe('Olá, acesso remoto de *CLAUDIO PIRES DE OLIVEIRA* e *RAYELE PEREIRA SILVA*?');
+  });
+  it('impede mensagem parcial se uma das empresas do contato não existe em Clientes', async () => {
+    const db = { query: jest.fn().mockResolvedValue([
+      { chatId: '558899999999@c.us', data: { document: '48.102.421/0001-50, 45.499.311/0001-85', custom: [] } },
+    ]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const result = await service.prepareMonthlyCalls(draft, control, { ...details, rows: details.rows.slice(0, 1) }, 'sessao');
+    expect(result.calls).toHaveLength(1);
+    expect(result.blockedContacts.has('558899999999@c.us')).toBe(true);
+    expect(result.issues.some((issue: { reason: string }) => issue.reason.includes('nenhuma mensagem parcial'))).toBe(true);
+  });
+  it('não chama o contato inteiro quando uma de suas empresas tem o marcador X', async () => {
+    const db = { query: jest.fn().mockResolvedValue([{ chatId: '558899999999@c.us',
+      data: { document: '48.102.421/0001-50, 45.499.311/0001-85, 33.317.715/0001-21', custom: [] } }]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const result = await service.prepareMonthlyCalls(draft, control, details, 'sessao');
+    expect(result.blockedContacts.has('558899999999@c.us')).toBe(true);
+    expect(result.issues.some((issue: { reason: string }) => issue.reason.includes('bloqueada pelo marcador X'))).toBe(true);
+  });
+  it('envia uma vez e marca as duas empresas do mesmo contato', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? []
+      : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: 'claimed' }] : []);
+    const sendText = jest.fn().mockResolvedValue({});
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [{ chatId: '558899999999@c.us',
+      cnpjs: ['48102421000150', '45499311000185'], names: ['EMPRESA A', 'EMPRESA B'],
+      rows: [{ cnpj: '48102421000150', rowNumber: 2 }, { cnpj: '45499311000185', rowNumber: 3 }] }],
+      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), blankContactIds: new Set(), blockedContacts: new Set() });
+    const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    const result = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(result).toMatchObject({ sent: 1, marked: 2, failed: 0 });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(sendText.mock.calls[0][1].text).toContain('*EMPRESA A* e *EMPRESA B*');
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+  it('não reenvia quando só falta marcar a planilha', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? [{ status: 'sent_pending_sheet' }] : []);
+    const sendText = jest.fn();
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [{ chatId: '558899999999@c.us',
+      cnpjs: ['48102421000150', '45499311000185'], names: ['EMPRESA A', 'EMPRESA B'],
+      rows: [{ cnpj: '48102421000150', rowNumber: 2 }, { cnpj: '45499311000185', rowNumber: 3 }] }],
+      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), blankContactIds: new Set(), blockedContacts: new Set() });
+    const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    const result = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(result).toMatchObject({ sent: 0, marked: 2, failed: 0 });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(write).toHaveBeenCalledTimes(2);
   });
 });
 

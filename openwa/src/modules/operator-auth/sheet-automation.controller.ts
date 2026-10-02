@@ -15,12 +15,25 @@ type SheetRule = {
   id: string; name: string; spreadsheetId: string; range: string; phoneColumn: string;
   mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean;
   intervalMinutes: number; lastRunAt?: string | null; lastError?: string | null;
-  mode: 'contacts' | 'cnpjCall'; detailsRange: string; controlCnpjColumn: string;
+  mode: 'contacts' | 'cnpjCall' | 'monthlyCall'; detailsRange: string; controlCnpjColumn: string;
   detailsCnpjColumn: string; calledColumn: string; calledValue: string;
+  controlNameColumn: string; detailsNameColumn: string; legalNameColumn: string;
 };
 type SheetRows = { headers: string[]; rows: Record<string, string>[]; rowNumbers: number[] };
 const editableFields = new Set(['name', 'firstName', 'lastName', 'email', 'company', 'document', 'address', 'tags']);
 export const normalizeCnpj = (value: unknown) => String(value ?? '').replace(/\D/g, '');
+export const extractCnpjs = (value: unknown) => [...new Set((String(value ?? '').match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14}/g) || [])
+  .map(normalizeCnpj).filter(cnpj => cnpj.length === 14))];
+export const normalizeCompanyName = (value: unknown) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+export const previousMonthSheet = (now = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: 'numeric' }).formatToParts(now);
+  const year = Number(parts.find(part => part.type === 'year')?.value);
+  const month = Number(parts.find(part => part.type === 'month')?.value);
+  const names = ['Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  const previous = month === 1 ? 12 : month - 1;
+  return `${names[previous - 1]}${month === 1 ? year - 1 : year}`;
+};
 const columnLetter = (index: number) => {
   let result = '';
   for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) result = String.fromCharCode(65 + (value - 1) % 26) + result;
@@ -48,17 +61,22 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       mode varchar(20) NOT NULL DEFAULT 'contacts', details_range varchar(160) NOT NULL DEFAULT '',
       control_cnpj_column varchar(120) NOT NULL DEFAULT '', details_cnpj_column varchar(120) NOT NULL DEFAULT '',
       called_column varchar(120) NOT NULL DEFAULT '', called_value varchar(120) NOT NULL DEFAULT '',
+      control_name_column varchar(120) NOT NULL DEFAULT '', details_name_column varchar(120) NOT NULL DEFAULT '',
+      legal_name_column varchar(120) NOT NULL DEFAULT '',
       last_run_at timestamptz, last_error text, created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW())`);
     for (const [name, definition] of Object.entries({ mode: "varchar(20) NOT NULL DEFAULT 'contacts'", details_range: "varchar(160) NOT NULL DEFAULT ''",
       control_cnpj_column: "varchar(120) NOT NULL DEFAULT ''", details_cnpj_column: "varchar(120) NOT NULL DEFAULT ''",
-      called_column: "varchar(120) NOT NULL DEFAULT ''", called_value: "varchar(120) NOT NULL DEFAULT ''" })) {
+      called_column: "varchar(120) NOT NULL DEFAULT ''", called_value: "varchar(120) NOT NULL DEFAULT ''",
+      control_name_column: "varchar(120) NOT NULL DEFAULT ''", details_name_column: "varchar(120) NOT NULL DEFAULT ''",
+      legal_name_column: "varchar(120) NOT NULL DEFAULT ''" })) {
       await this.db.query(`ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS ${name} ${definition}`);
     }
     await this.db.query(`CREATE TABLE IF NOT EXISTS openwa.sheet_automation_rows (
       automation_id varchar(36) NOT NULL REFERENCES openwa.sheet_automations(id) ON DELETE CASCADE,
-      phone varchar(20) NOT NULL, fingerprint varchar(64) NOT NULL, status varchar(20) NOT NULL,
+      phone varchar(300) NOT NULL, fingerprint varchar(64) NOT NULL, status varchar(20) NOT NULL,
       error text, processed_at timestamptz NOT NULL DEFAULT NOW(), PRIMARY KEY(automation_id,phone))`);
+    await this.db.query('ALTER TABLE openwa.sheet_automation_rows ALTER COLUMN phone TYPE varchar(300)');
     this.timer = setInterval(() => void this.runDue().catch(() => undefined), 60_000);
     this.timer.unref?.();
   }
@@ -81,6 +99,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       send_message AS "sendMessage",active,interval_minutes AS "intervalMinutes",
       mode,details_range AS "detailsRange",control_cnpj_column AS "controlCnpjColumn",
       details_cnpj_column AS "detailsCnpjColumn",called_column AS "calledColumn",called_value AS "calledValue",
+      control_name_column AS "controlNameColumn",details_name_column AS "detailsNameColumn",legal_name_column AS "legalNameColumn",
       last_run_at AS "lastRunAt",last_error AS "lastError" FROM openwa.sheet_automations
       WHERE session_id=$1 ORDER BY created_at DESC`, [sessionId]);
     const failures = rows.length ? await this.db.query(`SELECT r.automation_id AS "automationId",r.phone,
@@ -97,13 +116,16 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const link = String(row.spreadsheetId || '').trim();
     const match = link.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/);
     const spreadsheetId = match ? match[1] : link;
-    const range = String(row.range || 'A1:Z201').trim();
-    const mode = row.mode === 'cnpjCall' ? 'cnpjCall' : 'contacts';
-    const detailsRange = String(row.detailsRange || '').trim();
+    const mode = row.mode === 'cnpjCall' || row.mode === 'monthlyCall' ? row.mode : 'contacts';
+    const range = String(row.range || (mode === 'monthlyCall' ? 'MES_ANTERIOR!A1:M1001' : 'A1:Z201')).trim();
+    const detailsRange = String(row.detailsRange || (mode === 'monthlyCall' ? 'Clientes!A1:F1001' : '')).trim();
     const controlCnpjColumn = String(row.controlCnpjColumn || 'CNPJ').trim();
     const detailsCnpjColumn = String(row.detailsCnpjColumn || 'CNPJ').trim();
     const calledColumn = String(row.calledColumn || 'Chamado').trim();
     const calledValue = String(row.calledValue || 'Nós chamamos').trim();
+    const controlNameColumn = String(row.controlNameColumn || 'EMPRESA').trim();
+    const detailsNameColumn = String(row.detailsNameColumn || 'Cliente').trim();
+    const legalNameColumn = String(row.legalNameColumn || 'Razão Social planilha Clientes Compufour').trim();
     const phoneColumn = String(row.phoneColumn || '').trim();
     const mappings = (Array.isArray(row.mappings) ? row.mappings : []).map((item: unknown) => {
       const value = item && typeof item === 'object' ? item as Record<string, unknown> : {};
@@ -119,12 +141,17 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       !controlCnpjColumn || !detailsCnpjColumn || !calledColumn || !calledValue ||
       [controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue].some(value => value.length > 120)))
       throw new BadRequestException('Informe as duas abas, as colunas de CNPJ e Chamado e o valor a registrar.');
+    if (mode === 'monthlyCall' && (!range.startsWith('MES_ANTERIOR!') || !validRange(detailsRange) || !detailsRange.includes('!') ||
+      [controlCnpjColumn, controlNameColumn, detailsNameColumn, legalNameColumn, calledColumn, calledValue]
+        .some(value => !value || value.length > 120)))
+      throw new BadRequestException('Confira a aba Clientes, os nomes das colunas e o intervalo do mês anterior.');
     if (mode === 'contacts' && (!phoneColumn || phoneColumn.length > 120 || mappings.length > 40 || mappings.some(item => item.column.length > 120 || !(editableFields.has(item.target) || /^custom:.{1,80}$/.test(item.target)))))
       throw new BadRequestException('Revise o mapeamento das colunas e informe a coluna do telefone.');
-    if (messageTemplate.length > 4000 || ((row.sendMessage === true || mode === 'cnpjCall') && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
+    if (messageTemplate.length > 4000 || ((row.sendMessage === true || mode !== 'contacts') && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
     if (![15, 30, 60, 180, 360, 1440].includes(intervalMinutes)) throw new BadRequestException('Intervalo de atualização inválido.');
-    return { name, spreadsheetId, range, phoneColumn, mappings, messageTemplate, sendMessage: mode === 'cnpjCall' || row.sendMessage === true,
-      active: row.active === true, intervalMinutes, mode, detailsRange, controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue };
+    return { name, spreadsheetId, range, phoneColumn, mappings, messageTemplate, sendMessage: mode !== 'contacts' || row.sendMessage === true,
+      active: row.active === true, intervalMinutes, mode, detailsRange, controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue,
+      controlNameColumn, detailsNameColumn, legalNameColumn };
   }
   async save(token: string, input: unknown, id?: string) {
     await this.auth.requireAdmin(token);
@@ -138,19 +165,23 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       const result = await this.db.query(`UPDATE openwa.sheet_automations SET name=$3,spreadsheet_id=$4,sheet_range=$5,
         phone_column=$6,mappings=$7::jsonb,message_template=$8,send_message=$9,active=$10,
         interval_minutes=$11,mode=$12,details_range=$13,control_cnpj_column=$14,details_cnpj_column=$15,
-        called_column=$16,called_value=$17,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
+        called_column=$16,called_value=$17,control_name_column=$18,details_name_column=$19,
+        legal_name_column=$20,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
           JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
-          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue]);
+          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue,
+          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn]);
       if (!result.length) throw new ConflictException('Automação não encontrada.');
     } else {
       await this.db.query(`INSERT INTO openwa.sheet_automations
         (id,session_id,name,spreadsheet_id,sheet_range,phone_column,mappings,message_template,send_message,active,interval_minutes,
-        mode,details_range,control_cnpj_column,details_cnpj_column,called_column,called_value)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        mode,details_range,control_cnpj_column,details_cnpj_column,called_column,called_value,
+        control_name_column,details_name_column,legal_name_column)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
           JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
-          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue]);
+          value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue,
+          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn]);
     }
     return { id: ruleId };
   }
@@ -171,8 +202,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
   }
   private async fetchSheet(rule: Pick<SheetRule, 'spreadsheetId' | 'range'>): Promise<SheetRows> {
     const accessToken = await this.googleToken();
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/${encodeURIComponent(rule.range)}?valueRenderOption=FORMATTED_VALUE`;
+    const range = rule.range.replace(/^MES_ANTERIOR!/, `${previousMonthSheet()}!`);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`;
     const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
+    if (response.status === 400 && rule.range.startsWith('MES_ANTERIOR!'))
+      throw new ConflictException(`Não foi possível ler a aba ${previousMonthSheet()}. Confira o nome da aba do mês anterior na planilha.`);
     if (!response.ok) throw new ConflictException(response.status === 403 || response.status === 404
       ? 'Planilha inacessível. Compartilhe-a com a conta de serviço exibida na tela e confira o ID.'
       : `O Google Sheets retornou HTTP ${response.status}.`);
@@ -235,7 +269,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     for (const profile of profiles) {
       if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
       const values = [profile.data?.document, ...(Array.isArray(profile.data?.custom) ? profile.data.custom
-        .filter(item => item.label?.trim().toLowerCase() === 'cnpj').map(item => item.value) : [])];
+        .filter(item => /^cnpj(?:\s*\d+)?$/i.test(item.label?.trim() || '')).map(item => item.value) : [])];
       for (const cnpj of new Set(values.map(normalizeCnpj).filter(value => value.length === 14)))
         contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
     }
@@ -321,10 +355,163 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     return { total: control.rows.length, eligible: prepared.calls.length, missing: prepared.missing,
       ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped };
   }
+  private async prepareMonthlyCalls(rule: Omit<SheetRule, 'id'>, control: SheetRows, details: SheetRows, sessionId: string) {
+    if (![rule.controlNameColumn, rule.controlCnpjColumn, rule.calledColumn].every(column => control.headers.includes(column)) ||
+      ![rule.detailsNameColumn, rule.legalNameColumn].every(column => details.headers.includes(column)))
+      throw new BadRequestException('Confira os cabeçalhos EMPRESA, CNPJ, Chamado, Cliente e Razão Social nas abas.');
+    const placeholders = [...rule.messageTemplate.matchAll(/{{\s*([^{}]{1,120})\s*}}/g)].map(match => match[1].trim());
+    if (placeholders.some(key => !['Razões sociais', 'CNPJs', 'Mês'].includes(key)))
+      throw new BadRequestException('Use apenas {{Razões sociais}}, {{CNPJs}} ou {{Mês}} na mensagem mensal.');
+    if (!placeholders.includes('Razões sociais')) throw new BadRequestException('Inclua {{Razões sociais}} na mensagem mensal.');
+    const legalByName = new Map<string, Set<string>>();
+    for (const row of details.rows) {
+      const name = normalizeCompanyName(row[rule.detailsNameColumn]);
+      const legal = String(row[rule.legalNameColumn] || '').trim();
+      if (name && legal) legalByName.set(name, new Set([...(legalByName.get(name) || []), legal]));
+    }
+    const profiles = await this.db.query(`SELECT chat_id AS "chatId",data FROM openwa.contact_profiles
+      WHERE session_id=$1 AND COALESCE((data->>'directoryHidden')::boolean,false)=false`, [sessionId]) as { chatId: string; data: ContactData }[];
+    const contactByCnpj = new Map<string, string[]>();
+    for (const profile of profiles) {
+      if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
+      const sources = [profile.data?.document, ...(Array.isArray(profile.data?.custom) ? profile.data.custom
+        .filter(item => /^cnpj(?:\s*\d+)?$/i.test(item.label?.trim() || '')).map(item => item.value) : [])];
+      for (const cnpj of new Set(sources.flatMap(extractCnpjs)))
+        contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
+    }
+    const cnpjCounts = new Map<string, number>();
+    for (const row of control.rows) {
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      if (cnpj.length === 14) cnpjCounts.set(cnpj, (cnpjCounts.get(cnpj) || 0) + 1);
+    }
+    type MonthlyRow = { cnpj: string; rowNumber: number; legalName: string };
+    const grouped = new Map<string, MonthlyRow[]>();
+    const blockedContacts = new Set<string>();
+    const alreadyCalledContacts = new Set<string>();
+    const blankContactIds = new Set<string>();
+    const issues: { row: number; cnpj: string; reason: string }[] = [];
+    let missing = 0, ambiguous = 0, alreadyCalled = 0;
+    control.rows.forEach((row, index) => {
+      const status = row[rule.calledColumn];
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      const matches = contactByCnpj.get(cnpj) || [];
+      if (status) { alreadyCalled++; if (matches.length === 1) alreadyCalledContacts.add(matches[0]); return; }
+      if (matches.length === 1) blankContactIds.add(matches[0]);
+      const issue = (reason: string, duplicate = false) => {
+        if (duplicate) ambiguous++; else missing++;
+        if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason });
+        if (matches.length === 1) blockedContacts.add(matches[0]);
+      };
+      if (cnpj.length !== 14) { issue('CNPJ ausente ou inválido'); return; }
+      if (cnpjCounts.get(cnpj) !== 1 || matches.length > 1) { issue('CNPJ duplicado no controle ou em contatos', true); return; }
+      if (!matches.length) { issue('Contato não encontrado pelo CNPJ'); return; }
+      const companyName = normalizeCompanyName(row[rule.controlNameColumn]);
+      if (!companyName) { issue('Nome da empresa vazio'); return; }
+      if (companyName.split(' ').includes('X')) { issue('Empresa bloqueada pelo marcador X; não chamar'); return; }
+      const legalNames = legalByName.get(companyName);
+      if (!legalNames?.size) { issue('Nome da empresa não encontrado na aba Clientes'); return; }
+      if (legalNames.size !== 1) { issue('Nome corresponde a razões sociais diferentes em Clientes', true); return; }
+      const chatId = matches[0];
+      grouped.set(chatId, [...(grouped.get(chatId) || []), { cnpj, rowNumber: control.rowNumbers[index], legalName: [...legalNames][0] }]);
+    });
+    const calls: { chatId: string; cnpjs: string[]; names: string[]; rows: MonthlyRow[] }[] = [];
+    for (const [chatId, rows] of grouped) {
+      if (blockedContacts.has(chatId)) {
+        if (issues.length < 50) issues.push({ row: rows[0].rowNumber, cnpj: rows[0].cnpj,
+          reason: 'Contato possui outra empresa com dados pendentes; nenhuma mensagem parcial será enviada' });
+      }
+      const names = [...new Map(rows.map(item => [normalizeCompanyName(item.legalName), item.legalName])).values()];
+      calls.push({ chatId, cnpjs: rows.map(item => item.cnpj), names, rows });
+    }
+    return { calls, issues, missing, ambiguous, alreadyCalled, alreadyCalledContacts, blankContactIds, blockedContacts };
+  }
+  private monthlyMessage(rule: SheetRule, names: string[], cnpjs: string[], monthSheet = previousMonthSheet()) {
+    const boldNames = names.map(name => `*${name.replace(/[\r\n*]/g, ' ').trim()}*`);
+    const companies = boldNames.length <= 2 ? boldNames.join(' e ') : `${boldNames.slice(0, -1).join(', ')} e ${boldNames.at(-1)}`;
+    const value = rule.messageTemplate.replace(/{{\s*Razões sociais\s*}}/g, companies)
+      .replace(/{{\s*CNPJs\s*}}/g, cnpjs.join(', ')).replace(/{{\s*Mês\s*}}/g, monthSheet).trim();
+    if (!value || value.length > 4000) throw new BadRequestException('A mensagem mensal ficou vazia ou ultrapassou 4.000 caracteres.');
+    return value;
+  }
+  private async executeMonthlyCalls(sessionId: string, id: string, rule: SheetRule, control: SheetRows, monthSheet = previousMonthSheet()) {
+    const resolvedRule = { ...rule, range: rule.range.replace(/^MES_ANTERIOR!/, `${monthSheet}!`) };
+    const details = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.detailsRange });
+    const prepared = await this.prepareMonthlyCalls(rule, control, details, sessionId);
+    for (const chatId of prepared.alreadyCalledContacts) if (!prepared.blankContactIds.has(chatId))
+      await this.db.query(`UPDATE openwa.sheet_automation_rows SET status='sent',error=NULL
+        WHERE automation_id=$1 AND phone=$2 AND status='sent_pending_sheet'`, [id, `${monthSheet}:${chatId}`]);
+    let sent = 0, marked = 0, failed = 0, skipped = 0, pending = 0;
+    for (const call of prepared.calls) {
+      const key = `${monthSheet}:${call.chatId}`;
+      const [previous] = await this.db.query('SELECT status,fingerprint FROM openwa.sheet_automation_rows WHERE automation_id=$1 AND phone=$2', [id, key]);
+      if (previous?.status === 'sent_pending_sheet') {
+        let markFailed = false;
+        for (const item of call.rows) {
+          try { await this.writeCalled(resolvedRule, control, item.rowNumber, item.cnpj); marked++; }
+          catch (error) { markFailed = true; failed++; await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
+            [id, key, error instanceof Error ? error.message.slice(0, 500) : 'Falha ao atualizar Chamado']); }
+        }
+        if (!markFailed) await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, key, 'sent']);
+        continue;
+      }
+      if (previous || prepared.alreadyCalledContacts.has(call.chatId) || prepared.blockedContacts.has(call.chatId)) { skipped++; continue; }
+      if (sent >= 50) { pending++; continue; }
+      const text = this.monthlyMessage(rule, call.names, call.cnpjs, monthSheet);
+      const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
+        (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
+        [id, key, createHash('sha256').update(JSON.stringify(call.cnpjs)).digest('hex')]);
+      if (!claimed.length) { skipped++; continue; }
+      try { await this.modules.get(MessageService, { strict: false }).sendText(sessionId, { chatId: call.chatId, text }); }
+      catch (error) {
+        failed++;
+        await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=$4 WHERE automation_id=$1 AND phone=$2',
+          [id, key, 'send_failed', error instanceof Error ? error.message.slice(0, 500) : 'Falha ao enviar']);
+        continue;
+      }
+      sent++;
+      await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
+        [id, key, 'sent_pending_sheet']);
+      let markFailed = false;
+      for (const item of call.rows) {
+        try { await this.writeCalled(resolvedRule, control, item.rowNumber, item.cnpj); marked++; }
+        catch (error) { markFailed = true; failed++; await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
+          [id, key, error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado']); }
+      }
+      if (!markFailed) await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, key, 'sent']);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
+      [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
+    return { monthSheet, total: control.rows.length, eligible: prepared.calls.length, missing: prepared.missing,
+      ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped };
+  }
   async preview(token: string, input: unknown) {
     await this.auth.requireAdmin(token);
     const rule = this.normalize(input);
-    const sheet = await this.fetchSheet(rule);
+    const monthSheet = rule.mode === 'monthlyCall' ? previousMonthSheet() : '';
+    const sheet = await this.fetchSheet({ ...rule, range: monthSheet ? rule.range.replace(/^MES_ANTERIOR!/, `${monthSheet}!`) : rule.range });
+    if (rule.mode === 'monthlyCall') {
+      const details = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.detailsRange });
+      const { sessionId } = await this.auth.connectionContext(token);
+      const prepared = await this.prepareMonthlyCalls(rule, sheet, details, sessionId);
+      const issues = [...prepared.issues], eligibleCalls: typeof prepared.calls = [];
+      let pendingMarkings = 0;
+      const ruleId = typeof (input as Record<string, unknown>)?.id === 'string' ? String((input as Record<string, unknown>).id) : '';
+      for (const call of prepared.calls) {
+        const [previous] = ruleId ? await this.db.query(`SELECT r.status FROM openwa.sheet_automation_rows r
+          JOIN openwa.sheet_automations a ON a.id=r.automation_id AND a.session_id=$3
+          WHERE r.automation_id=$1 AND r.phone=$2`, [ruleId, `${monthSheet}:${call.chatId}`, sessionId]) : [];
+        if (previous?.status === 'sent_pending_sheet') { pendingMarkings++; continue; }
+        if (previous || prepared.alreadyCalledContacts.has(call.chatId) || prepared.blockedContacts.has(call.chatId)) {
+          if (issues.length < 50) issues.push({ row: call.rows[0].rowNumber, cnpj: call.cnpjs[0],
+            reason: 'Este contato já foi chamado neste mês; confira antes de incluir novas empresas' });
+        } else eligibleCalls.push(call);
+      }
+      return { monthSheet, headers: sheet.headers, total: sheet.rows.length, eligible: eligibleCalls.length,
+        pendingMarkings, missing: prepared.missing, ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, issues,
+        samples: eligibleCalls.slice(0, 5).map(call => ({ 'Contato': call.chatId, 'Razões sociais': call.names.join('; '),
+          'CNPJs': call.cnpjs.join(', '), 'Linhas': call.rows.map(item => item.rowNumber).join(', ') })) };
+    }
     if (rule.mode === 'cnpjCall') {
       const details = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.detailsRange });
       const prepared = await this.prepareCnpjCalls(rule, sheet, details, (await this.auth.connectionContext(token)).sessionId);
@@ -359,8 +546,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         phoneColumn: raw.phone_column, mappings: raw.mappings, messageTemplate: raw.message_template,
         sendMessage: raw.send_message, active: raw.active, intervalMinutes: raw.interval_minutes,
         mode: raw.mode, detailsRange: raw.details_range, controlCnpjColumn: raw.control_cnpj_column,
-        detailsCnpjColumn: raw.details_cnpj_column, calledColumn: raw.called_column, calledValue: raw.called_value };
-      const sheet = await this.fetchSheet(rule);
+        detailsCnpjColumn: raw.details_cnpj_column, calledColumn: raw.called_column, calledValue: raw.called_value,
+        controlNameColumn: raw.control_name_column, detailsNameColumn: raw.details_name_column, legalNameColumn: raw.legal_name_column };
+      const monthSheet = rule.mode === 'monthlyCall' ? previousMonthSheet() : '';
+      const sheet = await this.fetchSheet({ ...rule, range: monthSheet ? rule.range.replace(/^MES_ANTERIOR!/, `${monthSheet}!`) : rule.range });
+      if (rule.mode === 'monthlyCall') return await this.executeMonthlyCalls(sessionId, id, rule, sheet, monthSheet);
       if (rule.mode === 'cnpjCall') return await this.executeCnpjCalls(sessionId, id, rule, sheet);
       if (!sheet.headers.includes(rule.phoneColumn) || rule.mappings.some(mapping => !sheet.headers.includes(mapping.column)))
         throw new BadRequestException('Uma coluna mapeada não existe no cabeçalho da planilha.');
