@@ -63,6 +63,9 @@ type Chat = {
   time: string;
   unread: number;
 };
+type PendingPaste =
+  | { kind: "files"; files: File[]; omittedFiles: number; chatId: string; chatName: string }
+  | { kind: "text"; text: string; chatId: string; chatName: string };
 type MessageMedia = {
   data?: string;
   mimetype: string;
@@ -760,6 +763,8 @@ export default function Home() {
   const [filterMenuPage, setFilterMenuPage] = useState<"main" | "tags">("main");
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [draft, setDraft] = useState("");
+  const [pastedTextPending, setPastedTextPending] = useState(false);
+  const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
   const [quickReplyIndex, setQuickReplyIndex] = useState(0);
   const [quickReplyDismissed, setQuickReplyDismissed] = useState(false);
@@ -768,7 +773,7 @@ export default function Home() {
   const quickReplyMatches = quickReplyQuery === null ? [] : quickReplies.filter(reply => reply.shortcut.startsWith(quickReplyQuery));
   const quickReplyOpen = quickReplyQuery !== null && !quickReplyDismissed;
   function insertQuickReply(reply: QuickReply) {
-    setDraft(reply.text); setQuickReplyDismissed(true);
+    setDraft(reply.text); setPastedTextPending(false); setQuickReplyDismissed(true);
     requestAnimationFrame(() => { composerInputRef.current?.focus(); composerInputRef.current?.setSelectionRange(reply.text.length, reply.text.length); });
   }
   const [busy, setBusy] = useState(false);
@@ -2106,7 +2111,7 @@ export default function Home() {
       );
     }
   }
-  async function sendMessage() {
+  async function sendMessage(approvedPaste = false) {
     if (!selected || !draft.trim()) return;
     if (operator?.role !== "admin" && operator?.canSend === false) {
       setNotice("Sua conta não tem permissão para enviar mensagens.");
@@ -2114,6 +2119,10 @@ export default function Home() {
     }
     if (!operatorToken || !operator) {
       setOperatorOpen(true);
+      return;
+    }
+    if (pastedTextPending && !approvedPaste) {
+      setPendingPaste({ kind: "text", text: draft.trim(), chatId: selected.id, chatName: selected.name });
       return;
     }
     const target = selected;
@@ -2140,6 +2149,7 @@ export default function Home() {
     historyCacheRef.current.set(target.id, optimisticList);
     if (selectedRef.current?.id === target.id) setMessages(optimisticList);
     setDraft("");
+    setPastedTextPending(false);
     setReplyingTo(null);
     setEmojiOpen(false);
     try {
@@ -2455,8 +2465,8 @@ export default function Home() {
       setBusy(false);
     }
   }
-  async function sendMedia(file: File, voiceNote = false) {
-    if (!selected) return false;
+  async function sendMedia(file: File, voiceNote = false, target: Chat | null = selected) {
+    if (!target) return false;
     if (operator?.role !== "admin" && operator?.canSend === false) {
       setNotice("Sua conta não tem permissão para enviar arquivos.");
       return false;
@@ -2526,7 +2536,7 @@ export default function Home() {
         {
           method: "POST",
           body: JSON.stringify({
-            chatId: selected.id,
+            chatId: target.id,
             base64: outgoingBase64,
             mimetype: outgoingMime,
             filename: outgoingFilename,
@@ -2536,7 +2546,7 @@ export default function Home() {
       );
       if (!response.ok)
         throw new Error(errorMessage(await response.json().catch(() => null)));
-      await refreshMessages(selected, config, true);
+      await refreshMessages(target, config, true);
       await refreshChats();
       return true;
     } catch (error) {
@@ -2550,8 +2560,8 @@ export default function Home() {
       setBusy(false);
     }
   }
-  async function sendFiles(files: File[]) {
-    if (!selected) {
+  async function sendFiles(files: File[], target: Chat | null = selected) {
+    if (!target) {
       setNotice("Abra uma conversa antes de colar ou arrastar arquivos.");
       return;
     }
@@ -2561,11 +2571,31 @@ export default function Home() {
       return;
     }
     let sent = 0;
-    for (const file of accepted) if (await sendMedia(file)) sent++;
+    for (const file of accepted) if (await sendMedia(file, false, target)) sent++;
     if (sent)
       setNotice(
         `${sent} ${sent === 1 ? "arquivo enviado" : "arquivos enviados"} com sucesso.`,
       );
+  }
+  async function confirmPendingPaste() {
+    const pending = pendingPaste;
+    if (!pending) return;
+    if (!selected || selected.id !== pending.chatId) {
+      setPendingPaste(null);
+      setNotice("A conversa mudou. Cole novamente antes de enviar.");
+      return;
+    }
+    if (pending.kind === "text") {
+      if (draft.trim() !== pending.text) {
+        setPendingPaste({ ...pending, text: draft.trim() });
+        return;
+      }
+      setPendingPaste(null);
+      await sendMessage(true);
+      return;
+    }
+    setPendingPaste(null);
+    await sendFiles(pending.files, selected);
   }
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
@@ -2576,7 +2606,9 @@ export default function Home() {
         newChatOpen ||
         dashboardOpen ||
         teamChatOpen ||
-        contactsOpen
+        contactsOpen ||
+        forwardTarget ||
+        pendingPaste
       )
         return;
       const itemFiles = Array.from(event.clipboardData?.items || [])
@@ -2588,7 +2620,9 @@ export default function Home() {
         : Array.from(event.clipboardData?.files || []);
       if (!files.length) return;
       event.preventDefault();
-      void sendFiles(files);
+      const validFiles = files.filter(file => file.size > 0);
+      if (!validFiles.length) { setNotice("Nenhum arquivo válido foi encontrado."); return; }
+      setPendingPaste({ kind: "files", files: validFiles.slice(0, 10), omittedFiles: Math.max(0, validFiles.length - 10), chatId: selected.id, chatName: selected.name });
     };
     document.addEventListener("paste", paste);
     return () => document.removeEventListener("paste", paste);
@@ -2600,6 +2634,8 @@ export default function Home() {
     dashboardOpen,
     teamChatOpen,
     contactsOpen,
+    forwardTarget,
+    pendingPaste,
     config,
     operator,
   ]);
@@ -3648,7 +3684,8 @@ export default function Home() {
                       aria-controls={quickReplyOpen ? "quick-reply-options" : undefined}
                       aria-activedescendant={quickReplyOpen && quickReplyMatches[quickReplyIndex] ? `quick-reply-${quickReplyMatches[quickReplyIndex].id}` : undefined}
                       value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
+                      onChange={(event) => { setDraft(event.target.value); if (!event.target.value.trim()) setPastedTextPending(false); }}
+                      onPaste={(event) => { if (!event.clipboardData.files.length && event.clipboardData.getData("text/plain")) setPastedTextPending(true); }}
                       onKeyDown={(event) => {
                         if (quickReplyOpen && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setQuickReplyDismissed(true); return; }
                         if (quickReplyOpen && quickReplyMatches.length && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key) && !event.shiftKey) {
@@ -3894,6 +3931,15 @@ export default function Home() {
           <button aria-label="Dispensar aviso" onClick={() => setNotice("")}>
             <X size={15} />
           </button>
+        </div>
+      )}
+      {pendingPaste && (
+        <div className="wa-backdrop paste-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setPendingPaste(null); }}>
+          <form className="forward-modal paste-modal" role="dialog" aria-modal="true" aria-labelledby="paste-confirm-title" onSubmit={event => { event.preventDefault(); void confirmPendingPaste(); }} onKeyDown={event => { if (event.key === "Escape" && !busy) setPendingPaste(null); }}>
+            <header><div><h2 id="paste-confirm-title">Confirmar envio do conteúdo colado</h2><p>Confira antes de enviar para {pendingPaste.chatName}.</p></div><button type="button" onClick={() => setPendingPaste(null)} disabled={busy} aria-label="Fechar"><X size={20}/></button></header>
+            {pendingPaste.kind === "text" ? <div className="paste-preview-text">{pendingPaste.text}</div> : <><ul className="paste-preview-files">{pendingPaste.files.map((file, index) => <li key={`${file.name}-${index}`}><Paperclip size={17}/><span>{file.name || `Arquivo colado ${index + 1}`}</span><small>{file.type || "Arquivo"}</small></li>)}</ul>{pendingPaste.omittedFiles > 0 && <p className="paste-omitted">Mais {pendingPaste.omittedFiles} arquivo(s) não serão enviados. O limite é 10 por vez.</p>}</>}
+            <footer><button type="button" autoFocus onClick={() => setPendingPaste(null)} disabled={busy}>Cancelar</button><button type="submit" disabled={busy || (pendingPaste.kind === "text" && !draft.trim())}><Send size={16}/>Confirmar envio</button></footer>
+          </form>
         </div>
       )}
       {forwardTarget && (
