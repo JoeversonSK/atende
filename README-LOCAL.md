@@ -13,6 +13,8 @@ Instale e inicie o Docker Desktop. A virtualização precisa estar habilitada no
 3. Abra `http://localhost:3000` no computador-servidor.
 4. Crie uma sessão no painel, obtenha o QR Code e conecte o WhatsApp.
 
+Sem certificados locais, o painel inicia por HTTP na porta 3000. Para usar microfone e notificações em outros computadores da rede, gere certificados próprios com `powershell -ExecutionPolicy Bypass -File .\scripts\create-local-https.ps1` e execute `docker compose up -d --build web`. Os arquivos gerados não devem ser publicados no Git.
+
 ## Serviços internos
 
 - `web`: painel do atendimento na porta 3000.

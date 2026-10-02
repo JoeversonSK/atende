@@ -106,6 +106,10 @@ Quando os serviços estiverem ativos, abra:
 http://localhost:3000
 ```
 
+Os certificados HTTPS locais são opcionais e não vêm no clone. Sem eles, o painel inicia normalmente em HTTP na porta 3000. Para acesso seguro pela rede local (necessário para recursos do navegador como microfone e notificações), no Windows execute `powershell -ExecutionPolicy Bypass -File .\scripts\create-local-https.ps1` no computador-servidor e depois `docker compose up -d --build web`. Cada instalação deve gerar e confiar em sua própria autoridade local. Nunca copie certificados ou chaves privadas gerados para o repositório.
+
+Para a automação com Google Sheets privado, a instalação inicial funciona sem credenciais, mas a leitura da planilha e os envios ficam indisponíveis até configurar a ponte do Apps Script conforme [AUTOMACOES.md](AUTOMACOES.md). O segredo fica apenas no `.env` local; não vem no clone.
+
 ### 4. Faça o primeiro acesso
 
 1. Clique em **Criar conta**.

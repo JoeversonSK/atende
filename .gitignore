@@ -22,6 +22,7 @@
 .DS_Store
 *.pem
 /docker/https/generated/
+/public/atende-local-ca.crt
 
 # debug
 npm-debug.log*
