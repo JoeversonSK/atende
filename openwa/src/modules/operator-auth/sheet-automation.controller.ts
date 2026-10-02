@@ -15,6 +15,7 @@ type SheetRule = {
   id: string; name: string; spreadsheetId: string; range: string; phoneColumn: string;
   mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean;
   intervalMinutes: number; lastRunAt?: string | null; lastError?: string | null;
+  sendPace: '1-5' | '5-10'; nextSendAt?: string | null;
   callRound: number;
   mode: 'contacts' | 'cnpjCall' | 'monthlyCall'; detailsRange: string; controlCnpjColumn: string;
   detailsCnpjColumn: string; calledColumn: string; calledValue: string;
@@ -76,6 +77,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       legal_name_column varchar(120) NOT NULL DEFAULT '',
       last_run_at timestamptz, last_error text, created_at timestamptz NOT NULL DEFAULT NOW(),
       updated_at timestamptz NOT NULL DEFAULT NOW())`);
+    await this.db.query("ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS send_pace varchar(8) NOT NULL DEFAULT '5-10'");
+    await this.db.query('ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS next_send_at timestamptz');
     for (const [name, definition] of Object.entries({ mode: "varchar(20) NOT NULL DEFAULT 'contacts'", details_range: "varchar(160) NOT NULL DEFAULT ''",
       control_cnpj_column: "varchar(120) NOT NULL DEFAULT ''", details_cnpj_column: "varchar(120) NOT NULL DEFAULT ''",
       called_column: "varchar(120) NOT NULL DEFAULT ''", called_value: "varchar(120) NOT NULL DEFAULT ''",
@@ -90,7 +93,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       phone varchar(300) NOT NULL, fingerprint varchar(64) NOT NULL, status varchar(20) NOT NULL,
       error text, processed_at timestamptz NOT NULL DEFAULT NOW(), PRIMARY KEY(automation_id,phone))`);
     await this.db.query('ALTER TABLE openwa.sheet_automation_rows ALTER COLUMN phone TYPE varchar(300)');
-    this.timer = setInterval(() => void this.runDue().catch(() => undefined), 60_000);
+    this.timer = setInterval(() => void this.runDue().catch(() => undefined), 1_000);
     this.timer.unref?.();
   }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
@@ -108,13 +111,38 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       return { client_email: value.client_email, private_key: value.private_key };
     } catch { return null; }
   }
+  private bridgeConfig() {
+    const url = process.env.GOOGLE_APPS_SCRIPT_URL?.trim();
+    const secret = process.env.GOOGLE_APPS_SCRIPT_SECRET?.trim();
+    return url && /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url) && secret && secret.length >= 32
+      ? { url, secret } : null;
+  }
+  private async bridge(action: Record<string, unknown>) {
+    const config = this.bridgeConfig();
+    if (!config) throw new ConflictException('Configure a URL e o segredo da ponte do Google Apps Script no servidor.');
+    const response = await fetch(config.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ ...action, secret: config.secret }), signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new ConflictException(`A ponte da planilha retornou HTTP ${response.status}.`);
+    let payload: { ok?: boolean; error?: string; values?: unknown };
+    try { payload = await response.json() as typeof payload; }
+    catch { throw new ConflictException('A ponte não retornou JSON. Confira a implantação e o acesso do Apps Script.'); }
+    if (!payload.ok) throw new ConflictException(payload.error || 'A ponte não conseguiu acessar a planilha.');
+    return payload;
+  }
+  private async reserveSend(id: string, pace: SheetRule['sendPace']) {
+    const seconds = pace === '1-5' ? 1 + Math.floor(Math.random() * 5) : 5 + Math.floor(Math.random() * 6);
+    const rows = await this.db.query(`UPDATE openwa.sheet_automations SET next_send_at=NOW()+($2 * INTERVAL '1 second')
+      WHERE id=$1 AND active=true AND (next_send_at IS NULL OR next_send_at<=NOW()) RETURNING id`, [id, seconds]);
+    return rows.length > 0;
+  }
   async list(token: string) {
     await this.auth.requireAdmin(token);
     await this.ensureCurrentMonth();
     const { sessionId } = await this.auth.connectionContext(token);
     const rows = await this.db.query(`SELECT id,name,spreadsheet_id AS "spreadsheetId",sheet_range AS range,
       phone_column AS "phoneColumn",mappings,message_template AS "messageTemplate",
-      send_message AS "sendMessage",active,interval_minutes AS "intervalMinutes",call_round AS "callRound",
+      send_message AS "sendMessage",active,interval_minutes AS "intervalMinutes",send_pace AS "sendPace",
+      next_send_at AS "nextSendAt",call_round AS "callRound",
       mode,details_range AS "detailsRange",control_cnpj_column AS "controlCnpjColumn",
       details_cnpj_column AS "detailsCnpjColumn",called_column AS "calledColumn",called_value AS "calledValue",
       control_name_column AS "controlNameColumn",details_name_column AS "detailsNameColumn",legal_name_column AS "legalNameColumn",
@@ -125,7 +153,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         WHEN r.status='sent_pending_sheet' THEN 'Mensagem enviada; aguardando a marcação da planilha. Não reenvie manualmente.' END) AS error
       FROM openwa.sheet_automation_rows r JOIN openwa.sheet_automations a ON a.id=r.automation_id
       WHERE a.session_id=$1 AND r.status IN ('send_failed','sending','sent_pending_sheet') ORDER BY r.processed_at DESC LIMIT 100`, [sessionId]) : [];
-    return { serviceAccountEmail: this.credentials()?.client_email || null,
+    return { serviceAccountEmail: this.credentials()?.client_email || null, connectionType: this.bridgeConfig() ? 'appsScript' : this.credentials() ? 'serviceAccount' : null,
       rules: rows.map((rule: SheetRule) => ({ ...rule, failures: failures.filter((item: { automationId: string }) => item.automationId === rule.id) })) };
   }
   private normalize(input: unknown): Omit<SheetRule, 'id'> {
@@ -151,6 +179,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     }).filter(item => item.column && item.target);
     const messageTemplate = String(row.messageTemplate || '').trim();
     const intervalMinutes = Number(row.intervalMinutes || 60);
+    const sendPace = row.sendPace === '1-5' ? '1-5' : '5-10';
     if (!name || !/^[A-Za-z0-9_-]{20,160}$/.test(spreadsheetId)) throw new BadRequestException('Informe o nome e um link ou ID válido do Google Sheets.');
     const validRange = (value: string) => value.length <= 160 && /^(?:[^\r\n!]{1,80}!)?[A-Z]{1,2}1:[A-Z]{1,2}\d{1,4}$/.test(value) && Number(value.match(/\d+$/)?.[0]) <= 1001;
     if (!validRange(range))
@@ -170,7 +199,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     if (messageTemplate.length > 4000 || ((row.sendMessage === true || mode !== 'contacts') && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
     if (![15, 30, 60, 180, 360, 1440].includes(intervalMinutes)) throw new BadRequestException('Intervalo de atualização inválido.');
     return { name, spreadsheetId, range, phoneColumn, mappings, messageTemplate, sendMessage: mode !== 'contacts' || row.sendMessage === true,
-      active: row.active === true, intervalMinutes, callRound: 1, mode, detailsRange, controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue,
+      active: row.active === true, intervalMinutes, sendPace, callRound: 1, mode, detailsRange, controlCnpjColumn, detailsCnpjColumn, calledColumn, calledValue,
       controlNameColumn, detailsNameColumn, legalNameColumn };
   }
   async save(token: string, input: unknown, id?: string) {
@@ -189,22 +218,22 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         phone_column=$6,mappings=$7::jsonb,message_template=$8,send_message=$9,active=$10,
         interval_minutes=$11,mode=$12,details_range=$13,control_cnpj_column=$14,details_cnpj_column=$15,
         called_column=$16,called_value=$17,control_name_column=$18,details_name_column=$19,
-        legal_name_column=$20,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
+        legal_name_column=$20,send_pace=$21,next_send_at=NULL,updated_at=NOW() WHERE id=$1 AND session_id=$2 RETURNING id`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
           JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
           value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue,
-          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn]);
+          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn, value.sendPace]);
       if (!result.length) throw new ConflictException('Automação não encontrada.');
     } else {
       await this.db.query(`INSERT INTO openwa.sheet_automations
         (id,session_id,name,spreadsheet_id,sheet_range,phone_column,mappings,message_template,send_message,active,interval_minutes,
         mode,details_range,control_cnpj_column,details_cnpj_column,called_column,called_value,
-        control_name_column,details_name_column,legal_name_column)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        control_name_column,details_name_column,legal_name_column,send_pace)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
         [ruleId, sessionId, value.name, value.spreadsheetId, value.range, value.phoneColumn,
           JSON.stringify(value.mappings), value.messageTemplate, value.sendMessage, value.active, value.intervalMinutes,
           value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue,
-          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn]);
+          value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn, value.sendPace]);
     }
     if (value.mode === 'monthlyCall') await this.ensureCurrentMonth();
     return { id: ruleId };
@@ -212,7 +241,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
   async setActive(token: string, id: string, active: boolean) {
     await this.auth.requireAdmin(token);
     const { sessionId } = await this.auth.connectionContext(token);
-    if (active && !this.credentials()) throw new ConflictException('Configure a conta de serviço do Google antes de iniciar a automação.');
+    if (active && !this.bridgeConfig() && !this.credentials()) throw new ConflictException('Configure a ponte do Google Apps Script antes de iniciar a automação.');
     if (active && this.running.has(id)) throw new ConflictException('A execução anterior ainda está terminando. Aguarde antes de iniciar.');
     if (active) {
       const savedRule = (await this.list(token)).rules.find((item: SheetRule) => item.id === id);
@@ -220,7 +249,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       await this.preview(token, savedRule);
     }
     const rows = await this.db.query(`UPDATE openwa.sheet_automations SET active=$3,
-      last_run_at=CASE WHEN $3 THEN NULL ELSE last_run_at END,updated_at=NOW()
+      last_run_at=CASE WHEN $3 THEN NULL ELSE last_run_at END,next_send_at=NULL,updated_at=NOW()
       WHERE id=$1 AND session_id=$2 RETURNING id,active`, [id, sessionId, active]);
     if (!rows.length) throw new ConflictException('Automação não encontrada.');
     if (active) this.paused.delete(id); else this.paused.add(id);
@@ -269,16 +298,20 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     return accessToken;
   }
   private async fetchSheet(rule: Pick<SheetRule, 'spreadsheetId' | 'range'>): Promise<SheetRows> {
-    const accessToken = await this.googleToken();
     const range = rule.range.replace(/^MES_ANTERIOR!/, `${previousMonthSheet()}!`);
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`;
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
-    if (response.status === 400 && rule.range.startsWith('MES_ANTERIOR!'))
-      throw new ConflictException(`Não foi possível ler a aba ${previousMonthSheet()}. Confira o nome da aba do mês anterior na planilha.`);
-    if (!response.ok) throw new ConflictException(response.status === 403 || response.status === 404
-      ? 'Planilha inacessível. Compartilhe-a com a conta de serviço exibida na tela e confira o ID.'
-      : `O Google Sheets retornou HTTP ${response.status}.`);
-    const payload = await response.json() as { values?: unknown };
+    let payload: { values?: unknown };
+    if (this.bridgeConfig()) payload = await this.bridge({ action: 'read', spreadsheetId: rule.spreadsheetId, range });
+    else {
+      const accessToken = await this.googleToken();
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/${encodeURIComponent(range)}?valueRenderOption=FORMATTED_VALUE`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
+      if (response.status === 400 && rule.range.startsWith('MES_ANTERIOR!'))
+        throw new ConflictException(`Não foi possível ler a aba ${previousMonthSheet()}. Confira o nome da aba do mês anterior na planilha.`);
+      if (!response.ok) throw new ConflictException(response.status === 403 || response.status === 404
+        ? 'Planilha inacessível. Confira o acesso configurado para a conta de serviço e o ID.'
+        : `O Google Sheets retornou HTTP ${response.status}.`);
+      payload = await response.json() as { values?: unknown };
+    }
     if (!Array.isArray(payload.values) || !payload.values.length) throw new BadRequestException('A planilha está vazia ou o intervalo não contém o cabeçalho.');
     const values = payload.values as unknown[][];
     if (values.length > 1001 || values[0].length > 52) throw new BadRequestException('Limite de 1.000 linhas e 52 colunas por automação.');
@@ -301,6 +334,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const offset = [...firstColumn].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1;
     const cnpjCell = `${rule.range.split('!')[0]}!${columnLetter(offset + cnpjIndex)}${rowNumber}`;
     const cell = `${rule.range.split('!')[0]}!${columnLetter(offset + index)}${rowNumber}`;
+    if (this.bridgeConfig()) {
+      await this.bridge({ action: 'mark', spreadsheetId: rule.spreadsheetId, cnpjCell, cell,
+        expectedCnpj, expectedValue, nextValue });
+      return;
+    }
     const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(rule.spreadsheetId)}/values/`;
     const accessToken = await this.googleToken(true);
     const currentCnpj = await fetch(`${base}${encodeURIComponent(cnpjCell)}`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
@@ -391,9 +429,10 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (previous) { skipped++; continue; }
-      if (sent >= 50) { pending++; continue; }
+      if (sent >= 1) { pending++; continue; }
       const text = this.render(rule.messageTemplate, call.values);
       if (!text) { failed++; continue; }
+      if (!await this.reserveSend(id, rule.sendPace)) { pending++; break; }
       const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
         (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
         [id, call.cnpj, createHash('sha256').update(JSON.stringify(call.values)).digest('hex')]);
@@ -418,10 +457,10 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
           [id, call.cnpj, error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado']);
       }
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
       [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
+    if (!pending) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);
     return { total: control.rows.length, eligible: prepared.calls.length, missing: prepared.missing,
       ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped };
   }
@@ -543,8 +582,9 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       if (previous || prepared.alreadyCalledContacts.has(call.chatId) || prepared.blockedContacts.has(call.chatId)) { skipped++; continue; }
-      if (sent >= 50) { pending++; continue; }
+      if (sent >= 1) { pending++; continue; }
       const text = this.monthlyMessage(rule, call.names, call.cnpjs, monthSheet);
+      if (!await this.reserveSend(id, rule.sendPace)) { pending++; break; }
       const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
         (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
         [id, key, createHash('sha256').update(JSON.stringify(call.cnpjs)).digest('hex')]);
@@ -566,10 +606,10 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
           [id, key, error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado']); }
       }
       if (!markFailed) await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, key, 'sent']);
-      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
       [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
+    if (!pending) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);
     return { monthSheet, callRound: rule.callRound,
       total: control.rows.filter(row => row[rule.controlNameColumn] || row[rule.controlCnpjColumn]).length,
       eligible: prepared.calls.length, missing: prepared.missing,
@@ -631,10 +671,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     return this.execute(sessionId, id);
   }
   private async runDue() {
-    if (!this.credentials()) return;
+    if (!this.bridgeConfig() && !this.credentials()) return;
     await this.ensureCurrentMonth();
     const due = await this.db.query(`SELECT id,session_id AS "sessionId" FROM openwa.sheet_automations
-      WHERE active=true AND (last_run_at IS NULL OR last_run_at <= NOW()-(interval_minutes * INTERVAL '1 minute'))`);
+      WHERE active=true AND ((next_send_at IS NOT NULL AND next_send_at<=NOW()) OR
+        (next_send_at IS NULL AND (last_run_at IS NULL OR last_run_at <= NOW()-(interval_minutes * INTERVAL '1 minute'))))`);
     for (const row of due) void this.execute(row.sessionId, row.id).catch(() => undefined);
   }
   private async execute(sessionId: string, id: string) {
@@ -647,6 +688,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       const rule: SheetRule = { id, name: raw.name, spreadsheetId: raw.spreadsheet_id, range: raw.sheet_range,
         phoneColumn: raw.phone_column, mappings: raw.mappings, messageTemplate: raw.message_template,
         sendMessage: raw.send_message, active: raw.active, intervalMinutes: raw.interval_minutes,
+        sendPace: raw.send_pace || '5-10', nextSendAt: raw.next_send_at,
         mode: raw.mode, callRound: raw.call_round || 1, detailsRange: raw.details_range, controlCnpjColumn: raw.control_cnpj_column,
         detailsCnpjColumn: raw.details_cnpj_column, calledColumn: raw.called_column, calledValue: raw.called_value,
         controlNameColumn: raw.control_name_column, detailsNameColumn: raw.details_name_column, legalNameColumn: raw.legal_name_column };
@@ -670,7 +712,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       }
       // A large first import must not turn into an unbounded WhatsApp send burst.
       // Rows left untouched here are picked up by the next scheduled/manual run.
-      const work = rule.sendMessage ? changed.slice(0, 50) : changed;
+      const allowed = !rule.sendMessage || !changed.length || await this.reserveSend(id, rule.sendPace);
+      const work = rule.sendMessage ? allowed ? changed.slice(0, 1) : [] : changed;
       let updated = 0, sent = 0, failed = 0;
       for (let offset = 0; offset < work.length; offset += 100) {
         const batch = work.slice(offset, offset + 100);
@@ -703,7 +746,6 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
             sent++;
             await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
               [id, item.phone, 'sent']).catch(() => undefined);
-            await new Promise(resolve => setTimeout(resolve, 1000));
           } catch (error) {
             failed++;
             await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=$4 WHERE automation_id=$1 AND phone=$2',
@@ -713,6 +755,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       }
       await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
         [id, failed ? `${failed} mensagem(ns) falharam. Essas linhas não serão reenviadas automaticamente; revise o contato e altere a linha para tentar de novo.` : null]);
+      if (changed.length <= work.length) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);
       return { total: sheet.rows.length, updated, unchanged: sheet.rows.length - changed.length, pending: changed.length - work.length, sent, failed };
     } catch (error) {
       await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',

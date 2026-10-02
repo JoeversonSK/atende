@@ -33,12 +33,40 @@ describe('SheetAutomationService mapping and safety', () => {
     expect(() => methods.normalize({ ...draft, mappings: [{ column: 'Segredo', target: 'password' }] })).toThrow('mapeamento');
   });
 
+  it('salva a faixa de espera escolhida e usa 5–10 segundos como padrão', () => {
+    expect(methods.normalize({ ...draft, sendPace: '1-5' }).sendPace).toBe('1-5');
+    expect(methods.normalize(draft).sendPace).toBe('5-10');
+  });
+
   it('rejects a message variable that has no matching sheet column', async () => {
     const auth = { requireAdmin: jest.fn().mockResolvedValue({}) };
     const checked = new SheetAutomationService({} as never, auth as never, {} as never, {} as never);
     jest.spyOn(checked as any, 'fetchSheet').mockResolvedValue({ headers: ['Telefone', 'Primeiro nome', 'Etiquetas', 'Vencimento'], rows: [] });
     await expect(checked.preview('admin-token', { ...draft, messageTemplate: 'Olá, {{Coluna ausente}}' }))
       .rejects.toThrow('não existe no cabeçalho');
+  });
+});
+
+describe('Ponte privada do Apps Script', () => {
+  const url = 'https://script.google.com/macros/s/abcDEF123456/exec';
+  const secret = 'segredo-com-mais-de-trinta-e-dois-caracteres';
+  it('lê a planilha pela ponte sem usar a conta de serviço', async () => {
+    const oldUrl = process.env.GOOGLE_APPS_SCRIPT_URL, oldSecret = process.env.GOOGLE_APPS_SCRIPT_SECRET;
+    const originalFetch = global.fetch;
+    process.env.GOOGLE_APPS_SCRIPT_URL = url;
+    process.env.GOOGLE_APPS_SCRIPT_SECRET = secret;
+    const request = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true, values: [['CNPJ', 'Chamado'], ['48.102.421/0001-50', '']] }) });
+    global.fetch = request;
+    try {
+      const service = new SheetAutomationService({} as never, {} as never, {} as never, {} as never) as any;
+      const result = await service.fetchSheet({ spreadsheetId: 'abcDEF12345678901234567890', range: 'Controle!A1:B2' });
+      expect(result).toMatchObject({ headers: ['CNPJ', 'Chamado'], rowNumbers: [2] });
+      expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ action: 'read', secret, range: 'Controle!A1:B2' });
+    } finally {
+      global.fetch = originalFetch;
+      if (oldUrl === undefined) delete process.env.GOOGLE_APPS_SCRIPT_URL; else process.env.GOOGLE_APPS_SCRIPT_URL = oldUrl;
+      if (oldSecret === undefined) delete process.env.GOOGLE_APPS_SCRIPT_SECRET; else process.env.GOOGLE_APPS_SCRIPT_SECRET = oldSecret;
+    }
   });
 });
 
@@ -151,7 +179,7 @@ describe('Arquivos mensais', () => {
     expect(result.issues.some((issue: { reason: string }) => issue.reason.includes('bloqueada pelo marcador X'))).toBe(true);
   });
   it('envia uma vez e marca as duas empresas do mesmo contato', async () => {
-    const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? []
+    const query = jest.fn(async (sql: string) => sql.includes('next_send_at=NOW()+') ? [{ id: 'regra' }] : sql.includes('SELECT status,fingerprint') ? []
       : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: 'claimed' }] : []);
     const sendText = jest.fn().mockResolvedValue({});
     const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
@@ -168,8 +196,26 @@ describe('Arquivos mensais', () => {
     expect(sendText.mock.calls[0][1].text).toContain('*EMPRESA A* e *EMPRESA B*');
     expect(write).toHaveBeenCalledTimes(2);
   });
+  it('não envia dois contatos no mesmo ciclo e guarda o próximo horário', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('next_send_at=NOW()+') ? [{ id: 'regra' }]
+      : sql.includes('SELECT status,fingerprint') ? []
+      : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: 'claimed' }] : []);
+    const sendText = jest.fn().mockResolvedValue({});
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [
+      { chatId: 'contato-a', cnpjs: ['48102421000150'], names: ['EMPRESA A'], rows: [{ cnpj: '48102421000150', rowNumber: 2 }] },
+      { chatId: 'contato-b', cnpjs: ['45499311000185'], names: ['EMPRESA B'], rows: [{ cnpj: '45499311000185', rowNumber: 3 }] },
+    ], missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), eligibleContactIds: new Set(), blockedContacts: new Set() });
+    jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    const result = await service.executeMonthlyCalls('sessao', 'regra', { ...draft, sendPace: '1-5' }, control);
+    expect(result).toMatchObject({ sent: 1, pending: 1 });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls.some(([sql, params]) => sql.includes('next_send_at=NOW()+') && params[1] >= 1 && params[1] <= 5)).toBe(true);
+  });
   it('na segunda chamada escreve Nós chamamos 2x sem repetir a primeira etapa', async () => {
-    const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? []
+    const query = jest.fn(async (sql: string) => sql.includes('next_send_at=NOW()+') ? [{ id: 'regra' }] : sql.includes('SELECT status,fingerprint') ? []
       : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: 'claimed' }] : []);
     const sendText = jest.fn().mockResolvedValue({});
     const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
@@ -262,7 +308,7 @@ describe('Chamada de clientes por CNPJ', () => {
     expect(result).toMatchObject({ ambiguous: 1, alreadyCalled: 1 });
   });
   it('não marca Chamado quando o envio falha', async () => {
-    const query = jest.fn(async (sql: string) => sql.includes('SELECT status') ? [] : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: '48102421000150' }] : []);
+    const query = jest.fn(async (sql: string) => sql.includes('next_send_at=NOW()+') ? [{ id: 'regra' }] : sql.includes('SELECT status') ? [] : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: '48102421000150' }] : []);
     const sendText = jest.fn().mockRejectedValue(new Error('WhatsApp indisponível'));
     const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
       { get: () => ({ sendText }) } as never) as any;
