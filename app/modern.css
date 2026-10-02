@@ -625,12 +625,16 @@ body .wa-message footer .wa-message-reply svg,body .wa-message footer .wa-messag
 .forward-modal > footer button[type="submit"] { background:#087f70; color:#fff; }
 .forward-modal > footer button:disabled { opacity:.55; cursor:wait; }
 .paste-backdrop { z-index: 250; }
-.paste-modal { width: min(480px, 100%); }
+.paste-modal { width: min(560px, 100%); }
 .paste-preview-text { margin: 18px 24px; padding: 14px; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 9px; background: #f1f6f5; color: #173146; font-size: 14px; }
-.paste-preview-files { margin: 18px 24px; padding: 0; list-style: none; max-height: 280px; overflow: auto; }
-.paste-preview-files li { display: flex; align-items: center; gap: 9px; padding: 10px 0; border-bottom: 1px solid #e3ebec; }
-.paste-preview-files li span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
-.paste-preview-files li small { color: #728692; }
+.paste-preview-files { margin: 18px 24px; padding: 0; list-style: none; max-height: min(52vh, 480px); overflow: auto; }
+.paste-preview-file { padding: 0 0 14px; margin-bottom: 14px; border-bottom: 1px solid #e3ebec; }
+.paste-file-image, .paste-file-video { display: block; width: 100%; max-height: 300px; object-fit: contain; border-radius: 9px; background: #e9eff0; }
+.paste-file-audio { display: block; width: 100%; }
+.paste-file-generic { display: grid; place-items: center; gap: 7px; min-height: 100px; border-radius: 9px; background: #f1f6f5; color: #54717d; font-size: 13px; }
+.paste-file-meta { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-size: 13px; }
+.paste-file-meta span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.paste-file-meta small { color: #728692; white-space: nowrap; }
 .paste-omitted { margin: 0 24px 18px; color: #9a5a1c; font-size: 12px; }
 body .wa-composer {
   margin: 0;

@@ -66,6 +66,26 @@ type Chat = {
 type PendingPaste =
   | { kind: "files"; files: File[]; omittedFiles: number; chatId: string; chatName: string }
   | { kind: "text"; text: string; chatId: string; chatName: string };
+function PasteFilePreview({ file, index }: { file: File; index: number }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
+  useEffect(() => {
+    if (kind === "file") return;
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    setPreviewFailed(false);
+    return () => URL.revokeObjectURL(url);
+  }, [file, kind]);
+  const label = kind === "image" ? "Imagem" : kind === "video" ? "Vídeo" : kind === "audio" ? "Áudio" : file.type === "application/pdf" ? "PDF" : "Arquivo";
+  return <li className="paste-preview-file">
+    {previewUrl && !previewFailed && kind === "image" && <img className="paste-file-image" src={previewUrl} alt={`Prévia da imagem ${file.name || index + 1}`} onError={() => setPreviewFailed(true)} />}
+    {previewUrl && !previewFailed && kind === "video" && <video className="paste-file-video" src={previewUrl} controls preload="metadata" onError={() => setPreviewFailed(true)} />}
+    {previewUrl && !previewFailed && kind === "audio" && <audio className="paste-file-audio" src={previewUrl} controls preload="metadata" onError={() => setPreviewFailed(true)} />}
+    {(kind === "file" || previewFailed) && <div className="paste-file-generic"><Paperclip size={24}/><span>{previewFailed ? "Prévia indisponível" : label}</span></div>}
+    <div className="paste-file-meta"><Paperclip size={17}/><span>{file.name || `${label} colado ${index + 1}`}</span><small>{label} · {Math.max(1, Math.ceil(file.size / 1024))} KB</small></div>
+  </li>;
+}
 type MessageMedia = {
   data?: string;
   mimetype: string;
@@ -3937,7 +3957,7 @@ export default function Home() {
         <div className="wa-backdrop paste-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setPendingPaste(null); }}>
           <form className="forward-modal paste-modal" role="dialog" aria-modal="true" aria-labelledby="paste-confirm-title" onSubmit={event => { event.preventDefault(); void confirmPendingPaste(); }} onKeyDown={event => { if (event.key === "Escape" && !busy) setPendingPaste(null); }}>
             <header><div><h2 id="paste-confirm-title">Confirmar envio do conteúdo colado</h2><p>Confira antes de enviar para {pendingPaste.chatName}.</p></div><button type="button" onClick={() => setPendingPaste(null)} disabled={busy} aria-label="Fechar"><X size={20}/></button></header>
-            {pendingPaste.kind === "text" ? <div className="paste-preview-text">{pendingPaste.text}</div> : <><ul className="paste-preview-files">{pendingPaste.files.map((file, index) => <li key={`${file.name}-${index}`}><Paperclip size={17}/><span>{file.name || `Arquivo colado ${index + 1}`}</span><small>{file.type || "Arquivo"}</small></li>)}</ul>{pendingPaste.omittedFiles > 0 && <p className="paste-omitted">Mais {pendingPaste.omittedFiles} arquivo(s) não serão enviados. O limite é 10 por vez.</p>}</>}
+            {pendingPaste.kind === "text" ? <div className="paste-preview-text">{pendingPaste.text}</div> : <><ul className="paste-preview-files">{pendingPaste.files.map((file, index) => <PasteFilePreview key={`${file.name}-${index}`} file={file} index={index}/>)}</ul>{pendingPaste.omittedFiles > 0 && <p className="paste-omitted">Mais {pendingPaste.omittedFiles} arquivo(s) não serão enviados. O limite é 10 por vez.</p>}</>}
             <footer><button type="button" autoFocus onClick={() => setPendingPaste(null)} disabled={busy}>Cancelar</button><button type="submit" disabled={busy || (pendingPaste.kind === "text" && !draft.trim())}><Send size={16}/>Confirmar envio</button></footer>
           </form>
         </div>
