@@ -409,7 +409,7 @@ export class ContactProfileService implements OnModuleInit {
     });
   }
   async start(token: string, session: string, chat: string) {
-    const user = await this.auth.requirePermission(token, 'canAssign');
+    const user = await this.auth.assignmentTarget(token);
     this.identifiers(session, chat);
     return this.db.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
@@ -545,7 +545,11 @@ export class ContactProfileService implements OnModuleInit {
       };
     }
     const agents = await this.db.query(
-      'SELECT id,display_name AS "displayName" FROM openwa.operator_users WHERE active=true AND dashboard_visible=true ORDER BY display_name',
+      `SELECT id,display_name AS "displayName",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN 'available' ELSE activity_status END AS "activityStatus",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN '' ELSE activity_note END AS "activityNote",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN NULL ELSE activity_until END AS "activityUntil"
+        FROM openwa.operator_users WHERE active=true AND dashboard_visible=true ORDER BY display_name`,
     );
     const activity = await this.db.query(
       `WITH activity AS (

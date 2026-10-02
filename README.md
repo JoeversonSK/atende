@@ -28,6 +28,7 @@ O projeto usa uma versão personalizada do [OpenWA](https://github.com/rmyndhari
 - Notificações sonoras, internas e do sistema operacional
 - Painel de desempenho dos atendentes
 - Controle de permissões por conta
+- Atividade do atendente no dashboard, com descanso de 15 minutos e bloqueio temporário de novos atendimentos
 - Recuperação de senha administrada localmente
 - PostgreSQL, Redis, painel e integração reunidos no Docker Compose
 

@@ -103,6 +103,9 @@ type Operator = {
   active?: boolean;
   canSend?: boolean;
   canAssign?: boolean;
+  activityStatus?: 'available' | 'break' | 'meeting' | 'away' | 'custom';
+  activityNote?: string;
+  activityUntil?: string | null;
 };
 export type NotificationPreferences = {
   enabled: boolean;
@@ -728,6 +731,10 @@ export default function Home() {
   const [operator, setOperator] = useState<Operator | null>(null);
   const [operatorToken, setOperatorToken] = useState("");
   const [operatorOpen, setOperatorOpen] = useState(false);
+  const [activityMenuOpen, setActivityMenuOpen] = useState(false);
+  const [activityNoteDraft, setActivityNoteDraft] = useState("");
+  const [activityBusy, setActivityBusy] = useState(false);
+  const [activityError, setActivityError] = useState("");
   const [registering, setRegistering] = useState(false);
   const [operatorUsername, setOperatorUsername] = useState("");
   const [operatorName, setOperatorName] = useState("");
@@ -2849,6 +2856,26 @@ export default function Home() {
   );
   const connected = status === "connected" || status === "ready";
 
+  async function setMyActivity(activityStatus: NonNullable<Operator["activityStatus"]>, activityNote = "") {
+    if (!operatorToken || activityBusy) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/activity`, {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
+        body: JSON.stringify({ status: activityStatus, note: activityNote }),
+      });
+      const data = await response.json() as Operator & { message?: string };
+      if (!response.ok) throw new Error(data.message || "Não foi possível alterar sua atividade.");
+      setOperator(data);
+      persistOperator({ user: data, token: operatorToken });
+      setActivityMenuOpen(false);
+      setActivityNoteDraft("");
+      void refreshChats().catch(() => undefined);
+    } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível alterar sua atividade."); }
+    finally { setActivityBusy(false); }
+  }
+
   async function logout() {
     try {
       await fetch(
@@ -2908,6 +2935,26 @@ export default function Home() {
           atende
         </div>
         <div className="workspace-account">
+          <div className="activity-control">
+            <button type="button" className={`activity-toggle ${operator.activityStatus && operator.activityStatus !== "available" ? "away" : ""}`}
+              aria-expanded={activityMenuOpen} onClick={() => { setActivityMenuOpen(value => !value); setActivityError(""); }}>
+              <span className="activity-dot" />
+              {operator.activityStatus === "break" ? "Pausa de 15 min" : operator.activityStatus === "meeting" ? "Em reunião" : operator.activityStatus === "away" ? "Ausente" : operator.activityStatus === "custom" ? operator.activityNote || "Outra atividade" : "Disponível"}
+            </button>
+            {activityMenuOpen && <div className="activity-menu">
+              <strong>O que você está fazendo?</strong>
+              <p>Durante uma atividade, você não recebe novos atendimentos nem avisos de mensagens.</p>
+              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("available")}>Disponível para atender</button>
+              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("break")}>Descanso · 15 minutos</button>
+              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("meeting")}>Em reunião</button>
+              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("away")}>Fora da estação</button>
+              <form onSubmit={event => { event.preventDefault(); void setMyActivity("custom", activityNoteDraft); }}>
+                <label htmlFor="activity-note">Outra atividade</label>
+                <div><input id="activity-note" maxLength={120} required value={activityNoteDraft} onChange={event => setActivityNoteDraft(event.target.value)} placeholder="Ex.: treinamento"/><button type="submit" disabled={activityBusy}>Informar</button></div>
+              </form>
+              {activityError && <small role="alert">{activityError}</small>}
+            </div>}
+          </div>
           <button
             className="notification-toggle"
             onClick={() => void enableNotifications()}

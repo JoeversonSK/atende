@@ -6,6 +6,7 @@ import { OperatorAuthService } from './operator-auth.service';
 class LoginDto { @IsString() @IsNotEmpty() @MaxLength(80) username!: string; @IsString() @MinLength(8) @MaxLength(128) password!: string; }
 class RegisterDto extends LoginDto { @IsString() @IsNotEmpty() @MaxLength(160) displayName!: string; }
 class ProfileDto { @IsString() @IsNotEmpty() @MaxLength(160) displayName!: string; }
+class ActivityDto { @IsIn(['available','break','meeting','away','custom']) status!: 'available'|'break'|'meeting'|'away'|'custom'; @IsOptional() @IsString() @MaxLength(120) note?: string; }
 class QuickReplyDto { @IsString() @IsNotEmpty() @MaxLength(61) shortcut!:string; @IsString() @IsNotEmpty() @MaxLength(10000) text!:string; }
 class UserAccessDto { @IsIn(['admin','agent']) role!: string; @IsBoolean() active!: boolean; @IsBoolean() canSend!: boolean; @IsBoolean() canAssign!: boolean; @IsBoolean() dashboardVisible!: boolean; }
 class RecipientDto { @IsArray() @ArrayMaxSize(100) @IsUUID('4',{each:true}) userIds!: string[]; }
@@ -45,6 +46,7 @@ export class ConversationFlowStepDto {
 export class ConversationFlowDto { @IsString() @IsNotEmpty() @MaxLength(100) name!: string; @IsOptional() @IsString() @MaxLength(240) description?: string; @IsBoolean() active!: boolean; @IsIn(['regular','start','evaluation']) kind!: 'regular'|'start'|'evaluation'; @IsArray() @ValidateNested({each:true}) @Type(()=>ConversationFlowStepDto) steps!: ConversationFlowStepDto[]; @IsArray() @ArrayMinSize(0) @ArrayMaxSize(12) @IsString({each:true}) @MaxLength(100,{each:true}) pollOptions!: string[]; }
 @Public() @Controller('operator-auth')
 export class OperatorAuthController { constructor(private readonly auth: OperatorAuthService) {} @Post('register') register(@Body() dto: RegisterDto) { return this.auth.register(dto.username, dto.displayName, dto.password); } @Post('login') login(@Body() dto: LoginDto) { return this.auth.login(dto.username, dto.password); } @Get('me') me(@Headers('x-atende-token') token = '') { return this.auth.me(token); } @Put('me') update(@Headers('x-atende-token') token = '', @Body() dto: ProfileDto) { return this.auth.updateProfile(token, dto.displayName); } @Post('logout') async logout(@Headers('x-atende-token') token = '') { await this.auth.logout(token); return { success: true }; } 
+  @Put('me/activity') activity(@Headers('x-atende-token') token='', @Body() dto: ActivityDto) { return this.auth.setActivity(token,dto.status,dto.note); }
   @Get('admin') administration(@Headers('x-atende-token') token='') { return this.auth.administration(token); }
   @Get('connection') async connection(@Headers('x-atende-token') token='') { const connection = await this.auth.connectionContext(token); return { sessionId: connection.sessionId }; }
   @Post('reset-password') resetPassword(@Body() dto: ResetPasswordDto) { return this.auth.resetPassword(dto.username,dto.code,dto.password); }

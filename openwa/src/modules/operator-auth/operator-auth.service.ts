@@ -3,7 +3,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
 
-export type OperatorUser = { id: string; username: string; displayName: string; role?: string; active?: boolean; canSend?: boolean; canAssign?: boolean; dashboardVisible?: boolean };
+export type OperatorActivity = 'available' | 'break' | 'meeting' | 'away' | 'custom';
+export type OperatorUser = { id: string; username: string; displayName: string; role?: string; active?: boolean; canSend?: boolean; canAssign?: boolean; dashboardVisible?: boolean; activityStatus?: OperatorActivity; activityNote?: string; activityUntil?: string | null };
 export type OperationHours = { enabled: boolean; days: { weekday: number; enabled: boolean; intervals: { start: string; end: string }[] }[]; autoReplyEnabled: boolean; autoReplyMessage: string };
 export type ConversationFlowStep = {
   id?:string;
@@ -21,7 +22,10 @@ export type ConversationFlowStep = {
 };
 export type ConversationFlowInput = { name:string; description?:string; active:boolean; kind:'regular'|'start'|'evaluation'; steps:ConversationFlowStep[]; pollOptions:string[] };
 export type NotificationWebhookInput = { name:string; destinationType:'discord'|'json'; url:string; active:boolean; onlyUnassigned:boolean; includeGroups:boolean; includeText:boolean; includeMedia:boolean; senderName:string; title:string; color:string; fields:string[] };
-const accessFields = 'id, username, display_name AS "displayName", role, active, can_send AS "canSend", can_assign AS "canAssign", dashboard_visible AS "dashboardVisible"';
+const activityFields = `CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN 'available' ELSE activity_status END AS "activityStatus",
+  CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN '' ELSE activity_note END AS "activityNote",
+  CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN NULL ELSE activity_until END AS "activityUntil"`;
+const accessFields = `id, username, display_name AS "displayName", role, active, can_send AS "canSend", can_assign AS "canAssign", dashboard_visible AS "dashboardVisible", ${activityFields}`;
 const defaultOperationHours = (): OperationHours => ({ enabled:true, days:Array.from({length:7},(_,weekday)=>({weekday,enabled:weekday<6,intervals:[{start:'08:00',end:weekday===5?'12:00':'18:00'}]})), autoReplyEnabled:false, autoReplyMessage:'' });
 
 @Injectable()
@@ -36,8 +40,10 @@ export class OperatorAuthService implements OnModuleInit {
   }
   async assignmentTarget(token: string, id?: string) {
     const user = await this.requirePermission(token, 'canAssign');
-    const [target] = await this.dataSource.query('SELECT id, display_name AS "displayName" FROM openwa.operator_users WHERE id=$1 AND active=true', [id || user.id]);
+    const [target] = await this.dataSource.query('SELECT id, display_name AS "displayName", activity_status AS status, activity_until AS "until" FROM openwa.operator_users WHERE id=$1 AND active=true', [id || user.id]);
     if (!target) throw new ForbiddenException('Escolha um atendente ativo.');
+    if (target.status && target.status !== 'available' && (!target.until || new Date(target.until).getTime() > Date.now()))
+      throw new ForbiddenException(`${target.displayName} não está disponível para novos atendimentos.`);
     return target;
   }
   constructor(@InjectDataSource('data') private readonly dataSource: DataSource) {}
@@ -87,6 +93,15 @@ export class OperatorAuthService implements OnModuleInit {
     });
   }
   async updateProfile(token: string, displayNameInput: string) { const user = await this.fromToken(token); const displayName = displayNameInput.trim(); if (!displayName || displayName.length > 160) throw new ConflictException('Informe um nome de exibição válido.'); await this.dataSource.query('UPDATE openwa.operator_users SET display_name = $1 WHERE id = $2', [displayName, user.id]); return { ...user, displayName }; }
+  async setActivity(token: string, status: OperatorActivity, noteInput = '') {
+    const user = await this.me(token);
+    const note = noteInput.trim();
+    if (status === 'custom' && (!note || note.length > 120)) throw new BadRequestException('Descreva a atividade em até 120 caracteres.');
+    await this.dataSource.query(`UPDATE openwa.operator_users SET activity_status=$2,activity_note=$3,
+      activity_until=CASE WHEN $2='break' THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,activity_updated_at=NOW()
+      WHERE id=$1 AND active=true`, [user.id, status, status === 'custom' ? note : '']);
+    return this.me(token);
+  }
   async logout(token: string) { await this.dataSource.query('DELETE FROM openwa.operator_sessions WHERE token_hash = $1', [this.tokenHash(token)]); }
   private async issue(user: OperatorUser) { const token = randomBytes(32).toString('base64url'); await this.dataSource.query("INSERT INTO openwa.operator_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 days')", [this.tokenHash(token), user.id]); return { user: await this.me(token), token }; }
   private async fromToken(token: string) {
@@ -101,6 +116,7 @@ export class OperatorAuthService implements OnModuleInit {
     if (!this.schemaReady) this.schemaReady = this.dataSource.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(7349201)');
       await db.query("ALTER TABLE openwa.operator_users ADD COLUMN IF NOT EXISTS role varchar(16) NOT NULL DEFAULT 'agent', ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_send boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS can_assign boolean NOT NULL DEFAULT true, ADD COLUMN IF NOT EXISTS dashboard_visible boolean NOT NULL DEFAULT true");
+      await db.query("ALTER TABLE openwa.operator_users ADD COLUMN IF NOT EXISTS activity_status varchar(16) NOT NULL DEFAULT 'available', ADD COLUMN IF NOT EXISTS activity_note varchar(120) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS activity_until timestamptz, ADD COLUMN IF NOT EXISTS activity_updated_at timestamptz NOT NULL DEFAULT NOW()");
       await db.query('CREATE TABLE IF NOT EXISTS openwa.operator_settings (id integer PRIMARY KEY CHECK (id=1), unassigned_user_id varchar(36) REFERENCES openwa.operator_users(id) ON DELETE SET NULL)');
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS unassigned_user_ids text[]');
       await db.query("UPDATE openwa.operator_settings SET unassigned_user_ids=CASE WHEN unassigned_user_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[unassigned_user_id] END WHERE unassigned_user_ids IS NULL");
@@ -240,6 +256,7 @@ export class OperatorAuthService implements OnModuleInit {
   async testNotificationWebhook(token:string,id:string){await this.requireAdmin(token);await this.ensureAccessSchema();const [hook]=await this.dataSource.query('SELECT * FROM openwa.notification_webhooks WHERE id=$1',[id]);if(!hook)throw new ConflictException('Webhook não encontrado.');const body=hook.destination_type==='discord'?{username:hook.sender_name||'Atende',allowed_mentions:{parse:[]},embeds:[{title:hook.title||'Teste do webhook',description:'Este é um teste enviado pelas configurações da central.',color:parseInt(String(hook.color||'#0b917a').slice(1),16),fields:[{name:'Contato',value:'Contato de teste',inline:true},{name:'WhatsApp',value:'5500000000000',inline:true}],timestamp:new Date().toISOString()}]}:{event:'test',source:'Atende',message:'Este é um teste enviado pelas configurações da central.',sentAt:new Date().toISOString()};try{const response=await fetch(hook.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});if(!response.ok)throw new Error(`HTTP ${response.status}`);return {success:true,statusCode:response.status};}catch(error){return {success:false,error:error instanceof Error?error.message:'Falha ao enviar o teste.'};}}
   async notification(token: string,sessionId: string,chatId: string) {
     const user=await this.me(token);
+    if(user.activityStatus && user.activityStatus!=='available') return {allowed:false};
     if(!chatId || /@(g.us|broadcast|newsletter)$/.test(chatId)) return {allowed:false};
     const [assigned]=await this.dataSource.query('SELECT assignee_id FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId]);
     if(assigned?.assignee_id) return {allowed:assigned.assignee_id===user.id};

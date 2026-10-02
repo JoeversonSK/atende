@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { OperatorAuthService } from './operator-auth.service';
 
 describe('OperatorAuthService unassigned notifications', () => {
@@ -42,5 +42,39 @@ describe('OperatorAuthService unassigned notifications', () => {
     jest.spyOn(service,'requireAdmin').mockResolvedValue({id:first,username:'admin',displayName:'Admin'});
     expect(await service.setRecipientEnabled('token',second,true)).toEqual({unassignedUserIds:[first,second]});
     expect(await service.setRecipientEnabled('token',first,false)).toEqual({unassignedUserIds:[second]});
+  });
+
+  it('registra pausa de 15 minutos somente para a própria conta', async () => {
+    const query=jest.fn().mockResolvedValue([]);
+    const service=new OperatorAuthService({query} as never);
+    jest.spyOn(service,'me').mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana'})
+      .mockResolvedValueOnce({id:first,username:'ana',displayName:'Ana',activityStatus:'break'});
+    expect(await service.setActivity('token','break')).toMatchObject({activityStatus:'break'});
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("INTERVAL '15 minutes'"),[first,'break','']);
+  });
+
+  it('exige uma descrição para outra atividade', async () => {
+    const query=jest.fn();
+    const service=new OperatorAuthService({query} as never);
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    await expect(service.setActivity('token','custom','  ')).rejects.toBeInstanceOf(BadRequestException);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('silencia notificações durante a pausa', async () => {
+    const query=jest.fn();
+    const service=new OperatorAuthService({query} as never);
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana',activityStatus:'break'});
+    expect(await service.notification('token','session','chat@c.us')).toEqual({allowed:false});
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('recusa nova atribuição durante uma atividade e permite após o fim da pausa', async () => {
+    const query=jest.fn().mockResolvedValueOnce([{id:first,displayName:'Ana',status:'break',until:new Date(Date.now()+60000)}])
+      .mockResolvedValueOnce([{id:first,displayName:'Ana',status:'break',until:new Date(Date.now()-60000)}]);
+    const service=new OperatorAuthService({query} as never);
+    jest.spyOn(service,'requirePermission').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    await expect(service.assignmentTarget('token',first)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(service.assignmentTarget('token',first)).resolves.toMatchObject({id:first});
   });
 });
