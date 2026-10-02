@@ -1,4 +1,4 @@
-import { SheetAutomationService, extractCnpjs, normalizeCnpj, normalizeCompanyName, previousMonthSheet } from './sheet-automation.controller';
+import { SheetAutomationService, extractCnpjs, monthlyCallStage, normalizeCnpj, normalizeCompanyName, previousMonthSheet } from './sheet-automation.controller';
 
 describe('SheetAutomationService mapping and safety', () => {
   const service = new SheetAutomationService({} as never, {} as never, {} as never, {} as never);
@@ -49,18 +49,40 @@ describe('Arquivos mensais', () => {
     controlNameColumn: 'EMPRESA', controlCnpjColumn: 'CNPJ', detailsNameColumn: 'Cliente',
     legalNameColumn: 'Razão Social planilha Clientes Compufour', detailsCnpjColumn: 'CNPJ',
     calledColumn: 'Chamado', calledValue: 'Nós chamamos',
-    messageTemplate: 'Olá, acesso remoto de {{Razões sociais}}?', sendMessage: true, active: false, intervalMinutes: 60,
+    messageTemplate: 'Olá, acesso remoto de {{Razões sociais}}?', sendMessage: true, active: false, intervalMinutes: 60, callRound: 1,
   };
-  const control = { headers: ['EMPRESA', 'CNPJ', 'Chamado'], rows: [
-    { EMPRESA: 'TUTTI FRUTTI', CNPJ: '48.102.421/0001-50', Chamado: '' },
-    { EMPRESA: 'OXENTE TERERÊ', CNPJ: '45.499.311/0001-85', Chamado: '' },
-    { EMPRESA: 'ANNA X', CNPJ: '33.317.715/0001-21', Chamado: '' },
+  const control = { headers: ['EMPRESA', 'CNPJ', 'Chamado', 'SPED', 'Vendas'], rows: [
+    { EMPRESA: 'TUTTI FRUTTI', CNPJ: '48.102.421/0001-50', Chamado: '', SPED: '', Vendas: '' },
+    { EMPRESA: 'OXENTE TERERÊ', CNPJ: '45.499.311/0001-85', Chamado: '', SPED: '', Vendas: '' },
+    { EMPRESA: 'ANNA X', CNPJ: '33.317.715/0001-21', Chamado: '', SPED: '', Vendas: '' },
   ], rowNumbers: [2, 3, 4] };
   const details = { headers: ['Cliente', 'Razão Social planilha Clientes Compufour'], rows: [
     { Cliente: 'Tutti Frutti', 'Razão Social planilha Clientes Compufour': 'CLAUDIO PIRES DE OLIVEIRA' },
     { Cliente: 'Oxente Terere', 'Razão Social planilha Clientes Compufour': 'RAYELE PEREIRA SILVA' },
     { Cliente: 'ANNA', 'Razão Social planilha Clientes Compufour': 'ANNA LTDA' },
   ], rowNumbers: [2, 3, 4] };
+  it('salva um rascunho pausado sem credencial Google ou prévia', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const auth = { requireAdmin: jest.fn().mockResolvedValue(undefined), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'sessao' }) };
+    const service = new SheetAutomationService({ query } as never, auth as never, {} as never, {} as never);
+    await expect(service.save('admin-token', { ...draft, active: true })).resolves.toHaveProperty('id');
+    const insert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO openwa.sheet_automations'));
+    expect(insert?.[1][9]).toBe(false);
+    expect(query.mock.calls.some(([sql, params]) => sql.includes('call_round=1,call_month=$1') && params[0] === previousMonthSheet())).toBe(true);
+  });
+  it('só avança a etapa quando está pausada e não há contatos aptos', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('SELECT mode,active,call_round')
+      ? [{ mode: 'monthlyCall', active: false, call_round: 1 }]
+      : sql.includes('COUNT(*)') ? [{ total: 0 }]
+      : sql.includes('call_round=call_round+1') ? [{ callRound: 2 }] : []);
+    const auth = { requireAdmin: jest.fn().mockResolvedValue(undefined), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'sessao' }) };
+    const service = new SheetAutomationService({ query } as never, auth as never, {} as never, {} as never);
+    jest.spyOn(service, 'list').mockResolvedValue({ serviceAccountEmail: null, rules: [{ ...draft, id: 'regra' }] } as never);
+    const preview = jest.spyOn(service, 'preview').mockResolvedValue({ eligible: 1, pendingMarkings: 0 } as never);
+    await expect(service.advanceRound('token', 'regra')).rejects.toThrow('Ainda há contatos aptos');
+    preview.mockResolvedValue({ eligible: 0, pendingMarkings: 0 } as never);
+    await expect(service.advanceRound('token', 'regra')).resolves.toEqual({ callRound: 2 });
+  });
   it('usa o mês anterior no fuso de São Paulo, inclusive na virada do ano', () => {
     expect(previousMonthSheet(new Date('2026-10-02T12:00:00Z'))).toBe('Setembro2026');
     expect(previousMonthSheet(new Date('2027-01-15T12:00:00Z'))).toBe('Dezembro2026');
@@ -68,6 +90,33 @@ describe('Arquivos mensais', () => {
   it('extrai vários CNPJs do mesmo contato e normaliza nomes sem acentos', () => {
     expect(extractCnpjs('48.102.421/0001-50, 45499311000185')).toEqual(['48102421000150', '45499311000185']);
     expect(normalizeCompanyName('OXENTE TERERÊ ↻')).toBe('OXENTE TERERE');
+  });
+  it('mantém as três etapas separadas e para após a terceira chamada', () => {
+    expect(['', 'Nós chamamos', 'Nós chamamos 2x', 'Nós chamamos 3x'].map(value => monthlyCallStage(value)))
+      .toEqual([1, 2, 3, 0]);
+  });
+  it('na segunda chamada ignora quem já tem SPED ou Vendas e quem tem X no detalhe', async () => {
+    const db = { query: jest.fn().mockResolvedValue([
+      { chatId: '558899999999@c.us', data: { document: '48.102.421/0001-50, 45.499.311/0001-85', custom: [] } },
+      { chatId: '558888888888@c.us', data: { document: '33.317.715/0001-21', custom: [] } },
+    ]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const rows = control.rows.map((row, index) => ({ ...row, EMPRESA: index === 2 ? 'ANNA' : row.EMPRESA,
+      Chamado: 'Nós chamamos', SPED: index === 1 ? 'Gerado' : '', 'Detalhe do chamado': index === 2 ? 'Restrição Financeira X' : '' }));
+    const prepared = await service.prepareMonthlyCalls({ ...draft, callRound: 2 }, { ...control, rows }, details, 'sessao');
+    expect(prepared.calls).toHaveLength(1);
+    expect(prepared.calls[0].cnpjs).toEqual(['48102421000150']);
+    expect(prepared.blockedContacts.has('558888888888@c.us')).toBe(true);
+  });
+  it('na terceira chamada exige Nós chamamos 2x e continua sem gerar mais de uma mensagem por contato', async () => {
+    const db = { query: jest.fn().mockResolvedValue([
+      { chatId: '558899999999@c.us', data: { document: '48.102.421/0001-50, 45.499.311/0001-85', custom: [] } },
+    ]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const rows = control.rows.slice(0, 2).map(row => ({ ...row, Chamado: 'Nós chamamos 2x' }));
+    const prepared = await service.prepareMonthlyCalls({ ...draft, callRound: 3 }, { ...control, rows }, details, 'sessao');
+    expect(prepared.calls).toHaveLength(1);
+    expect(prepared.calls[0].names).toHaveLength(2);
   });
   it('agrupa duas razões sociais do mesmo contato em uma mensagem e bloqueia X', async () => {
     const db = { query: jest.fn().mockResolvedValue([
@@ -111,13 +160,29 @@ describe('Arquivos mensais', () => {
     jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [{ chatId: '558899999999@c.us',
       cnpjs: ['48102421000150', '45499311000185'], names: ['EMPRESA A', 'EMPRESA B'],
       rows: [{ cnpj: '48102421000150', rowNumber: 2 }, { cnpj: '45499311000185', rowNumber: 3 }] }],
-      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), blankContactIds: new Set(), blockedContacts: new Set() });
+      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), eligibleContactIds: new Set(), blockedContacts: new Set() });
     const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
     const result = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
     expect(result).toMatchObject({ sent: 1, marked: 2, failed: 0 });
     expect(sendText).toHaveBeenCalledTimes(1);
     expect(sendText.mock.calls[0][1].text).toContain('*EMPRESA A* e *EMPRESA B*');
     expect(write).toHaveBeenCalledTimes(2);
+  });
+  it('na segunda chamada escreve Nós chamamos 2x sem repetir a primeira etapa', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? []
+      : sql.includes('INSERT INTO openwa.sheet_automation_rows') ? [{ phone: 'claimed' }] : []);
+    const sendText = jest.fn().mockResolvedValue({});
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [{ chatId: '558899999999@c.us',
+      cnpjs: ['48102421000150'], names: ['EMPRESA A'], rows: [{ cnpj: '48102421000150', rowNumber: 2 }] }],
+      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), eligibleContactIds: new Set(), blockedContacts: new Set() });
+    const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    const result = await service.executeMonthlyCalls('sessao', 'regra', { ...draft, callRound: 2 }, control);
+    expect(result).toMatchObject({ callRound: 2, sent: 1, marked: 1 });
+    expect(write.mock.calls[0].slice(-2)).toEqual(['Nós chamamos', 'Nós chamamos 2x']);
+    expect(query.mock.calls.some(([, params]) => Array.isArray(params) && params.includes(`${previousMonthSheet()}:2:558899999999@c.us`))).toBe(true);
   });
   it('não reenvia quando só falta marcar a planilha', async () => {
     const query = jest.fn(async (sql: string) => sql.includes('SELECT status,fingerprint') ? [{ status: 'sent_pending_sheet' }] : []);
@@ -128,7 +193,7 @@ describe('Arquivos mensais', () => {
     jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [{ chatId: '558899999999@c.us',
       cnpjs: ['48102421000150', '45499311000185'], names: ['EMPRESA A', 'EMPRESA B'],
       rows: [{ cnpj: '48102421000150', rowNumber: 2 }, { cnpj: '45499311000185', rowNumber: 3 }] }],
-      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), blankContactIds: new Set(), blockedContacts: new Set() });
+      missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(), eligibleContactIds: new Set(), blockedContacts: new Set() });
     const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
     const result = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
     expect(result).toMatchObject({ sent: 0, marked: 2, failed: 0 });
