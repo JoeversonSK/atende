@@ -7,7 +7,6 @@ import { connectionOrigin } from "./connection-origin";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
 import { ContactProfile } from "./contact-profile";
-import { clockDuration } from "./dashboard-model";
 import { messageTimestamp, reconcileMessages } from "./message-reconciliation";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
@@ -756,6 +755,7 @@ export default function Home() {
   const [operatorToken, setOperatorToken] = useState("");
   const [operatorOpen, setOperatorOpen] = useState(false);
   const [activityMenuOpen, setActivityMenuOpen] = useState(false);
+  const activityControlRef = useRef<HTMLDivElement>(null);
   const [activityNoteDraft, setActivityNoteDraft] = useState("");
   const [activityBusy, setActivityBusy] = useState(false);
   const [activityError, setActivityError] = useState("");
@@ -812,8 +812,12 @@ export default function Home() {
   );
   const notifiedIds = useRef(new Set<string>());
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const emojiToggleRef = useRef<HTMLButtonElement>(null);
+  const emojiMenuRef = useRef<HTMLDivElement>(null);
   const [flows, setFlows] = useState<ConversationFlow[]>([]);
   const [flowMenuOpen, setFlowMenuOpen] = useState(false);
+  const flowToggleRef = useRef<HTMLButtonElement>(null);
+  const flowMenuRef = useRef<HTMLDivElement>(null);
   const [recording, setRecording] = useState(false);
   const [recordingPaused, setRecordingPaused] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
@@ -868,6 +872,25 @@ export default function Home() {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [filterMenuOpen]);
+
+  useEffect(() => {
+    setActivityMenuOpen(false);
+    setFlowMenuOpen(false);
+    setEmojiOpen(false);
+    setFilterMenuOpen(false);
+  }, [settingsOpen, operatorOpen, newChatOpen, dashboardOpen, contactsOpen, teamChatOpen]);
+
+  useEffect(() => {
+    if (!activityMenuOpen && !flowMenuOpen && !emojiOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (activityMenuOpen && !activityControlRef.current?.contains(target)) setActivityMenuOpen(false);
+      if (flowMenuOpen && !flowToggleRef.current?.contains(target) && !flowMenuRef.current?.contains(target)) setFlowMenuOpen(false);
+      if (emojiOpen && !emojiToggleRef.current?.contains(target) && !emojiMenuRef.current?.contains(target)) setEmojiOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [activityMenuOpen, flowMenuOpen, emojiOpen]);
 
   function playNotificationSound() {
     try {
@@ -1825,6 +1848,7 @@ export default function Home() {
     setSelected(chat);
     setReplyingTo(null);
     setForwardTarget(null);
+    setFlowMenuOpen(false);
     setEmojiOpen(false);
     setAssignment(null);
     setChats((current) =>
@@ -1862,18 +1886,26 @@ export default function Home() {
     setSelected(null);
     setReplyingTo(null);
     setForwardTarget(null);
+    setFlowMenuOpen(false);
+    setEmojiOpen(false);
   }
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (activityMenuOpen) {
+        setActivityMenuOpen(false);
+        return;
+      }
       if (
-        event.key !== "Escape" ||
         !selectedRef.current ||
         settingsOpen ||
         operatorOpen ||
         newChatOpen ||
         dashboardOpen ||
         teamChatOpen ||
-        contactsOpen
+        contactsOpen ||
+        pendingPaste ||
+        filterMenuOpen
       )
         return;
       if (flowMenuOpen || emojiOpen) {
@@ -1900,6 +1932,9 @@ export default function Home() {
     dashboardOpen,
     teamChatOpen,
     contactsOpen,
+    activityMenuOpen,
+    pendingPaste,
+    filterMenuOpen,
     flowMenuOpen,
     emojiOpen,
     forwardTarget,
@@ -3035,14 +3070,14 @@ export default function Home() {
           atende
         </div>
         <div className="workspace-account">
-          <div className="activity-control">
+          <div className="activity-control" ref={activityControlRef}>
             <button type="button" className={`activity-toggle ${operator.activityStatus && operator.activityStatus !== "available" ? "away" : ""}`}
               aria-expanded={activityMenuOpen} onClick={() => { setActivityMenuOpen(value => !value); setActivityError(""); }}>
               <span className="activity-dot" />
               {operator.activityStatus === "break" ? "Pausa de 15 min" : operator.activityStatus === "meeting" ? "Em reunião" : operator.activityStatus === "away" ? "Ausente" : operator.activityStatus === "onsite" ? "Em cliente" : operator.activityStatus === "custom" ? operator.activityNote || "Outra atividade" : "Disponível"}
             </button>
             {activityMenuOpen && <div className="activity-menu">
-              <strong>O que você está fazendo?</strong>
+              <div className="activity-menu-header"><strong>O que você está fazendo?</strong><button type="button" onClick={() => setActivityMenuOpen(false)} aria-label="Fechar atividades"><X size={16}/></button></div>
               <p>Durante uma atividade, você não recebe novos atendimentos nem avisos de mensagens.</p>
               {operator.activityStatus !== "onsite" && <>
               <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("available")}>Disponível para atender</button>
@@ -3063,7 +3098,6 @@ export default function Home() {
                   <label htmlFor="onsite-client">Cliente atendido</label>
                   <div><input id="onsite-client" maxLength={160} required value={onsiteClient} onChange={event => setOnsiteClient(event.target.value)} placeholder="Nome do cliente"/><button type="submit" disabled={activityBusy}>Iniciar</button></div>
                 </form>}
-                {onsiteVisits.filter(visit => visit.endedAt).slice(0,3).map(visit => <p className="activity-onsite-history" key={visit.id}><b>{visit.clientName}</b><br/>{new Date(visit.startedAt).toLocaleString("pt-BR")} → {new Date(visit.endedAt!).toLocaleString("pt-BR")}<br/>Duração: {clockDuration(visit.durationSeconds ?? null)}</p>)}
               </div>
               {activityError && <small role="alert">{activityError}</small>}
             </div>}
@@ -3581,6 +3615,7 @@ export default function Home() {
               {replyingTo && <div className="wa-reply-composer-preview"><Reply size={17}/><div><b>Respondendo à mensagem</b><span>{replyingTo.body || "Mídia"}</span></div><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancelar resposta"><X size={17}/></button></div>}
               <footer className="wa-composer">
                 <button
+                  ref={flowToggleRef}
                   className={flowMenuOpen ? "active" : ""}
                   onClick={() => {
                     void loadFlows();
@@ -3593,6 +3628,7 @@ export default function Home() {
                   <GitBranch size={23} />
                 </button>
                 <button
+                  ref={emojiToggleRef}
                   onClick={() => {
                     setEmojiOpen(!emojiOpen);
                     setFlowMenuOpen(false);
@@ -3619,13 +3655,14 @@ export default function Home() {
                   }}
                 />
                 {flowMenuOpen && (
-                  <div className="wa-flow-menu">
+                  <div className="wa-flow-menu" ref={flowMenuRef}>
                     <header>
                       <GitBranch size={17} />
                       <div>
                         <b>Fluxos de conversa</b>
                         <small>Escolha uma sequência para enviar</small>
                       </div>
+                      <button type="button" onClick={() => setFlowMenuOpen(false)} aria-label="Fechar fluxos de conversa"><X size={16}/></button>
                     </header>
                     {flows.length ? (
                       flows.map((flow) => (
@@ -3648,7 +3685,7 @@ export default function Home() {
                   </div>
                 )}
                 {emojiOpen && (
-                  <div className="wa-emojis">
+                  <div className="wa-emojis" ref={emojiMenuRef}>
                     {emojis.map((emoji) => (
                       <button
                         key={emoji}
