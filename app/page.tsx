@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { LoginScreen, SettingsScreen } from "./account-panels";
+import { apiRequest, errorMessage, operatorJson, operatorRequest, operatorStorageKey, request, type ApiConfig } from "./atende-api";
+import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } from "./operator-activity";
+import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
 import { connectionOrigin } from "./connection-origin";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
 import { ContactProfile } from "./contact-profile";
-import { messageTimestamp, reconcileMessages } from "./message-reconciliation";
+import { eventId, listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId, toChat, toMessage,
+  type Chat, type Message, type MessageMedia, type MessageWithTimestamp } from "./conversation-model";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
 import {
@@ -52,16 +56,7 @@ import {
   X,
 } from "lucide-react";
 
-type Config = { baseUrl: string; apiKey: string; sessionId: string };
-type Chat = {
-  id: string;
-  name: string;
-  phone?: string;
-  avatar?: string;
-  last: string;
-  time: string;
-  unread: number;
-};
+type Config = ApiConfig;
 type PendingPaste =
   | { kind: "files"; files: File[]; omittedFiles: number; chatId: string; chatName: string }
   | { kind: "text"; text: string; chatId: string; chatName: string };
@@ -85,51 +80,14 @@ function PasteFilePreview({ file, index }: { file: File; index: number }) {
     <div className="paste-file-meta"><Paperclip size={17}/><span>{file.name || `${label} colado ${index + 1}`}</span><small>{label} · {Math.max(1, Math.ceil(file.size / 1024))} KB</small></div>
   </li>;
 }
-type MessageMedia = {
-  data?: string;
-  mimetype: string;
-  filename?: string;
-  omitted?: boolean;
-};
-type Message = {
-  id: string;
-  waMessageId?: string;
-  body: string;
-  time: string;
-  mine: boolean;
-  type: string;
-  media?: MessageMedia;
-  quotedMessage?: { id: string; body: string };
-  forwarded?: boolean;
-  identityIds?: string[];
-};
-type MessageSource = "database" | "history" | "optimistic" | "both";
 type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
-type MessageWithTimestamp = Message & {
-  timestamp: number;
-  source: MessageSource;
-  identityIds: string[];
-  historyTimestamp?: number;
-  historyOrder?: number;
-};
 type Account = { name: string; phone: string };
 type Assignment = {
   assigneeName: string;
   assigneeId?: string;
   updatedAt?: string;
 };
-type Operator = {
-  id: string;
-  username: string;
-  displayName: string;
-  role?: string;
-  active?: boolean;
-  canSend?: boolean;
-  canAssign?: boolean;
-  activityStatus?: 'available' | 'break' | 'meeting' | 'away' | 'custom' | 'onsite';
-  activityNote?: string;
-  activityUntil?: string | null;
-};
+type Operator = OperatorIdentity;
 export type NotificationPreferences = {
   enabled: boolean;
   desktop: boolean;
@@ -142,7 +100,6 @@ export type NotificationPreferences = {
 };
 type CustomNotificationSound = { filename: string; mimetype: string; base64: string };
 const storageKey = "atende-openwa-config";
-const operatorStorageKey = "atende-operator-account";
 const notificationStorageKey = "atende-notification-preferences";
 const defaultNotificationPreferences: NotificationPreferences = {
   enabled: false,
@@ -160,14 +117,6 @@ const emptyConfig: Config = {
   sessionId: "",
 };
 const emojis = ["😀", "😂", "😍", "🙏", "👍", "🎉", "❤️", "👋"];
-const eventId = () =>
-  Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
-    value.toString(16).padStart(2, "0"),
-  ).join("");
-const messageDateTime = (date: Date | null) =>
-  date && !Number.isNaN(date.valueOf())
-    ? `${date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} · ${date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
-    : "";
 
 const initials = (value: string) =>
   value
@@ -241,213 +190,6 @@ function loadNotificationPreferences(userId: string): NotificationPreferences {
     return defaultNotificationPreferences;
   }
 }
-function request(config: Config, path: string, init?: RequestInit) {
-  return fetch(`${config.baseUrl.replace(/\/$/, "")}/api${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": config.apiKey,
-      "X-Atende-Token": loadOperator()?.token || "",
-      ...(init?.headers || {}),
-    },
-  });
-}
-function errorMessage(data: unknown) {
-  return typeof data === "object" && data && "message" in data
-    ? String((data as { message: unknown }).message)
-    : "Não foi possível concluir esta ação.";
-}
-function listFrom(data: unknown, key?: string): Record<string, unknown>[] {
-  if (Array.isArray(data)) return data as Record<string, unknown>[];
-  if (data && typeof data === "object") {
-    const value = data as Record<string, unknown>;
-    const candidate = key ? value[key] : value.items || value.data;
-    if (Array.isArray(candidate)) return candidate as Record<string, unknown>[];
-    if ("id" in value) return [value];
-  }
-  return [];
-}
-function preview(value: unknown) {
-  if (typeof value === "string") return value || "Sem mensagens";
-  if (value && typeof value === "object") {
-    const message = value as Record<string, unknown>;
-    const body = String(
-      message.body || message.text || message.content || "",
-    ).trim();
-    if (body) return body;
-    const type = String(
-      message.type || message.messageType || "",
-    ).toLowerCase();
-    const mime = String(
-      message.mimetype ||
-        (message.media && typeof message.media === "object"
-          ? (message.media as Record<string, unknown>).mimetype
-          : ""),
-    ).toLowerCase();
-    if (["voice", "ptt", "audio"].includes(type) || mime.startsWith("audio/"))
-      return "Áudio";
-    if (["video", "gif"].includes(type) || mime.startsWith("video/"))
-      return "Vídeo";
-    if (type === "sticker") return "Figurinha";
-    if (type === "image" || mime.startsWith("image/")) return "Imagem";
-    if (type === "document" || mime === "application/pdf") return "Documento";
-    if (type === "location") return "Localização";
-    if (["contact", "vcard"].includes(type)) return "Contato";
-    if (message.hasMedia === true || message.media) return "Mídia";
-  }
-  return "Sem mensagens";
-}
-function toChat(value: Record<string, unknown>): Chat {
-  const id = String(value.id || value.chatId || value.remoteJid || "");
-  const stamp = value.timestamp || value.lastMessageAt;
-  const date = stamp
-    ? new Date(
-        typeof stamp === "number"
-          ? stamp * (stamp < 10_000_000_000 ? 1000 : 1)
-          : String(stamp),
-      )
-    : null;
-  const lastMessage =
-    value.lastMessage && typeof value.lastMessage === "object"
-      ? value.lastMessage
-      : {
-          body: value.lastMessageBody || value.lastMessage,
-          type: value.lastMessageType,
-          hasMedia: value.lastMessageHasMedia,
-        };
-  return {
-    id,
-    name: String(
-      value.name ||
-        value.pushName ||
-        value.contactName ||
-        value.phone ||
-        id.replace(/@.*/, ""),
-    ),
-    last: preview(lastMessage),
-    time:
-      date && !Number.isNaN(date.valueOf())
-        ? date.toLocaleTimeString("pt-BR", {
-            hour: "2-digit",
-            minute: "2-digit",
-          })
-        : "",
-    unread: Number(value.unreadCount || value.unread || 0),
-  };
-}
-function serializedMessageId(value: unknown): string {
-  if (typeof value === "string" || typeof value === "number")
-    return String(value);
-  if (!value || typeof value !== "object") return "";
-  const record = value as Record<string, unknown>;
-  return serializedMessageId(
-    record._serialized || record.id || record.messageId || record.key,
-  );
-}
-function messageIdentityIds(id: string): string[] {
-  const serialized = id.match(/^(true|false)_.+_([^_]+)$/i);
-  return serialized
-    ? [id, `${serialized[1].toLowerCase()}_${serialized[2]}`]
-    : [id];
-}
-function toMessage(
-  value: Record<string, unknown>,
-  source: "database" | "history" = "database",
-): MessageWithTimestamp {
-  const stamp = value.timestamp || value.createdAt || value.messageTimestamp;
-  const timestamp = messageTimestamp(stamp);
-  const date = timestamp ? new Date(timestamp) : null;
-  const type = String(value.type || "").toLowerCase();
-  const fallback =
-    (
-      {
-        sticker: "Figurinha",
-        image: "Imagem",
-        video: "Vídeo",
-        audio: "Áudio",
-        voice: "Mensagem de voz",
-        document: "Documento",
-        location: "Localização",
-        contact: "Contato",
-      } as Record<string, string>
-    )[type] || "";
-  let metadata: Record<string, unknown> | null = null;
-  if (value.metadata && typeof value.metadata === "object")
-    metadata = value.metadata as Record<string, unknown>;
-  else if (typeof value.metadata === "string") {
-    try {
-      metadata = JSON.parse(value.metadata) as Record<string, unknown>;
-    } catch {
-      /* Ignore invalid legacy metadata. */
-    }
-  }
-  const mediaValue =
-    value.media && typeof value.media === "object"
-      ? (value.media as Record<string, unknown>)
-      : metadata?.media && typeof metadata.media === "object"
-        ? (metadata.media as Record<string, unknown>)
-        : null;
-  const defaultMime = (
-    {
-      sticker: "image/webp",
-      image: "image/jpeg",
-      video: "video/mp4",
-      audio: "audio/mpeg",
-      voice: "audio/ogg",
-      document: "application/octet-stream",
-    } as Record<string, string>
-  )[type];
-  const media =
-    mediaValue || (value.hasMedia === true && defaultMime)
-      ? {
-          data:
-            typeof mediaValue?.data === "string" ? mediaValue.data : undefined,
-          mimetype:
-            typeof mediaValue?.mimetype === "string"
-              ? mediaValue.mimetype
-              : defaultMime || "application/octet-stream",
-          filename:
-            typeof mediaValue?.filename === "string"
-              ? mediaValue.filename
-              : undefined,
-          omitted: mediaValue?.omitted === true,
-        }
-      : undefined;
-  const quotedValue = value.quotedMessage && typeof value.quotedMessage === "object"
-    ? value.quotedMessage as Record<string, unknown>
-    : metadata?.quotedMessage && typeof metadata.quotedMessage === "object"
-      ? metadata.quotedMessage as Record<string, unknown>
-      : null;
-  const quotedId = quotedValue ? serializedMessageId(quotedValue.id) : "";
-  const waMessageId = serializedMessageId(value.waMessageId || value.messageId || (source === "history" ? value.id : null));
-  const rawIds = [value.waMessageId, value.messageId, value.id]
-    .map(serializedMessageId)
-    .filter(Boolean);
-  const id = rawIds[0] || eventId();
-  const identityIds = [...new Set(rawIds.flatMap(messageIdentityIds))];
-  return {
-    id,
-    ...(waMessageId ? { waMessageId } : {}),
-    identityIds: identityIds.length ? identityIds : [id],
-    body: String(value.body || value.text || value.content || fallback),
-    mine:
-      Boolean(value.fromMe) ||
-      String(value.direction).toLowerCase() === "outgoing",
-    time: messageDateTime(date),
-    timestamp,
-    ...(source === "history" && timestamp ? { historyTimestamp: timestamp } : {}),
-    type,
-    media,
-    ...(quotedId ? { quotedMessage: { id: quotedId, body: String(quotedValue?.body || "") } } : {}),
-    ...(value.forwarded === true || value.isForwarded === true || metadata?.forwarded === true ? { forwarded: true } : {}),
-    source,
-  };
-}
-
-function mergeMessages(messages: MessageWithTimestamp[]) {
-  return reconcileMessages(messages);
-}
-
 function MessageText({ text }: { text: string }) {
   const parts: (string | { url: string })[] = [];
   const pattern = /https?:\/\/[^\s<>"']+/gi;
@@ -764,15 +506,13 @@ export default function Home() {
   const [operator, setOperator] = useState<Operator | null>(null);
   const [operatorToken, setOperatorToken] = useState("");
   const [operatorOpen, setOperatorOpen] = useState(false);
-  const [activityMenuOpen, setActivityMenuOpen] = useState(false);
-  const activityControlRef = useRef<HTMLDivElement>(null);
-  const [activityNoteDraft, setActivityNoteDraft] = useState("");
-  const [activityBusy, setActivityBusy] = useState(false);
-  const [activityError, setActivityError] = useState("");
-  const [onsiteClient, setOnsiteClient] = useState("");
-  const [onsiteVisits, setOnsiteVisits] = useState<{id:string;clientName:string;startedAt:string;endedAt:string|null;durationSeconds?:number|null}[]>([]);
-  const [onsiteLoading, setOnsiteLoading] = useState(false);
-  useEffect(() => { setOnsiteVisits([]); }, [operatorToken]);
+  const activity = useOperatorActivity({
+    baseUrl: config.baseUrl,
+    token: operatorToken,
+    onOperatorChange: user => { setOperator(user); persistOperator({ user, token: operatorToken }); },
+    onRefresh: () => { void refreshChats().catch(() => undefined); },
+  });
+  const { menuOpen: activityMenuOpen, setMenuOpen: setActivityMenuOpen, controlRef: activityControlRef } = activity;
   const [registering, setRegistering] = useState(false);
   const [operatorUsername, setOperatorUsername] = useState("");
   const [operatorName, setOperatorName] = useState("");
@@ -892,7 +632,7 @@ export default function Home() {
     setFlowMenuOpen(false);
     setEmojiOpen(false);
     setFilterMenuOpen(false);
-  }, [settingsOpen, operatorOpen, newChatOpen, dashboardOpen, contactsOpen, teamChatOpen]);
+  }, [settingsOpen, operatorOpen, newChatOpen, dashboardOpen, contactsOpen, teamChatOpen, setActivityMenuOpen]);
 
   useEffect(() => {
     if (!activityMenuOpen && !flowMenuOpen && !emojiOpen) return;
@@ -904,7 +644,7 @@ export default function Home() {
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
-  }, [activityMenuOpen, flowMenuOpen, emojiOpen]);
+  }, [activityMenuOpen, flowMenuOpen, emojiOpen, setActivityMenuOpen, activityControlRef]);
 
   function playNotificationSound() {
     try {
@@ -980,12 +720,9 @@ export default function Home() {
         reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
         reader.readAsDataURL(file);
       });
-      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, {
-        method: "PUT", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
-        body: JSON.stringify({ filename: file.name, mimetype: file.type, base64 }),
+      const result = await operatorJson<CustomNotificationSound>(config.baseUrl, operatorToken, "/me/notification-sound", {
+        method: "PUT", body: JSON.stringify({ filename: file.name, mimetype: file.type, base64 }),
       });
-      const result = await response.json() as CustomNotificationSound & { message?: string };
-      if (!response.ok) throw new Error(result.message || "Não foi possível salvar o áudio.");
       customSoundRef.current = result;
       setCustomSound(result);
       updateNotificationPreferences({ sound: true, soundType: "custom" });
@@ -997,10 +734,7 @@ export default function Home() {
     if (!operatorToken || customSoundBusy) return;
     setCustomSoundBusy(true);
     try {
-      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, {
-        method: "DELETE", headers: { "X-Atende-Token": operatorToken },
-      });
-      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+      await operatorJson<{ success: boolean }>(config.baseUrl, operatorToken, "/me/notification-sound", { method: "DELETE" });
       activeCustomAudioRef.current?.pause();
       customSoundRef.current = null;
       setCustomSound(null);
@@ -1072,8 +806,7 @@ export default function Home() {
     setNotificationPreferences(saved);
     setNotificationsEnabled(saved.enabled);
     const abort = new AbortController();
-    fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, { headers: { "X-Atende-Token": operatorToken }, signal: abort.signal })
-      .then(async response => { if (!response.ok) throw new Error("Não foi possível carregar o áudio personalizado."); return response.json() as Promise<CustomNotificationSound | null>; })
+    operatorJson<CustomNotificationSound | null>(config.baseUrl, operatorToken, "/me/notification-sound", { signal: abort.signal })
       .then(sound => {
         customSoundRef.current = sound;
         setCustomSound(sound);
@@ -1086,13 +819,7 @@ export default function Home() {
   const loadFlows = useCallback(async () => {
     if (!operatorToken) return;
     try {
-      const response = await fetch(
-        `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/flows`,
-        { headers: { "X-Atende-Token": operatorToken } },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const data = (await response.json()) as ConversationFlow[];
+      const data = await operatorJson<ConversationFlow[]>(config.baseUrl, operatorToken, "/flows");
       setFlows(data.filter((flow) => flow.active));
     } catch (error) {
       setNotice(
@@ -1105,8 +832,7 @@ export default function Home() {
   useEffect(() => {
     if (!operatorToken || quickReplyQuery === null) return;
     const abort = new AbortController();
-    fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/quick-replies`, { signal: abort.signal, headers: { "X-Atende-Token": operatorToken } })
-      .then(async response => { if (!response.ok) throw new Error("Não foi possível carregar as mensagens rápidas."); return await response.json() as QuickReply[]; })
+    operatorJson<QuickReply[]>(config.baseUrl, operatorToken, "/quick-replies", { signal: abort.signal })
       .then(setQuickReplies).catch(error => { if (!abort.signal.aborted) setNotice(error.message); });
     return () => abort.abort();
   }, [config.baseUrl, operatorToken, quickReplyQuery !== null]);
@@ -1133,24 +859,15 @@ export default function Home() {
     [],
   );
 
-  useEffect(() => {
-    if (!operatorToken) { setTeamUnread(0); setTeamAlerts([]); return; }
-    let stopped = false, polling = false, cursorAt = "", cursorId = "";
-    const root = `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/team-chat`;
-    const headers = { "X-Atende-Token": operatorToken };
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const query = cursorAt ? `?afterAt=${encodeURIComponent(cursorAt)}&afterId=${encodeURIComponent(cursorId)}` : "";
-        const alertsResponse = await fetch(`${root}/alerts${query}`, { headers });
-        if (!alertsResponse.ok) return;
-        const result = await alertsResponse.json() as { cursorAt: string; cursorId: string; unreadCount: number; alerts: { id: string; recipientId: string | null; senderName: string; body: string; mentioned: boolean }[] };
-        if (stopped) return;
-        cursorAt = result.cursorAt;
-        cursorId = result.cursorId;
-        setTeamUnread(Number(result.unreadCount || 0));
-        for (const item of result.alerts) {
+  useWorkspacePolling({
+    baseUrl: config.baseUrl,
+    token: operatorToken,
+    apiKey: config.apiKey,
+    sessionId: config.sessionId,
+    onTeamReset: () => { setTeamUnread(0); setTeamAlerts([]); },
+    onTeamFeed: (result: TeamAlertFeed) => {
+      setTeamUnread(Number(result.unreadCount || 0));
+      for (const item of result.alerts) {
           const alert: TeamAlert = { id: item.id, room: item.recipientId || "group", senderName: item.senderName, body: item.body, mentioned: item.mentioned };
           setTeamAlerts(current => [...current, alert].slice(-4));
           window.setTimeout(() => setTeamAlerts(current => current.filter(existing => existing.id !== item.id)), 8000);
@@ -1164,14 +881,29 @@ export default function Home() {
             });
             desktop.onclick = () => { window.focus(); setTeamRoom(alert.room); setTeamChatOpen(true); setContactsOpen(false); setDashboardOpen(false); desktop.close(); };
           }
-        }
-      } catch { /* A próxima atualização tenta novamente quando a rede voltar. */ }
-      finally { polling = false; }
-    };
-    void poll();
-    const timer = window.setInterval(() => void poll(), 4000);
-    return () => { stopped = true; window.clearInterval(timer); };
-  }, [config.baseUrl, operatorToken]);
+      }
+    },
+    onOperator: value => {
+      const user = value as Operator;
+      setOperator(user);
+      persistOperator({ user, token: operatorToken });
+    },
+    onSessionExpired: () => {
+      persistOperator(null);
+      setOperator(null);
+      setOperatorToken("");
+      setSelected(null);
+      setMessages([]);
+      setChats([]);
+      socketRef.current?.disconnect();
+      setOperatorError("Sua sessão expirou ou a conta foi desativada. Entre novamente.");
+    },
+    onReconcile: () => {
+      const interval = socketRef.current?.connected ? 60000 : 15000;
+      if (Date.now() - lastChatsRefresh.current < interval) return;
+      void refreshChatsRef.current().catch(() => undefined);
+    },
+  });
 
   useEffect(() => {
     if (!notice) return;
@@ -1513,9 +1245,7 @@ export default function Home() {
     setConfig(saved);
     if (savedOperator) {
       setOperatorToken(savedOperator.token);
-      fetch(`${saved.baseUrl.replace(/\/$/, "")}/api/operator-auth/me`, {
-        headers: { "X-Atende-Token": savedOperator.token },
-      })
+      operatorRequest(saved.baseUrl, savedOperator.token, "/me")
         .then(async (response) => {
           if (!response.ok) {
             persistOperator(null);
@@ -1546,13 +1276,7 @@ export default function Home() {
     const credential = `atende_${operatorToken}`;
     if (config.apiKey === credential && config.sessionId) return;
     const controller = new AbortController();
-    void fetch(
-      `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/connection`,
-      {
-        headers: { "X-Atende-Token": operatorToken },
-        signal: controller.signal,
-      },
-    )
+    void operatorRequest(config.baseUrl, operatorToken, "/connection", { signal: controller.signal })
       .then(async (response) => {
         const result = await response.json();
         if (!response.ok) throw new Error(errorMessage(result));
@@ -1584,41 +1308,6 @@ export default function Home() {
   useEffect(() => {
     operatorRef.current = operator;
   }, [operator]);
-  useEffect(() => {
-    if (!operatorToken) return;
-    let live = true;
-    async function refreshAccess() {
-      try {
-        const response = await request(config, "/operator-auth/me");
-        if (!live) return;
-        if (response.status === 401) {
-          persistOperator(null);
-          setOperator(null);
-          setOperatorToken("");
-          setSelected(null);
-          setMessages([]);
-          setChats([]);
-          socketRef.current?.disconnect();
-          setOperatorError(
-            "Sua sessão expirou ou a conta foi desativada. Entre novamente.",
-          );
-        } else if (response.ok) {
-          const user = (await response.json()) as Operator;
-          if (live) {
-            setOperator(user);
-            persistOperator({ user, token: operatorToken });
-          }
-        }
-      } catch {
-        /* A network outage does not erase the saved session. */
-      }
-    }
-    const timer = window.setInterval(refreshAccess, 15000);
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-    };
-  }, [operatorToken, config.baseUrl]);
   useEffect(() => {
     refreshChatsRef.current = refreshChats;
     refreshMessagesRef.current = refreshMessages;
@@ -1830,24 +1519,6 @@ export default function Home() {
     showMessageAlert,
   ]);
   useEffect(() => {
-    if (!config.apiKey || !config.sessionId) return;
-    const reconcile = () => {
-      if (document.visibilityState !== "visible") return;
-      const interval = socketRef.current?.connected ? 60000 : 15000;
-      if (Date.now() - lastChatsRefresh.current < interval) return;
-      void refreshChats().catch(() => undefined);
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") reconcile();
-    };
-    const interval = window.setInterval(reconcile, 15000);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [config.apiKey, config.baseUrl, config.sessionId, refreshChats]);
-  useEffect(() => {
     const chatChanged = scrolledChatRef.current !== (selected?.id || "");
     if (chatChanged) {
       scrolledChatRef.current = selected?.id || "";
@@ -1864,9 +1535,7 @@ export default function Home() {
     }
     setBusy(true);
     try {
-      const health = await fetch(
-        `${active.baseUrl.replace(/\/$/, "")}/api/health`,
-      );
+      const health = await apiRequest(active.baseUrl, "/health");
       if (!health.ok) throw new Error("O OpenWA respondeu com erro.");
       let sessionId = active.sessionId;
       if (!sessionId) {
@@ -2066,6 +1735,7 @@ export default function Home() {
     teamChatOpen,
     contactsOpen,
     activityMenuOpen,
+    setActivityMenuOpen,
     pendingPaste,
     filterMenuOpen,
     flowMenuOpen,
@@ -2240,17 +1910,10 @@ export default function Home() {
       : { username: operatorUsername, password: operatorPassword };
     try {
       setOperatorError("");
-      const response = await fetch(
-        `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/${endpoint}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const data = (await response.json()) as { user: Operator; token: string };
+      const data = await operatorJson<{ user: Operator; token: string }>(config.baseUrl, "", `/${endpoint}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
       setOperator(data.user);
       setOperatorToken(data.token);
       setOperatorName(data.user.displayName);
@@ -2274,20 +1937,10 @@ export default function Home() {
   async function saveOperatorName() {
     if (!operator || !operatorName.trim()) return;
     try {
-      const response = await fetch(
-        `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Atende-Token": operatorToken,
-          },
-          body: JSON.stringify({ displayName: operatorName.trim() }),
-        },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const user = (await response.json()) as Operator;
+      const user = await operatorJson<Operator>(config.baseUrl, operatorToken, "/me", {
+        method: "PUT",
+        body: JSON.stringify({ displayName: operatorName.trim() }),
+      });
       setOperator(user);
       persistOperator({ user, token: operatorToken });
       setNotice("Nome do usuário atualizado.");
@@ -3136,71 +2789,9 @@ export default function Home() {
   );
   const connected = status === "connected" || status === "ready";
 
-  async function setMyActivity(activityStatus: NonNullable<Operator["activityStatus"]>, activityNote = "") {
-    if (!operatorToken || activityBusy) return;
-    setActivityBusy(true);
-    setActivityError("");
-    try {
-      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/activity`, {
-        method: "PUT", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
-        body: JSON.stringify({ status: activityStatus, note: activityNote }),
-      });
-      const data = await response.json() as Operator & { message?: string };
-      if (!response.ok) throw new Error(data.message || "Não foi possível alterar sua atividade.");
-      setOperator(data);
-      persistOperator({ user: data, token: operatorToken });
-      setActivityMenuOpen(false);
-      setActivityNoteDraft("");
-      void refreshChats().catch(() => undefined);
-    } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível alterar sua atividade."); }
-    finally { setActivityBusy(false); }
-  }
-
-  useEffect(() => {
-    if (!activityMenuOpen || !operatorToken) return;
-    const abort = new AbortController();
-    setOnsiteLoading(true);
-    fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/onsite`, {
-      headers: { "X-Atende-Token": operatorToken }, signal: abort.signal,
-    }).then(async response => {
-      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
-      return response.json() as Promise<typeof onsiteVisits>;
-    }).then(visits => setOnsiteVisits(visits))
-      .catch(error => { if (!abort.signal.aborted) setActivityError(error instanceof Error ? error.message : "Não foi possível carregar os atendimentos externos."); })
-      .finally(() => { if (!abort.signal.aborted) setOnsiteLoading(false); });
-    return () => abort.abort();
-  }, [activityMenuOpen, operatorToken, config.baseUrl]);
-
-  async function changeOnsiteVisit(id?: string) {
-    if (!operatorToken || activityBusy) return;
-    setActivityBusy(true);
-    setActivityError("");
-    try {
-      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/onsite${id ? `/${encodeURIComponent(id)}/finish` : ""}`, {
-        method: "POST", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
-        ...(!id ? { body: JSON.stringify({ clientName: onsiteClient.trim() }) } : {}),
-      });
-      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
-      const visit = await response.json() as typeof onsiteVisits[number];
-      setOnsiteVisits(current => id ? current.map(item => item.id === id ? visit : item) : [visit, ...current]);
-      const me = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me`, {headers:{"X-Atende-Token":operatorToken}});
-      if (me.ok) {
-        const user = await me.json() as Operator;
-        setOperator(user);
-        persistOperator({user,token:operatorToken});
-      }
-      setOnsiteClient("");
-      void refreshChats().catch(() => undefined);
-    } catch (error) { setActivityError(error instanceof Error ? error.message : "Não foi possível registrar o atendimento externo."); }
-    finally { setActivityBusy(false); }
-  }
-
   async function logout() {
     try {
-      await fetch(
-        `${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/logout`,
-        { method: "POST", headers: { "X-Atende-Token": operatorToken } },
-      );
+      await operatorRequest(config.baseUrl, operatorToken, "/logout", { method: "POST" });
     } catch {
       setNotice("Conta encerrada neste navegador.");
     }
@@ -3254,38 +2845,7 @@ export default function Home() {
           atende
         </div>
         <div className="workspace-account">
-          <div className="activity-control" ref={activityControlRef}>
-            <button type="button" className={`activity-toggle ${operator.activityStatus && operator.activityStatus !== "available" ? "away" : ""}`}
-              aria-expanded={activityMenuOpen} onClick={() => { setActivityMenuOpen(value => !value); setActivityError(""); }}>
-              <span className="activity-dot" />
-              {operator.activityStatus === "break" ? "Pausa de 15 min" : operator.activityStatus === "meeting" ? "Em reunião" : operator.activityStatus === "away" ? "Ausente" : operator.activityStatus === "onsite" ? "Em cliente" : operator.activityStatus === "custom" ? operator.activityNote || "Outra atividade" : "Disponível"}
-            </button>
-            {activityMenuOpen && <div className="activity-menu">
-              <div className="activity-menu-header"><strong>O que você está fazendo?</strong><button type="button" onClick={() => setActivityMenuOpen(false)} aria-label="Fechar atividades"><X size={16}/></button></div>
-              <p>Durante uma atividade, você não recebe novos atendimentos nem avisos de mensagens.</p>
-              {operator.activityStatus !== "onsite" && <>
-              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("available")}>Disponível para atender</button>
-              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("break")}>Descanso · 15 minutos</button>
-              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("meeting")}>Em reunião</button>
-              <button type="button" disabled={activityBusy} onClick={() => void setMyActivity("away")}>Fora da estação</button>
-              <form onSubmit={event => { event.preventDefault(); void setMyActivity("custom", activityNoteDraft); }}>
-                <label htmlFor="activity-note">Outra atividade</label>
-                <div><input id="activity-note" maxLength={120} required value={activityNoteDraft} onChange={event => setActivityNoteDraft(event.target.value)} placeholder="Ex.: treinamento"/><button type="submit" disabled={activityBusy}>Informar</button></div>
-              </form>
-              </>}
-              <div className="activity-onsite">
-                <strong>Atendimento em cliente</strong>
-                {onsiteLoading ? <p>Carregando atendimentos...</p> : onsiteVisits.find(visit => !visit.endedAt) ? (() => {
-                  const visit = onsiteVisits.find(item => !item.endedAt)!;
-                  return <><p><b>{visit.clientName}</b><br/>Início: {new Date(visit.startedAt).toLocaleString("pt-BR")}</p><button type="button" disabled={activityBusy} onClick={() => void changeOnsiteVisit(visit.id)}>Finalizar atendimento externo</button></>;
-                })() : operator.activityStatus === "onsite" ? <p>Não foi possível identificar o atendimento em andamento. Atualize a página.</p> : <form onSubmit={event => { event.preventDefault(); void changeOnsiteVisit(); }}>
-                  <label htmlFor="onsite-client">Cliente atendido</label>
-                  <div><input id="onsite-client" maxLength={160} required value={onsiteClient} onChange={event => setOnsiteClient(event.target.value)} placeholder="Nome do cliente"/><button type="submit" disabled={activityBusy}>Iniciar</button></div>
-                </form>}
-              </div>
-              {activityError && <small role="alert">{activityError}</small>}
-            </div>}
-          </div>
+          <OperatorActivityControl operator={operator} activity={activity} controlRef={activityControlRef} />
           <button
             className="notification-toggle"
             onClick={() => void enableNotifications()}

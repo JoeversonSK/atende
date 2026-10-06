@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
+import { operatorRequest } from "./atende-api";
 
 type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean; dashboardVisible:boolean };
 const columns = [
@@ -23,7 +24,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
   const [newPasswordConfirmation,setNewPasswordConfirmation]=useState("");
   const [creating,setCreating]=useState(false);
   async function api(path:string,body?:unknown) {
-    const response=await fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/admin${path}`,{method:body===undefined?"GET":"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},...(body===undefined?{}:{body:JSON.stringify(body)})});
+    const response=await operatorRequest(baseUrl,token,`/admin${path}`,{method:body===undefined?"GET":"PUT",...(body===undefined?{}:{body:JSON.stringify(body)})});
     const data=await response.json();
     if(!response.ok) throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message || "Não foi possível salvar.");
     return data;
@@ -34,8 +35,8 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
     if(newPassword!==newPasswordConfirmation){setError("As senhas precisam ser iguais.");return;}
     setCreating(true);
     try{
-      const response=await fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/admin/users`,{
-        method:"POST",headers:{"Content-Type":"application/json","X-Atende-Token":token},
+      const response=await operatorRequest(baseUrl,token,"/admin/users",{
+        method:"POST",
         body:JSON.stringify({username:newUsername,displayName:newDisplayName,password:newPassword}),
       });
       const data=await response.json();

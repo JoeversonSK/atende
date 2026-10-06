@@ -4,7 +4,7 @@ Este é o índice dos guias do **Atende**. O [README da raiz](../README.md) é a
 
 | Guia canônico | Leia quando precisar de... |
 | --- | --- |
-| [Arquitetura e estado atual](ARQUITETURA_E_ESTADO_ATUAL.md) | Visão completa do que existe, fluxo navegador–API–WhatsApp, localização do código, dados, segurança e verificação. É o ponto de partida para desenvolvimento. |
+| [Arquitetura e estado atual](ARQUITETURA_E_ESTADO_ATUAL.md) | Visão completa do que existe, fluxo navegador–API–WhatsApp, cliente HTTP, agendamento de consultas, atividade, migrações, webhooks, dados e verificação. É o ponto de partida para desenvolvimento. |
 | [Atendimentos, painel e contatos](ATENDIMENTOS.md) | Regras operacionais de fila, responsável, conclusão, tempos, contatos e dashboard. |
 | [Automações](AUTOMACOES.md) | Google Sheets privado, mapeamento manual, chamadas mensais, prevenção de duplicidade e operação. |
 | [Recuperação de acesso](RECUPERAR-ACESSO.md) | Procedimento local de redefinição de senha e cuidados com o código. |

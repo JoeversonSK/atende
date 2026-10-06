@@ -1,10 +1,29 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { OperatorAuthService } from './operator-auth.service';
+import { postWebhookPayload } from '../webhook/utils/deliver-once';
+import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+
+jest.mock('../webhook/utils/deliver-once', () => ({ postWebhookPayload: jest.fn() }));
 
 describe('OperatorAuthService unassigned notifications', () => {
   const first='11111111-1111-4111-8111-111111111111';
   const second='22222222-2222-4222-8222-222222222222';
   const outsider='33333333-3333-4333-8333-333333333333';
+
+  it('testa o webhook pelo transporte compartilhado e oculta endereços bloqueados', async () => {
+    const query = jest.fn().mockResolvedValue([{destination_type:'json',url:'https://exemplo.com/webhook'}]);
+    const service = new OperatorAuthService({query} as never);
+    jest.spyOn(service,'requireAdmin').mockResolvedValue({id:first,username:'admin',displayName:'Admin'});
+    jest.spyOn(service as never,'ensureAccessSchema').mockResolvedValue(undefined);
+    const post = postWebhookPayload as jest.MockedFunction<typeof postWebhookPayload>;
+    post.mockResolvedValueOnce({status:204,statusText:'No Content'});
+    await expect(service.testNotificationWebhook('token','hook-1')).resolves.toEqual({success:true,statusCode:204});
+    expect(post).toHaveBeenCalledWith('https://exemplo.com/webhook',expect.stringContaining('"event":"test"'),{'Content-Type':'application/json'},8000);
+    post.mockRejectedValueOnce(new SsrfBlockedError('10.0.0.5 bloqueado'));
+    const result = await service.testNotificationWebhook('token','hook-1');
+    expect(result).toMatchObject({success:false});
+    expect(result.error).not.toContain('10.0.0.5');
+  });
 
   it('salva e consulta o áudio somente na conta autenticada', async () => {
     const data = Buffer.from('audio de teste');

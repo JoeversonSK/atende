@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { FlaskConical, Plus, Save, Trash2, X } from "lucide-react";
+import { operatorRequest } from "./atende-api";
 
 type Hook = { id: string; url: string; events: string[]; active: boolean; retryCount: number; filters?: unknown; lastTriggeredAt?: string | null };
 type Draft = { id?: string; url: string; events: string[]; active: boolean; retryCount: number; secret: string; headersJson: string; filtersJson: string };
@@ -15,18 +16,17 @@ const empty = (): Draft => ({ url: "", events: ["message.received"], active: tru
 const messageOf = (value: unknown) => { const data = value as { message?: string | string[]; error?: string } | null; return Array.isArray(data?.message) ? data.message.join(" ") : data?.message || data?.error || "Não foi possível concluir a operação."; };
 
 export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; token: string }) {
-  const endpoint = `${baseUrl.replace(/\/$/, "")}/api/operator-auth/admin/system-webhooks`;
+  const path = "/admin/system-webhooks";
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [events, setEvents] = useState<string[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
-  const headers = { "Content-Type": "application/json", "X-Atende-Token": token };
   const load = useCallback(async () => {
     try {
       const [listResponse, catalogResponse] = await Promise.all([
-        fetch(endpoint, { headers: { "X-Atende-Token": token } }),
-        fetch(`${endpoint}/catalog`, { headers: { "X-Atende-Token": token } }),
+        operatorRequest(baseUrl, token, path),
+        operatorRequest(baseUrl, token, `${path}/catalog`),
       ]);
       const [list, catalog] = await Promise.all([listResponse.json(), catalogResponse.json()]);
       if (!listResponse.ok) throw new Error(messageOf(list));
@@ -34,7 +34,7 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
       setHooks(Array.isArray(list) ? list : []);
       setEvents(Array.isArray(catalog.events) ? catalog.events : []);
     } catch (error) { setFeedback(error instanceof Error ? error.message : "Não foi possível carregar os webhooks."); }
-  }, [endpoint, token]);
+  }, [baseUrl, token]);
   useEffect(() => { void load(); }, [load]);
   const change = (patch: Partial<Draft>) => setDraft(current => current ? { ...current, ...patch } : null);
   async function save(event: FormEvent) {
@@ -47,7 +47,7 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
       if (draft.headersJson.trim()) payload.headers = JSON.parse(draft.headersJson);
       if (draft.filtersJson.trim()) payload.filters = JSON.parse(draft.filtersJson);
       else if (draft.id) payload.filters = null;
-      const response = await fetch(draft.id ? `${endpoint}/${draft.id}` : endpoint, { method: draft.id ? "PUT" : "POST", headers, body: JSON.stringify(payload) });
+      const response = await operatorRequest(baseUrl, token, draft.id ? `${path}/${draft.id}` : path, { method: draft.id ? "PUT" : "POST", body: JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(messageOf(data));
       setDraft(null); setFeedback("Webhook salvo."); await load();
@@ -58,8 +58,8 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
     if (kind === "delete" && !confirm("Excluir este webhook?")) return;
     setBusy(true); setFeedback("");
     try {
-      const response = await fetch(`${endpoint}/${hook.id}${kind === "test" ? "/test" : ""}`, {
-        method: kind === "test" ? "POST" : kind === "delete" ? "DELETE" : "PUT", headers,
+      const response = await operatorRequest(baseUrl, token, `${path}/${hook.id}${kind === "test" ? "/test" : ""}`, {
+        method: kind === "test" ? "POST" : kind === "delete" ? "DELETE" : "PUT",
         ...(kind === "toggle" ? { body: JSON.stringify({ active: !hook.active }) } : {}),
       });
       const data = await response.json();

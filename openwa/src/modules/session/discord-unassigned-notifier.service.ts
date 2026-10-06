@@ -1,22 +1,17 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
+import { redactSsrfError } from '../../common/security/ssrf-guard';
+import { postWebhookPayload } from '../webhook/utils/deliver-once';
 
 type HookRow={id:string;destination_type:'discord'|'json';url:string;only_unassigned:boolean;include_groups:boolean;include_text:boolean;include_media:boolean;sender_name:string;title:string;color:string;fields:string[]};
 
 @Injectable()
-export class DiscordUnassignedNotifier implements OnModuleInit {
+export class DiscordUnassignedNotifier {
   private readonly logger=createLogger('NotificationWebhookNotifier');
   constructor(@InjectDataSource('data') private readonly db:DataSource) {}
-
-  async onModuleInit(){
-    await this.db.query(`CREATE TABLE IF NOT EXISTS openwa.notification_webhooks (id varchar(36) PRIMARY KEY,name varchar(100) NOT NULL,destination_type varchar(16) NOT NULL,url varchar(2048) NOT NULL,active boolean NOT NULL DEFAULT true,only_unassigned boolean NOT NULL DEFAULT true,include_groups boolean NOT NULL DEFAULT false,include_text boolean NOT NULL DEFAULT true,include_media boolean NOT NULL DEFAULT true,sender_name varchar(80) NOT NULL DEFAULT 'Atende',title varchar(120) NOT NULL DEFAULT 'Nova mensagem',color varchar(7) NOT NULL DEFAULT '#0b917a',fields jsonb NOT NULL DEFAULT '["contactName","phone","message","receivedAt"]'::jsonb,created_at timestamptz NOT NULL DEFAULT NOW(),updated_at timestamptz NOT NULL DEFAULT NOW())`);
-    const legacy=process.env.DISCORD_UNASSIGNED_WEBHOOK_URL?.trim();
-    if(legacy && !(await this.db.query('SELECT 1 FROM openwa.notification_webhooks LIMIT 1')).length) await this.db.query("INSERT INTO openwa.notification_webhooks (id,name,destination_type,url,fields) VALUES ($1,'Discord · fila de espera','discord',$2,$3::jsonb)",[randomUUID(),legacy,JSON.stringify(['contactName','phone','message','messageType','receivedAt'])]);
-  }
 
   async notify(sessionId:string,message:IncomingMessage):Promise<boolean>{
     if(message.fromMe||/@(broadcast|newsletter)$/.test(message.chatId))return false;
@@ -43,10 +38,9 @@ export class DiscordUnassignedNotifier implements OnModuleInit {
     const selected=new Set(Array.isArray(hook.fields)?hook.fields:[]);
     const payload=hook.destination_type==='discord'?this.discordPayload(hook,data,selected):this.jsonPayload(data,selected);
     try{
-      const response=await fetch(hook.url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(8000)});
-      if(!response.ok)throw new Error(`HTTP ${response.status}`);
+      await postWebhookPayload(hook.url,JSON.stringify(payload),{'Content-Type':'application/json'},8000);
       return true;
-    }catch(error){this.logger.warn('Não foi possível enviar uma notificação configurada',{webhookId:hook.id,error:error instanceof Error?error.message:String(error)});return false;}
+    }catch(error){this.logger.warn('Não foi possível enviar uma notificação configurada',{webhookId:hook.id,error:redactSsrfError(error)});return false;}
   }
 
   private discordPayload(hook:HookRow,data:Record<string,any>,selected:Set<string>){

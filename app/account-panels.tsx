@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { operatorRequest } from "./atende-api";
 import { TeamSettings } from "./team-settings";
 import { PasswordRecovery } from "./password-recovery";
 import { FlowSettings } from "./flow-settings";
@@ -16,7 +17,7 @@ export function LoginScreen({ baseUrl, registering, setRegistering, username, se
   const [registrationOpen,setRegistrationOpen] = useState(false);
   useEffect(()=>{
     let live=true;
-    fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/registration-status`)
+    operatorRequest(baseUrl,null,"/registration-status")
       .then(async response=>{if(!response.ok)throw new Error("Não foi possível consultar o cadastro.");return response.json();})
       .then(data=>{if(live){setRegistrationOpen(data.registrationOpen===true);if(!data.registrationOpen)setRegistering(false);}})
       .catch(()=>{if(live){setRegistrationOpen(false);setRegistering(false);}});
@@ -56,12 +57,11 @@ function OperationHoursSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [feedback,setFeedback]=useState("");
-  const endpoint=`${baseUrl.replace(/\/$/,"")}/api/operator-auth`;
-  useEffect(()=>{let live=true;fetch(`${endpoint}/operation-hours`,{headers:{"X-Atende-Token":token}}).then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.message||"Não foi possível carregar os horários.");if(live)setHours(data);}).catch(error=>{if(live)setFeedback(error instanceof Error?error.message:"Não foi possível carregar os horários.");}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[endpoint,token]);
+  useEffect(()=>{let live=true;operatorRequest(baseUrl,token,"/operation-hours").then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.message||"Não foi possível carregar os horários.");if(live)setHours(data);}).catch(error=>{if(live)setFeedback(error instanceof Error?error.message:"Não foi possível carregar os horários.");}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
   const editDay=(weekday:number,change:(day:WorkDay)=>WorkDay)=>setHours(current=>({...current,days:current.days.map(day=>day.weekday===weekday?change(day):day)}));
   const editInterval=(weekday:number,index:number,patch:Partial<WorkInterval>)=>editDay(weekday,day=>({...day,intervals:day.intervals.map((interval,i)=>i===index?{...interval,...patch}:interval)}));
   const copyWeekdays=()=>setHours(current=>{const source=current.days[0];return {...current,days:current.days.map(day=>day.weekday>0&&day.weekday<5?{...day,enabled:source.enabled,intervals:source.intervals.map(interval=>({...interval}))}:day)};});
-  async function save(){setSaving(true);setFeedback("");try{for(const day of hours.days.filter(day=>day.enabled))for(const interval of day.intervals)if(interval.start>=interval.end)throw new Error(`Revise o horário de ${weekNames[day.weekday]}.`);if(hours.autoReplyEnabled&&!hours.autoReplyMessage.trim())throw new Error("Escreva a mensagem automática para o horário fechado.");const response=await fetch(`${endpoint}/admin/operation-hours`,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify(hours)});const data=await response.json();if(!response.ok)throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message||"Não foi possível salvar.");setHours(data);setFeedback("Horário de funcionamento salvo para toda a equipe.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving(false);}}
+  async function save(){setSaving(true);setFeedback("");try{for(const day of hours.days.filter(day=>day.enabled))for(const interval of day.intervals)if(interval.start>=interval.end)throw new Error(`Revise o horário de ${weekNames[day.weekday]}.`);if(hours.autoReplyEnabled&&!hours.autoReplyMessage.trim())throw new Error("Escreva a mensagem automática para o horário fechado.");const response=await operatorRequest(baseUrl,token,"/admin/operation-hours",{method:"PUT",body:JSON.stringify(hours)});const data=await response.json();if(!response.ok)throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message||"Não foi possível salvar.");setHours(data);setFeedback("Horário de funcionamento salvo para toda a equipe.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving(false);}}
   return <>
     <h2>Horário de funcionamento</h2>
     <p>Defina quando a equipe está disponível para atender seus clientes.</p>

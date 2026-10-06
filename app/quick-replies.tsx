@@ -1,25 +1,24 @@
 "use client";
 import { useEffect, useState } from "react";
+import { operatorRequest } from "./atende-api";
 export type QuickReply = { id: string; shortcut: string; text: string };
 
 export function QuickReplySettings({ baseUrl, token }: { baseUrl: string; token: string }) {
   const [items, setItems] = useState<QuickReply[]>([]);
   const [editing, setEditing] = useState<QuickReply>({ id: "", shortcut: "", text: "" });
   const [busy, setBusy] = useState(false), [feedback, setFeedback] = useState("");
-  const endpoint = `${baseUrl.replace(/\/$/, "")}/api/operator-auth`;
   useEffect(() => {
     const abort = new AbortController();
-    fetch(`${endpoint}/quick-replies`, { signal: abort.signal, headers: { "X-Atende-Token": token } })
+    operatorRequest(baseUrl, token, "/quick-replies", { signal: abort.signal })
       .then(async response => { if (!response.ok) throw new Error("Não foi possível carregar as mensagens rápidas."); return await response.json() as QuickReply[]; })
       .then(setItems).catch(error => { if (!abort.signal.aborted) setFeedback(error.message); });
     return () => abort.abort();
-  }, [endpoint, token]);
+  }, [baseUrl, token]);
   async function update(remove = false) {
     setBusy(true); setFeedback("");
     try {
-      const response = await fetch(`${endpoint}/admin/quick-replies${editing.id ? `/${editing.id}` : ""}`, {
+      const response = await operatorRequest(baseUrl, token, `/admin/quick-replies${editing.id ? `/${editing.id}` : ""}`, {
         method: remove ? "DELETE" : editing.id ? "PUT" : "POST",
-        headers: { "X-Atende-Token": token, "Content-Type": "application/json" },
         ...(remove ? {} : { body: JSON.stringify({ shortcut: editing.shortcut, text: editing.text }) }),
       });
       const result = await response.json() as QuickReply & { message?: string | string[] };

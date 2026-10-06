@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { operatorRequest } from "./atende-api";
 import {
   ArrowDown, ArrowUp, AudioLines, CheckCircle2, CircleAlert, Clock3, FileText, GitBranch,
   GripVertical, Image as ImageIcon, ListChecks, MessageSquareText, Pencil, Plus, Save,
@@ -61,10 +62,9 @@ function newBlock(type:ConversationFlowStep["type"]):ConversationFlowStep{
 
 export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const [flows,setFlows]=useState<ConversationFlow[]>([]),[selected,setSelected]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(""),[feedback,setFeedback]=useState(""),[dragged,setDragged]=useState<number|null>(null);
-  const endpoint=`${baseUrl.replace(/\/$/,"")}/api/operator-auth`;
-  const api=async(path:string,init?:RequestInit)=>{const response=await fetch(`${endpoint}${path}`,{...init,headers:{"Content-Type":"application/json","X-Atende-Token":token,...(init?.headers||{})}});const data=await response.json().catch(()=>null);if(!response.ok)throw new Error(Array.isArray(data?.message)?data.message.join(" "):data?.message||"Não foi possível concluir a ação.");return data;};
+  const api=async(path:string,init?:RequestInit)=>{const response=await operatorRequest(baseUrl,token,path,init);const data=await response.json().catch(()=>null);if(!response.ok)throw new Error(Array.isArray(data?.message)?data.message.join(" "):data?.message||"Não foi possível concluir a ação.");return data;};
   const load=()=>{setLoading(true);api("/flows").then((items:ConversationFlow[])=>setFlows(items.map(normalizeFlow))).catch(error=>setFeedback(error.message)).finally(()=>setLoading(false));};
-  useEffect(()=>{load();},[endpoint,token]);
+  useEffect(()=>{load();},[baseUrl,token]);
   useEffect(()=>{if(selected>=flows.length)setSelected(Math.max(0,flows.length-1));},[flows.length,selected]);
   useEffect(()=>{if(!feedback)return;const timer=window.setTimeout(()=>setFeedback(current=>current===feedback?"":current),5000);return()=>window.clearTimeout(timer);},[feedback]);
   const flow=flows[selected];
