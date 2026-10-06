@@ -1,7 +1,9 @@
 "use client";
 import {useEffect,useState} from "react";
 import {Plus,Trash2} from "lucide-react";
+import {errorMessage} from "./atende-api";
 type Data={name:string;phone:string;email:string;company:string;document:string;address:string;status:string;serviceType?:string;priority?:string;notes:{id:string;text:string;author:string;createdAt:string}[];events:{id:string;title:string;date:string}[];tags:string[];sequences:string[];campaigns:string[];custom:{id:string;label:string;value:string}[]};
+type ProfileResult={data:Data;revision:number};
 const empty:Data={name:"",phone:"",email:"",company:"",document:"",address:"",status:"open",serviceType:"remote",priority:"normal",notes:[],events:[],tags:[],sequences:[],campaigns:[],custom:[]};
 export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactName,contactPhone="",canEdit,dirtyRef,onSaved}:{baseUrl:string;apiKey:string;token:string;sessionId:string;chatId:string;contactName:string;contactPhone?:string;canEdit:boolean;dirtyRef:{current:boolean};onSaved?:(data:Data)=>void}){
   const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[savingPriority,setSavingPriority]=useState(false),[dirty,setDirty]=useState(false),[autoSaveBlocked,setAutoSaveBlocked]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
@@ -12,11 +14,11 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
   const endpoint=`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(chatId)}`;
   async function fetchProfile(signal?:AbortSignal){
     const response=await fetch(endpoint,{signal,headers:{"X-Atende-Token":token}});
-    const result=await response.json();if(!response.ok)throw new Error(result.message||"Não foi possível carregar o perfil.");
-    if(!result.data.phone){try{const lookup=await fetch(`${baseUrl.replace(/\/$/,"")}/api/sessions/${encodeURIComponent(sessionId)}/contacts/${encodeURIComponent(chatId)}/phone`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),headers:{"X-API-Key":apiKey,"X-Atende-Token":token}});if(lookup.ok){const resolved=await lookup.json();if(typeof resolved.phone==="string"&&/^\d{7,15}$/.test(resolved.phone))result.data.phone=resolved.phone;}}catch{/* Keep manual entry available when WhatsApp is disconnected. */}}
+    const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));
+    if(!result.data.phone){try{const lookup=await fetch(`${baseUrl.replace(/\/$/,"")}/api/sessions/${encodeURIComponent(sessionId)}/contacts/${encodeURIComponent(chatId)}/phone`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),headers:{"X-API-Key":apiKey,"X-Atende-Token":token}});if(lookup.ok){const resolved=await lookup.json() as {phone?:string};if(typeof resolved.phone==="string"&&/^\d{7,15}$/.test(resolved.phone))result.data.phone=resolved.phone;}}catch{/* Keep manual entry available when WhatsApp is disconnected. */}}
     return result;
   }
-  function apply(result:{data:Data;revision:number}){
+  function apply(result:ProfileResult){
     const cleanName=/[\p{L}\p{N}]/u.test(result.data.name||"")?result.data.name:"";
     const fallback=/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")||contactName==="Contato sem nome"?"":contactName;
     setData({...empty,...result.data,name:cleanName||(result.revision===0?fallback:""),...(result.revision===0?{phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
@@ -32,7 +34,7 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
       try{
         const response=await fetch(endpoint,{signal:abort.signal,headers:{"X-Atende-Token":token}});
         if(!response.ok)return;
-        const result=await response.json();
+        const result=await response.json() as ProfileResult;
         if(!abort.signal.aborted&&!dirtyRef.current&&result.revision!==revision)apply(result);
       }catch{/* The next refresh retries without discarding edits. */}
     },8000);
@@ -40,14 +42,14 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
   },[endpoint,token,revision,dirty,saving,loading]);
   async function save(){
     if(!dirty||saving)return;setSaving(true);setAutoSaveBlocked(false);setError("");setNotice("Salvando automaticamente…");
-    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json();if(!response.ok)throw new Error(result.message||"Não foi possível salvar.");apply(result);onSaved?.(result.data);setNotice("Informações salvas para a equipe.");}
+    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));apply(result);onSaved?.(result.data);setNotice("Informações salvas para a equipe.");}
     catch(e){setAutoSaveBlocked(true);setError(e instanceof Error?e.message:"Erro ao salvar.");setNotice("");}finally{setSaving(false);}
   }
   useEffect(()=>{if(!canEdit||!dirty||saving||savingPriority||loading||autoSaveBlocked)return;const timer=window.setTimeout(()=>void save(),650);return()=>window.clearTimeout(timer);},[canEdit,dirty,saving,savingPriority,loading,autoSaveBlocked,data,revision,endpoint,token]);
   async function reload(){if(dirty&&!window.confirm("Descartar as alterações não salvas e recarregar o perfil?"))return;setLoading(true);setError("");try{apply(await fetchProfile());}catch(e){setError(e instanceof Error?e.message:"Erro ao carregar.");}finally{setLoading(false);}}
   async function savePriority(priority:string){
     const previous=data.priority||"normal";setData(current=>({...current,priority}));setSavingPriority(true);setError("");setNotice("Salvando prioridade…");
-    try{const response=await fetch(`${endpoint}/priority`,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({priority})});const result=await response.json();if(!response.ok)throw new Error(result.message||"Não foi possível alterar a prioridade.");setRevision(result.revision);onSaved?.({...data,priority});setNotice("Prioridade atualizada no dashboard.");}
+    try{const response=await fetch(`${endpoint}/priority`,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({priority})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));setRevision(result.revision);onSaved?.({...data,priority});setNotice("Prioridade atualizada no dashboard.");}
     catch(e){setData(current=>({...current,priority:previous}));setError(e instanceof Error?e.message:"Erro ao alterar a prioridade.");setNotice("");}finally{setSavingPriority(false);}
   }
   if(loading)return <div className="contact-crm"><p role="status">Carregando informações…</p></div>;

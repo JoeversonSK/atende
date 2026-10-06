@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, MessageCircle, Pencil, Send, Trash2, UsersRound, X } from "lucide-react";
+import { errorMessage } from "./atende-api";
 
 type Room = { id: string; displayName: string; lastMessage: string | null; lastAt: string | null; unread: number };
 type Member = { id: string; username: string; displayName: string };
@@ -44,7 +45,7 @@ export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }
       headers: { "X-Atende-Token": token, ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(Array.isArray(body?.message) ? body.message.join(" ") : body?.message || "Não foi possível carregar o chat interno.");
+    if (!response.ok) throw new Error(errorMessage(body));
     return body as T;
   }, [root, token]);
 

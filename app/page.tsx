@@ -16,6 +16,7 @@ import { ConversationProfile } from "./conversations/components/conversation-pro
 import { ConversationThread } from "./conversations/components/conversation-thread";
 import { MessageComposer } from "./conversations/components/message-composer";
 import { PasteFilePreview } from "./conversations/components/paste-file-preview";
+import { availableContactTags, buildContactRows, findForwardCandidates } from "./conversations/contact-list";
 import { defaultNotificationPreferences, emptyConfig, loadConfig, loadNotificationPreferences, loadOperator,
   notificationStorageKey, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
 import type { ConversationFlow } from "./flow-settings";
@@ -722,7 +723,7 @@ export default function Home() {
         `/sessions/${encodeURIComponent(active.sessionId)}/chats/read`,
         { method: "POST", body: JSON.stringify({ chatId }) },
       );
-      const result = await response.json();
+      const result = await response.json() as { success?: boolean };
       if (!response.ok || !result.success)
         throw new Error(
           "O WhatsApp não confirmou a leitura. Tente abrir a conversa novamente.",
@@ -891,13 +892,13 @@ export default function Home() {
     const controller = new AbortController();
     void operatorRequest(config.baseUrl, operatorToken, "/connection", { signal: controller.signal })
       .then(async (response) => {
-        const result = await response.json();
+        const result = await response.json() as { sessionId?: string };
         if (!response.ok) throw new Error(errorMessage(result));
         if (!controller.signal.aborted) {
           setConfig((current) => ({
             ...current,
             apiKey: credential,
-            sessionId: result.sessionId,
+            sessionId: result.sessionId || current.sessionId,
           }));
           setNotice("Carregando as conversas da equipe…");
         }
@@ -1057,7 +1058,6 @@ export default function Home() {
                     ? body
                     : "Nova mensagem recebida",
                   tag: `atende-${chatId}-${notificationId}`,
-                  renotify: true,
                 });
             })
             .catch(() => undefined);
@@ -1101,7 +1101,6 @@ export default function Home() {
                   ? `${customer} · ${body}`
                   : "Você recebeu um novo atendimento.",
                 tag: `atende-assignment-${chatId}-${String(data.updatedAt || Date.now())}`,
-                renotify: true,
               });
           }
         }
@@ -1220,7 +1219,7 @@ export default function Home() {
       });
       if (!response.ok)
         throw new Error(errorMessage(await response.json().catch(() => null)));
-      const data = await response.json();
+      const data = await response.json() as { id?: string; sessionId?: string };
       const next = { ...config, sessionId: String(data.id || data.sessionId) };
       setConfig(next);
       persistConfig(next);
@@ -1233,8 +1232,8 @@ export default function Home() {
         next,
         `/sessions/${encodeURIComponent(next.sessionId)}/qr`,
       );
-      const qrData = await qrResponse.json();
-      setQr(String(qrData.qrCode || qrData.data || qrData));
+      const qrData = await qrResponse.json() as { qrCode?: string; data?: string } | string;
+      setQr(typeof qrData === "string" ? qrData : String(qrData.qrCode || qrData.data || qrData));
       setStatus("ready");
       setNotice("Sessão criada. Leia o QR Code no WhatsApp da empresa.");
     } catch (error) {
@@ -1468,7 +1467,7 @@ export default function Home() {
         `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(chatId)}/close`,
         { method: "POST" },
       );
-      const result = await response.json();
+      const result = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
       if (!response.ok) throw new Error(errorMessage(result));
       refreshGeneration.current++;
       setAssignments((current) => {
@@ -1783,7 +1782,7 @@ export default function Home() {
         `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(target.id)}/close`,
         { method: "POST" },
       );
-      const result = await response.json();
+      const result = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
       if (!response.ok) throw new Error(errorMessage(result));
       closedByFlow = true;
       refreshGeneration.current++;
@@ -2225,7 +2224,10 @@ export default function Home() {
       const id = `${number}@c.us`,
         path = `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(id)}`;
       const current = await request(config, path);
-      const profile = await current.json();
+      const profile = await current.json() as {
+        revision?: number;
+        data: SupportOverview["contacts"][number]["data"];
+      };
       if (!current.ok) throw new Error(errorMessage(profile));
       const response = await request(config, path, {
         method: "PUT",
@@ -2238,7 +2240,7 @@ export default function Home() {
           },
         }),
       });
-      const saved = await response.json();
+      const saved = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
       if (!response.ok) throw new Error(errorMessage(saved));
       refreshGeneration.current++;
       setOverview((current) => ({
@@ -2268,64 +2270,14 @@ export default function Home() {
     }
   }
 
-  const contactRows = useMemo(() => {
-    const hasName = (value?: string) => Boolean(value && /[\p{L}]/u.test(value));
-    const displayName = (...values: (string | undefined)[]) => values.find(hasName)?.trim() || "Contato sem nome";
-    const nameKey = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-    const hiddenIds = new Set(overview.contacts.filter(contact => contact.data.directoryHidden).map(contact => contact.chatId));
-    const liveChatIds = new Set(chats.map(chat => chat.id));
-    const rows = new Map(
-      chats.filter(c => !hiddenIds.has(c.id)).map((c) => [
-        c.id,
-        {
-          id: c.id,
-          name: displayName(c.name),
-          phone: c.phone,
-          avatar: c.avatar,
-          tags: [] as string[],
-        },
-      ]),
-    );
-    for (const contact of overview.contacts) {
-      if (contact.data.directoryHidden || /@(g\.us|broadcast|newsletter)$/.test(contact.chatId)) continue;
-      const old = rows.get(contact.chatId);
-      rows.set(contact.chatId, {
-        id: contact.chatId,
-        name: displayName(contact.data.name, old?.name),
-        phone: contact.data.phone || old?.phone,
-        avatar:
-          old?.avatar ||
-          profilePicturesRef.current.get(contact.chatId) ||
-          undefined,
-        tags: (contact.data as { tags?: string[] }).tags || [],
-      });
-    }
-    // A spreadsheet profile can be keyed by phone while the existing WhatsApp conversation uses a
-    // privacy ID. Collapse only a unique, full-name match when the phone profile has no live chat;
-    // a second real conversation must remain visible until it can be reconciled safely.
-    const groups = new Map<string, Array<{ id: string; name: string; phone?: string; avatar?: string; tags: string[] }>>();
-    for (const row of rows.values()) {
-      const key = nameKey(row.name);
-      if (key.length < 6 || !/[\p{L}]/u.test(key)) continue;
-      const group = groups.get(key);
-      if (group) group.push(row);
-      else groups.set(key, [row]);
-    }
-    for (const group of groups.values()) {
-      if (group.length !== 2) continue;
-      const old = group.find(row => row.id.endsWith("@lid") && !row.phone);
-      const imported = group.find(row => row.id.endsWith("@c.us") && row.phone && !liveChatIds.has(row.id));
-      if (!old || !imported) continue;
-      rows.set(old.id, { ...old, phone: imported.phone, tags: [...new Set([...old.tags, ...imported.tags])] });
-      rows.delete(imported.id);
-    }
-    return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [chats, overview.contacts]);
-  const forwardCandidates = useMemo(() => {
-    const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
-    const query = normalize(forwardSearch.trim());
-    return contactRows.filter(contact => contact.id !== forwardTarget?.chatId && /@(c\.us|lid)$/.test(contact.id) && (!query || normalize(`${contact.name} ${contact.phone || ""} ${contact.id}`).includes(query)));
-  }, [contactRows, forwardTarget?.chatId, forwardSearch]);
+  const contactRows = useMemo(
+    () => buildContactRows(chats, overview.contacts),
+    [chats, overview.contacts],
+  );
+  const forwardCandidates = useMemo(
+    () => findForwardCandidates(contactRows, forwardTarget?.chatId, forwardSearch),
+    [contactRows, forwardTarget?.chatId, forwardSearch],
+  );
   function openForward(message: Message) {
     if (!selected || !message.waMessageId) return;
     if (operator?.role !== "admin" && operator?.canSend === false) {
@@ -2380,10 +2332,7 @@ export default function Home() {
     [contactRows],
   );
   const availableChatTags = useMemo(
-    () =>
-      [...new Set(contactRows.flatMap((contact) => contact.tags))].sort(
-        (a, b) => a.localeCompare(b, "pt-BR"),
-      ),
+    () => availableContactTags(contactRows),
     [contactRows],
   );
   const shownChats = useMemo(
@@ -2948,7 +2897,6 @@ export default function Home() {
           saveName={saveOperatorName}
           logout={logout}
           config={config}
-          setConfig={setConfig}
           connect={connect}
           busy={busy}
           qr={qr}

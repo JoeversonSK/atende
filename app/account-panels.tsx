@@ -1,15 +1,41 @@
 "use client";
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
-import { operatorRequest } from "./atende-api";
+import { useEffect, useState, type CSSProperties, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { errorMessage, operatorRequest, type ApiConfig } from "./atende-api";
+import type { OperatorIdentity } from "./operator-activity";
+import type { NotificationPreferences } from "./conversations/workspace-storage";
 import { TeamSettings } from "./team-settings";
 import { PasswordRecovery } from "./password-recovery";
 import { FlowSettings } from "./flow-settings";
 import { WebhookSettings } from "./webhook-settings";
 import { AutomationSettings } from "./automation-settings";
 import { QuickReplySettings } from "./quick-replies";
-import { ArrowLeft, Bell, Clock3, Copy, Eye, EyeOff, GitBranch, LoaderCircle, LogOut, MessageCircle, Play, Plus, Smartphone, Trash2, UserRound, UsersRound, Volume2, Webhook, Workflow } from "lucide-react";
+import { ArrowLeft, Bell, Clock3, Copy, Eye, EyeOff, GitBranch, LoaderCircle, LogOut, MessageCircle, Play, Plus, Smartphone, Trash2, UserRound, UsersRound, Volume2, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
-export function LoginScreen({ baseUrl, registering, setRegistering, username, setUsername, name, setName, password, setPassword, error, busy, submit }: any) {
+type LoginProps = {
+  baseUrl: string; registering: boolean; setRegistering: (value: boolean) => void;
+  username: string; setUsername: Dispatch<SetStateAction<string>>;
+  name: string; setName: Dispatch<SetStateAction<string>>;
+  password: string; setPassword: Dispatch<SetStateAction<string>>;
+  error: string; busy: boolean; submit: () => Promise<void>;
+};
+type CustomSound = { filename: string; mimetype: string; base64: string };
+type SoundControlsProps = {
+  notificationPreferences: NotificationPreferences;
+  updateNotificationPreferences: (patch: Partial<NotificationPreferences>) => void;
+  customSound: CustomSound | null; customSoundBusy: boolean;
+  uploadNotificationSound: (file: File) => Promise<void>;
+  removeNotificationSound: () => Promise<void>;
+};
+type SettingsProps = SoundControlsProps & {
+  token: string; user: OperatorIdentity; name: string;
+  setName: Dispatch<SetStateAction<string>>; saveName: () => Promise<void>;
+  logout: () => Promise<void>; config: ApiConfig; connect: (config?: ApiConfig) => Promise<void>;
+  busy: boolean; qr: string | null; createSession: () => Promise<void>;
+  notificationsEnabled: boolean; enableNotifications: () => Promise<void>;
+  testNotification: () => Promise<void>; notice: string; close: () => void;
+};
+
+export function LoginScreen({ baseUrl, registering, setRegistering, username, setUsername, name, setName, password, setPassword, error, busy, submit }: LoginProps) {
   const [recovering,setRecovering] = useState(false);
   const [visible, setVisible] = useState(false);
   const [confirm, setConfirm] = useState("");
@@ -18,7 +44,7 @@ export function LoginScreen({ baseUrl, registering, setRegistering, username, se
   useEffect(()=>{
     let live=true;
     operatorRequest(baseUrl,null,"/registration-status")
-      .then(async response=>{if(!response.ok)throw new Error("Não foi possível consultar o cadastro.");return response.json();})
+      .then(async response=>{if(!response.ok)throw new Error("Não foi possível consultar o cadastro.");return response.json() as Promise<{registrationOpen?:boolean}>;})
       .then(data=>{if(live){setRegistrationOpen(data.registrationOpen===true);if(!data.registrationOpen)setRegistering(false);}})
       .catch(()=>{if(live){setRegistrationOpen(false);setRegistering(false);}});
     return()=>{live=false;};
@@ -57,11 +83,11 @@ function OperationHoursSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [feedback,setFeedback]=useState("");
-  useEffect(()=>{let live=true;operatorRequest(baseUrl,token,"/operation-hours").then(async response=>{const data=await response.json();if(!response.ok)throw new Error(data.message||"Não foi possível carregar os horários.");if(live)setHours(data);}).catch(error=>{if(live)setFeedback(error instanceof Error?error.message:"Não foi possível carregar os horários.");}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
+  useEffect(()=>{let live=true;operatorRequest(baseUrl,token,"/operation-hours").then(async response=>{const data=await response.json() as OperationHours;if(!response.ok)throw new Error(errorMessage(data));if(live)setHours(data);}).catch(error=>{if(live)setFeedback(error instanceof Error?error.message:"Não foi possível carregar os horários.");}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
   const editDay=(weekday:number,change:(day:WorkDay)=>WorkDay)=>setHours(current=>({...current,days:current.days.map(day=>day.weekday===weekday?change(day):day)}));
   const editInterval=(weekday:number,index:number,patch:Partial<WorkInterval>)=>editDay(weekday,day=>({...day,intervals:day.intervals.map((interval,i)=>i===index?{...interval,...patch}:interval)}));
   const copyWeekdays=()=>setHours(current=>{const source=current.days[0];return {...current,days:current.days.map(day=>day.weekday>0&&day.weekday<5?{...day,enabled:source.enabled,intervals:source.intervals.map(interval=>({...interval}))}:day)};});
-  async function save(){setSaving(true);setFeedback("");try{for(const day of hours.days.filter(day=>day.enabled))for(const interval of day.intervals)if(interval.start>=interval.end)throw new Error(`Revise o horário de ${weekNames[day.weekday]}.`);if(hours.autoReplyEnabled&&!hours.autoReplyMessage.trim())throw new Error("Escreva a mensagem automática para o horário fechado.");const response=await operatorRequest(baseUrl,token,"/admin/operation-hours",{method:"PUT",body:JSON.stringify(hours)});const data=await response.json();if(!response.ok)throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message||"Não foi possível salvar.");setHours(data);setFeedback("Horário de funcionamento salvo para toda a equipe.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving(false);}}
+  async function save(){setSaving(true);setFeedback("");try{for(const day of hours.days.filter(day=>day.enabled))for(const interval of day.intervals)if(interval.start>=interval.end)throw new Error(`Revise o horário de ${weekNames[day.weekday]}.`);if(hours.autoReplyEnabled&&!hours.autoReplyMessage.trim())throw new Error("Escreva a mensagem automática para o horário fechado.");const response=await operatorRequest(baseUrl,token,"/admin/operation-hours",{method:"PUT",body:JSON.stringify(hours)});const data=await response.json() as OperationHours;if(!response.ok)throw new Error(errorMessage(data));setHours(data);setFeedback("Horário de funcionamento salvo para toda a equipe.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving(false);}}
   return <>
     <h2>Horário de funcionamento</h2>
     <p>Defina quando a equipe está disponível para atender seus clientes.</p>
@@ -86,9 +112,9 @@ function OperationHoursSettings({baseUrl,token}:{baseUrl:string;token:string}){
   </>;
 }
 
-function NotificationSoundControls({ notificationPreferences, updateNotificationPreferences, customSound, customSoundBusy, uploadNotificationSound, removeNotificationSound }: any) {
+function NotificationSoundControls({ notificationPreferences, updateNotificationPreferences, customSound, customSoundBusy, uploadNotificationSound, removeNotificationSound }: SoundControlsProps) {
   return <div className="notification-sound-controls">
-    <label>Som do alerta<select value={notificationPreferences.soundType} disabled={!notificationPreferences.sound} onChange={event => updateNotificationPreferences({ soundType: event.target.value })}>
+    <label>Som do alerta<select value={notificationPreferences.soundType} disabled={!notificationPreferences.sound} onChange={event => updateNotificationPreferences({ soundType: event.target.value as NotificationPreferences["soundType"] })}>
       <option value="classic">Clássico</option><option value="soft">Suave</option><option value="bell">Campainha</option><option value="urgent">Chamado urgente</option>
       {(customSound || notificationPreferences.soundType === "custom") && <option value="custom">Meu áudio</option>}
     </select></label>
@@ -101,7 +127,7 @@ function NotificationSoundControls({ notificationPreferences, updateNotification
   </div>;
 }
 
-export function SettingsScreen({ token, user, name, setName, saveName, logout, config, connect, busy, qr, createSession, notificationsEnabled, enableNotifications, notificationPreferences, updateNotificationPreferences, customSound, customSoundBusy, uploadNotificationSound, removeNotificationSound, testNotification, notice, close }: any) {
+export function SettingsScreen({ token, user, name, setName, saveName, logout, config, connect, busy, qr, createSession, notificationsEnabled, enableNotifications, notificationPreferences, updateNotificationPreferences, customSound, customSoundBusy, uploadNotificationSound, removeNotificationSound, testNotification, notice, close }: SettingsProps) {
   const [tab,setTab]=useState(user?.role==="admin"?"hours":"profile");
   const [connection,setConnection]=useState(config);
   const [saving,setSaving]=useState(false);
@@ -110,7 +136,7 @@ export function SettingsScreen({ token, user, name, setName, saveName, logout, c
   async function copyKey(){try{await navigator.clipboard.writeText(connection.apiKey);setCopyFeedback("Chave copiada. Não compartilhe com terceiros.");}catch{setCopyFeedback("Não foi possível copiar automaticamente. Selecione a chave e use Ctrl+C.");}}
   async function saveProfile(event:FormEvent){event.preventDefault();setSaving(true);try{await saveName();}finally{setSaving(false);}}
   const secureContext=typeof window!=="undefined"&&window.isSecureContext;
-  const entries=[["profile","Meu perfil",UserRound],["notifications","Notificações",Bell],...(user?.role==="admin"?[["hours","Funcionamento",Clock3],["quickReplies","Mensagens rápidas",MessageCircle],["flows","Fluxos de conversa",GitBranch],["automations","Automações",Workflow],["webhooks","Webhooks",Webhook],["team","Equipe e permissões",UsersRound],["connection","Conexão WhatsApp",Smartphone]]:[])] as any[];
+  const entries: Array<[string,string,LucideIcon]>=[["profile","Meu perfil",UserRound],["notifications","Notificações",Bell],...(user?.role==="admin"?[["hours","Funcionamento",Clock3],["quickReplies","Mensagens rápidas",MessageCircle],["flows","Fluxos de conversa",GitBranch],["automations","Automações",Workflow],["webhooks","Webhooks",Webhook],["team","Equipe e permissões",UsersRound],["connection","Conexão WhatsApp",Smartphone]] as Array<[string,string,LucideIcon]>:[])];
   return <section className="settings-page" aria-label="Configurações"><header className="settings-topbar"><button onClick={close}><ArrowLeft size={19}/>Conversas</button><div><span className="preview-avatar">{user?.displayName?.slice(0,1)}</span><b>{user?.displayName}</b></div></header><div className="settings-layout"><aside className="settings-nav"><small>CONFIGURAÇÕES</small><nav>{entries.map(([key,label,Icon])=><button key={key} className={tab===key?"active":""} onClick={()=>{setTab(key);setKeyVisible(false);setCopyFeedback("");}}><Icon size={18}/>{label}</button>)}</nav><div className="settings-user"><span className="preview-avatar">{user?.displayName?.slice(0,1)}</span><div><b>{user?.displayName}</b><small>@{user?.username}</small></div></div><button className="back-link" onClick={logout}><LogOut size={17}/>Sair da conta</button></aside><main className="settings-content">
     {tab==="hours"&&user?.role==="admin"&&<OperationHoursSettings baseUrl={config.baseUrl} token={token}/>}
     {tab==="quickReplies"&&user?.role==="admin"&&<QuickReplySettings baseUrl={config.baseUrl} token={token}/>}

@@ -7,7 +7,7 @@ export {emptyOverview,type SupportOverview} from "./dashboard-model";
 type Owner={assigneeId?:string;assigneeName:string;updatedAt?:string};
 type Props={chats:{id:string;name:string}[];owners:Record<string,Owner>;overview:SupportOverview;onOpen:(id:string)=>void;onClose:()=>void;warning?:string};
 export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:Props){
- const [now,setNow]=useState(Date.now()),[search,setSearch]=useState("");
+ const [now,setNow]=useState(() => Date.now()),[search,setSearch]=useState("");
  const boardRef=useRef<HTMLElement>(null);
  const [fullscreen,setFullscreen]=useState(false);
  const [fullscreenError,setFullscreenError]=useState("");

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
-import { operatorRequest } from "./atende-api";
+import { errorMessage, operatorRequest } from "./atende-api";
 
 type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean; dashboardVisible:boolean };
 const columns = [
@@ -23,13 +23,13 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
   const [newPassword,setNewPassword]=useState("");
   const [newPasswordConfirmation,setNewPasswordConfirmation]=useState("");
   const [creating,setCreating]=useState(false);
-  async function api(path:string,body?:unknown) {
+  async function api<T>(path:string,body?:unknown):Promise<T> {
     const response=await operatorRequest(baseUrl,token,`/admin${path}`,{method:body===undefined?"GET":"PUT",...(body===undefined?{}:{body:JSON.stringify(body)})});
-    const data=await response.json();
-    if(!response.ok) throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message || "Não foi possível salvar.");
-    return data;
+    const data:unknown=await response.json();
+    if(!response.ok) throw new Error(errorMessage(data));
+    return data as T;
   }
-  useEffect(()=>{let live=true; setLoading(true); api("").then(data=>{if(live){setUsers(data.users);setRecipients(data.unassignedUserIds||[]);}}).catch(e=>{if(live)setError(e.message);}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
+  useEffect(()=>{let live=true; setLoading(true); api<{users:Member[];unassignedUserIds?:string[]}>("").then(data=>{if(live){setUsers(data.users);setRecipients(data.unassignedUserIds||[]);}}).catch(e=>{if(live)setError(e.message);}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
   async function createUser(event:FormEvent<HTMLFormElement>){
     event.preventDefault();setError("");setFeedback("");
     if(newPassword!==newPasswordConfirmation){setError("As senhas precisam ser iguais.");return;}
@@ -39,8 +39,8 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
         method:"POST",
         body:JSON.stringify({username:newUsername,displayName:newDisplayName,password:newPassword}),
       });
-      const data=await response.json();
-      if(!response.ok)throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message||"Não foi possível criar a conta.");
+      const data=await response.json() as Member;
+      if(!response.ok)throw new Error(errorMessage(data));
       setUsers(current=>[...current,data]);
       setNewUsername("");setNewDisplayName("");setNewPassword("");setNewPasswordConfirmation("");
       setFeedback(`Conta de ${data.displayName} criada. A pessoa já pode entrar com a senha definida.`);
@@ -52,7 +52,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
     setSavingUsers(current=>[...current,user.id]);setError("");setFeedback("");
     setUsers(current=>current.map(item=>item.id===user.id?next:item));
     try {
-      const updated=await api(`/users/${user.id}`,{role:next.role,active:next.active,canSend:next.canSend,canAssign:next.canAssign,dashboardVisible:next.dashboardVisible});
+      const updated=await api<Member>(`/users/${user.id}`,{role:next.role,active:next.active,canSend:next.canSend,canAssign:next.canAssign,dashboardVisible:next.dashboardVisible});
       setUsers(current=>current.map(item=>item.id===user.id?updated:item));
       if(!updated.active)setRecipients(current=>current.filter(id=>id!==user.id));
       setFeedback(`Permissões de ${updated.displayName} salvas.`);
@@ -62,7 +62,7 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
   async function changeRecipient(userId:string,checked:boolean){
     setSavingRecipients(current=>[...current,userId]);setError("");setFeedback("");
     setRecipients(current=>checked?[...current,userId]:current.filter(id=>id!==userId));
-    try{await api(`/notifications/${userId}`,{enabled:checked});setFeedback("Destinatários das notificações atualizados.");}
+    try{await api<unknown>(`/notifications/${userId}`,{enabled:checked});setFeedback("Destinatários das notificações atualizados.");}
     catch(e){setRecipients(current=>checked?current.filter(id=>id!==userId):[...new Set([...current,userId])]);setError(e instanceof Error?e.message:"Erro ao salvar.");}
     finally{setSavingRecipients(current=>current.filter(id=>id!==userId));}
   }

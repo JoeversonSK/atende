@@ -1,6 +1,7 @@
 "use client";
 import {useState, type FormEvent} from "react";
 import {ArrowLeft,KeyRound} from "lucide-react";
+import {errorMessage} from "./atende-api";
 export function PasswordRecovery({baseUrl,initialUsername,back}:{baseUrl:string;initialUsername:string;back:()=>void}){
   const [username,setUsername]=useState(initialUsername);
   const [code,setCode]=useState("");
@@ -15,8 +16,8 @@ export function PasswordRecovery({baseUrl,initialUsername,back}:{baseUrl:string;
     setBusy(true);
     try{
       const response=await fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/reset-password`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,code:code.trim(),password})});
-      const data=await response.json();
-      if(!response.ok)throw new Error(Array.isArray(data.message)?data.message.join(" "):data.message||"Não foi possível redefinir a senha.");
+      const data:unknown=await response.json();
+      if(!response.ok)throw new Error(errorMessage(data));
       setDone(true);setPassword("");setConfirm("");setCode("");
     }catch(e){setError(e instanceof Error?e.message:"Servidor indisponível. Tente novamente.");}
     finally{setBusy(false);}

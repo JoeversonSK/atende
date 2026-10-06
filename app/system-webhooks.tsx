@@ -28,7 +28,10 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
         operatorRequest(baseUrl, token, path),
         operatorRequest(baseUrl, token, `${path}/catalog`),
       ]);
-      const [list, catalog] = await Promise.all([listResponse.json(), catalogResponse.json()]);
+      const [list, catalog] = await Promise.all([
+        listResponse.json() as Promise<Hook[]>,
+        catalogResponse.json() as Promise<{ events?: string[] }>,
+      ]);
       if (!listResponse.ok) throw new Error(messageOf(list));
       if (!catalogResponse.ok) throw new Error(messageOf(catalog));
       setHooks(Array.isArray(list) ? list : []);
@@ -62,7 +65,7 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
         method: kind === "test" ? "POST" : kind === "delete" ? "DELETE" : "PUT",
         ...(kind === "toggle" ? { body: JSON.stringify({ active: !hook.active }) } : {}),
       });
-      const data = await response.json();
+      const data = await response.json() as { success?: boolean };
       if (!response.ok || data.success === false) throw new Error(messageOf(data));
       setFeedback(kind === "test" ? "Teste entregue ao destino." : kind === "delete" ? "Webhook excluído." : "Estado atualizado.");
       if (kind !== "test") await load();
