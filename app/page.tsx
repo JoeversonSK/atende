@@ -3,15 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { LoginScreen, SettingsScreen } from "./account-panels";
-import { apiRequest, errorMessage, operatorJson, operatorRequest, operatorStorageKey, request, type ApiConfig } from "./atende-api";
+import { apiRequest, errorMessage, operatorJson, operatorRequest, request, type ApiConfig } from "./atende-api";
 import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } from "./operator-activity";
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
-import { connectionOrigin } from "./connection-origin";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
-import { ContactProfile } from "./contact-profile";
 import { eventId, listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId, toChat, toMessage,
-  type Chat, type Message, type MessageMedia, type MessageWithTimestamp } from "./conversation-model";
+  type Chat, type Message, type MessageWithTimestamp } from "./conversation-model";
+import { ContactAvatar } from "./conversations/components/contact-avatar";
+import { ConversationSidebar } from "./conversations/components/conversation-sidebar";
+import { ConversationProfile } from "./conversations/components/conversation-profile";
+import { ConversationThread } from "./conversations/components/conversation-thread";
+import { MessageComposer } from "./conversations/components/message-composer";
+import { PasteFilePreview } from "./conversations/components/paste-file-preview";
+import { defaultNotificationPreferences, emptyConfig, loadConfig, loadNotificationPreferences, loadOperator,
+  notificationStorageKey, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
 import {
@@ -60,26 +66,6 @@ type Config = ApiConfig;
 type PendingPaste =
   | { kind: "files"; files: File[]; omittedFiles: number; chatId: string; chatName: string }
   | { kind: "text"; text: string; chatId: string; chatName: string };
-function PasteFilePreview({ file, index }: { file: File; index: number }) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewFailed, setPreviewFailed] = useState(false);
-  const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : file.type.startsWith("audio/") ? "audio" : "file";
-  useEffect(() => {
-    if (kind === "file") return;
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    setPreviewFailed(false);
-    return () => URL.revokeObjectURL(url);
-  }, [file, kind]);
-  const label = kind === "image" ? "Imagem" : kind === "video" ? "Vídeo" : kind === "audio" ? "Áudio" : file.type === "application/pdf" ? "PDF" : "Arquivo";
-  return <li className="paste-preview-file">
-    {previewUrl && !previewFailed && kind === "image" && <img className="paste-file-image" src={previewUrl} alt={`Prévia da imagem ${file.name || index + 1}`} onError={() => setPreviewFailed(true)} />}
-    {previewUrl && !previewFailed && kind === "video" && <video className="paste-file-video" src={previewUrl} controls preload="metadata" onError={() => setPreviewFailed(true)} />}
-    {previewUrl && !previewFailed && kind === "audio" && <audio className="paste-file-audio" src={previewUrl} controls preload="metadata" onError={() => setPreviewFailed(true)} />}
-    {(kind === "file" || previewFailed) && <div className="paste-file-generic"><Paperclip size={24}/><span>{previewFailed ? "Prévia indisponível" : label}</span></div>}
-    <div className="paste-file-meta"><Paperclip size={17}/><span>{file.name || `${label} colado ${index + 1}`}</span><small>{label} · {Math.max(1, Math.ceil(file.size / 1024))} KB</small></div>
-  </li>;
-}
 type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
 type Account = { name: string; phone: string };
 type Assignment = {
@@ -88,381 +74,8 @@ type Assignment = {
   updatedAt?: string;
 };
 type Operator = OperatorIdentity;
-export type NotificationPreferences = {
-  enabled: boolean;
-  desktop: boolean;
-  sound: boolean;
-  notifyMessages: boolean;
-  notifyAssignments: boolean;
-  showPreview: boolean;
-  soundType: "classic" | "soft" | "bell" | "urgent" | "custom";
-  volume: number;
-};
+export type { NotificationPreferences } from "./conversations/workspace-storage";
 type CustomNotificationSound = { filename: string; mimetype: string; base64: string };
-const storageKey = "atende-openwa-config";
-const notificationStorageKey = "atende-notification-preferences";
-const defaultNotificationPreferences: NotificationPreferences = {
-  enabled: false,
-  desktop: true,
-  sound: true,
-  notifyMessages: true,
-  notifyAssignments: true,
-  showPreview: true,
-  soundType: "classic",
-  volume: 70,
-};
-const emptyConfig: Config = {
-  baseUrl: "http://127.0.0.1:2785",
-  apiKey: "",
-  sessionId: "",
-};
-const emojis = ["😀", "😂", "😍", "🙏", "👍", "🎉", "❤️", "👋"];
-
-const initials = (value: string) =>
-  value
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((word) => word[0])
-    .join("")
-    .toUpperCase() || "WA";
-function ContactAvatar({
-  chat,
-  className = "wa-avatar wa-contact",
-}: {
-  chat: Pick<Chat, "name" | "avatar">;
-  className?: string;
-}) {
-  return (
-    <span className={className}>
-      {chat.avatar ? (
-        <img src={chat.avatar} alt="" referrerPolicy="no-referrer" />
-      ) : (
-        initials(chat.name)
-      )}
-    </span>
-  );
-}
-function loadConfig(): Config {
-  try {
-    const saved =
-      localStorage.getItem(storageKey) ||
-      sessionStorage.getItem(storageKey) ||
-      "{}";
-    const config = { ...emptyConfig, ...JSON.parse(saved) };
-    return {
-      ...config,
-      baseUrl: connectionOrigin(config.baseUrl, window.location.origin),
-    };
-  } catch {
-    return { ...emptyConfig, baseUrl: window.location.origin };
-  }
-}
-function persistConfig(config: Config) {
-  const saved = JSON.stringify(config);
-  localStorage.setItem(storageKey, saved);
-  sessionStorage.setItem(storageKey, saved);
-}
-function loadOperator(): { user: Operator; token: string } | null {
-  try {
-    return JSON.parse(localStorage.getItem(operatorStorageKey) || "null");
-  } catch {
-    return null;
-  }
-}
-function persistOperator(value: { user: Operator; token: string } | null) {
-  if (value) localStorage.setItem(operatorStorageKey, JSON.stringify(value));
-  else localStorage.removeItem(operatorStorageKey);
-}
-function loadNotificationPreferences(userId: string): NotificationPreferences {
-  try {
-    const key = `${notificationStorageKey}:${userId}`;
-    let saved = localStorage.getItem(key);
-    if (!saved && loadOperator()?.user.id === userId) {
-      saved = localStorage.getItem(notificationStorageKey);
-      if (saved) { localStorage.setItem(key, saved); localStorage.removeItem(notificationStorageKey); }
-    }
-    return {
-      ...defaultNotificationPreferences,
-      ...JSON.parse(saved || "{}"),
-    };
-  } catch {
-    return defaultNotificationPreferences;
-  }
-}
-function MessageText({ text }: { text: string }) {
-  const parts: (string | { url: string })[] = [];
-  const pattern = /https?:\/\/[^\s<>"']+/gi;
-  let cursor = 0,
-    match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    if (match.index > cursor) parts.push(text.slice(cursor, match.index));
-    const raw = match[0],
-      trailing = raw.match(/[),.!?;:\]}]+$/)?.[0] || "";
-    const url = trailing ? raw.slice(0, -trailing.length) : raw;
-    if (url) parts.push({ url });
-    if (trailing) parts.push(trailing);
-    cursor = match.index + raw.length;
-  }
-  if (cursor < text.length) parts.push(text.slice(cursor));
-  const renderText = (value: string, key: string) => {
-    const fragments: React.ReactNode[] = [];
-    const bold = /\*([^*\n]+)\*/g;
-    let start = 0,
-      boldMatch: RegExpExecArray | null;
-    while ((boldMatch = bold.exec(value))) {
-      if (boldMatch.index > start)
-        fragments.push(value.slice(start, boldMatch.index));
-      fragments.push(
-        <strong key={`${key}-bold-${boldMatch.index}`}>{boldMatch[1]}</strong>,
-      );
-      start = boldMatch.index + boldMatch[0].length;
-    }
-    if (start < value.length) fragments.push(value.slice(start));
-    return fragments.length ? fragments : value;
-  };
-  return (
-    <p>
-      {parts.map((part, index) =>
-        typeof part === "string" ? (
-          <span key={`text-${index}`}>{renderText(part, `text-${index}`)}</span>
-        ) : (
-          <a
-            className="wa-message-link"
-            href={part.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            key={`${part.url}-${index}`}
-          >
-            {part.url}
-          </a>
-        ),
-      )}
-    </p>
-  );
-}
-
-const mediaSource = (media: MessageMedia) =>
-  media.data
-    ? /^https?:\/\//i.test(media.data)
-      ? media.data
-      : `data:${media.mimetype};base64,${media.data}`
-    : "";
-
-function MessageAttachment({
-  message,
-  config,
-  chatId,
-}: {
-  message: Message;
-  config: Config;
-  chatId: string;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const inlineVideoRef = useRef<HTMLVideoElement>(null);
-  const viewerVideoRef = useRef<HTMLVideoElement>(null);
-  const [source, setSource] = useState(
-    message.media ? mediaSource(message.media) : "",
-  );
-  const [failed, setFailed] = useState(false);
-  const [retry, setRetry] = useState(0);
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const media = message.media;
-  const mime = media?.mimetype.toLowerCase() || "";
-  const isImage =
-    message.type === "image" ||
-    message.type === "sticker" ||
-    mime.startsWith("image/");
-  const isVideo =
-    message.type === "video" ||
-    message.type === "gif" ||
-    mime.startsWith("video/");
-  const isAudio =
-    ["audio", "voice", "ptt"].includes(message.type) ||
-    mime.startsWith("audio/");
-  const closeViewer = useCallback(() => {
-    viewerVideoRef.current?.pause();
-    setViewerOpen(false);
-  }, []);
-  const openViewer = () => {
-    inlineVideoRef.current?.pause();
-    setViewerOpen(true);
-  };
-  useEffect(() => {
-    if (!viewerOpen) return;
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeViewer();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [closeViewer, viewerOpen]);
-  useEffect(() => {
-    if (!media) return;
-    if (media.data) {
-      setSource(mediaSource(media));
-      setFailed(false);
-      return;
-    }
-    const element = host.current;
-    if (!element) return;
-    let active = true,
-      objectUrl = "";
-    const load = async () => {
-      try {
-        const response = await request(
-          config,
-          `/sessions/${encodeURIComponent(config.sessionId)}/messages/${encodeURIComponent(chatId)}/${encodeURIComponent(message.id)}/media`,
-        );
-        if (response.ok) {
-          objectUrl = URL.createObjectURL(await response.blob());
-          if (active) {
-            setSource(objectUrl);
-            setFailed(false);
-          }
-          return;
-        }
-        // Older rows may only contain the media envelope. Ask the connected WhatsApp session for
-        // the recent message again so a retry can recover it without opening another page.
-        const historyResponse = await request(
-          config,
-          `/sessions/${encodeURIComponent(config.sessionId)}/messages/${encodeURIComponent(chatId)}/history?limit=100&includeMedia=true`,
-        );
-        if (!historyResponse.ok) throw new Error("Mídia indisponível");
-        const wanted = new Set(
-          message.identityIds?.length
-            ? message.identityIds.flatMap(messageIdentityIds)
-            : messageIdentityIds(message.id),
-        );
-        const record = listFrom(await historyResponse.json()).find((item) => {
-          const ids = [item.waMessageId, item.messageId, item.id]
-            .map(serializedMessageId)
-            .filter(Boolean)
-            .flatMap(messageIdentityIds);
-          return ids.some((id) => wanted.has(id));
-        });
-        const recovered = record
-          ? toMessage(record, "history").media
-          : undefined;
-        if (!recovered?.data) throw new Error("Mídia indisponível");
-        if (active) {
-          setSource(mediaSource(recovered));
-          setFailed(false);
-        }
-      } catch {
-        if (active) setFailed(true);
-      }
-    };
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          observer.disconnect();
-          void load();
-        }
-      },
-      { rootMargin: "300px" },
-    );
-    observer.observe(element);
-    return () => {
-      active = false;
-      observer.disconnect();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [chatId, config, media, message.id, retry]);
-  if (!media) return null;
-  const visual =
-    source && isImage ? (
-      <button
-        className="wa-image-expand"
-        onClick={openViewer}
-        aria-label="Ampliar imagem"
-      >
-        <img
-          className="wa-media-image"
-          src={source}
-          alt={message.type === "sticker" ? "Figurinha" : "Imagem"}
-        />
-      </button>
-    ) : source && isVideo ? (
-      <video
-        ref={inlineVideoRef}
-        className="wa-media-video"
-        controls
-        preload="metadata"
-        playsInline
-        src={source}
-        onDoubleClick={openViewer}
-        title="Clique duas vezes para ampliar"
-      />
-    ) : source && isAudio ? (
-      <audio
-        className="wa-media-audio"
-        controls
-        preload="metadata"
-        src={source}
-      />
-    ) : source && message.type === "document" ? (
-      <a
-        className="wa-document"
-        href={source}
-        download={media.filename || "arquivo"}
-      >
-        Baixar {media.filename || "documento"}
-      </a>
-    ) : null;
-  return (
-    <div ref={host} className="wa-media-container">
-      {visual || (
-        <button
-          className="wa-media-placeholder"
-          onClick={() => setRetry((value) => value + 1)}
-        >
-          {failed
-            ? "Mídia indisponível · tentar novamente"
-            : "Carregando mídia…"}
-        </button>
-      )}
-      {viewerOpen && source && (isImage || isVideo) && (
-        <div
-          className="wa-media-viewer"
-          role="dialog"
-          aria-modal="true"
-          aria-label={
-            isVideo ? "Visualizador de vídeo" : "Visualizador de imagem"
-          }
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeViewer();
-          }}
-        >
-          <div className="wa-media-viewer-card">
-            <header>
-              <strong>
-                {media.filename || (isVideo ? "Vídeo" : "Imagem")}
-              </strong>
-              <button onClick={closeViewer} aria-label="Fechar visualizador">
-                <X size={22} />
-              </button>
-            </header>
-            {isVideo ? (
-              <video
-                ref={viewerVideoRef}
-                controls
-                autoPlay
-                playsInline
-                src={source}
-              />
-            ) : (
-              <img
-                className="wa-media-viewer-image"
-                src={source}
-                alt="Imagem ampliada"
-              />
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function Home() {
   const [overview, setOverview] = useState<SupportOverview>(emptyOverview);
@@ -2982,212 +2595,27 @@ export default function Home() {
             }}
           />
         )}
-        <aside className="wa-sidebar">
-          <div className="wa-search-bar">
-            <label>
-              <Search size={18} />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                aria-label="Buscar contato ou número"
-                placeholder="Buscar contato ou número…"
-              />
-            </label>
-            <div className="wa-filter-control" ref={filterPopoverRef}>
-              <button
-                className={tagFilter ? "active" : ""}
-                onClick={() => {
-                  setFilterMenuOpen((open) => !open);
-                  if (filterMenuOpen) setFilterMenuPage("main");
-                }}
-                aria-label="Adicionar filtros"
-                aria-expanded={filterMenuOpen}
-              >
-                <Filter size={18} />
-                {tagFilter && <i aria-hidden="true" />}
-              </button>
-              {filterMenuOpen && (
-                <section
-                  className="wa-filter-popover"
-                  aria-label="Filtros das conversas"
-                >
-                  <header>
-                    {filterMenuPage === "tags" && (
-                      <button
-                        className="wa-filter-back"
-                        onClick={() => setFilterMenuPage("main")}
-                        aria-label="Voltar aos filtros"
-                      >
-                        <ArrowLeft size={16} />
-                      </button>
-                    )}
-                    <span>
-                      {filterMenuPage === "main"
-                        ? "ADICIONAR FILTROS"
-                        : "ETIQUETA"}
-                    </span>
-                    <button
-                      className="wa-filter-close"
-                      onClick={() => {
-                        setFilterMenuOpen(false);
-                        setFilterMenuPage("main");
-                      }}
-                      aria-label="Fechar filtros"
-                    >
-                      <X size={15} />
-                    </button>
-                  </header>
-                  {filterMenuPage === "main" ? (
-                    <button
-                      className="wa-filter-option"
-                      onClick={() => setFilterMenuPage("tags")}
-                    >
-                      <span>
-                        <b>Etiqueta</b>
-                        {tagFilter && <small>{tagFilter}</small>}
-                      </span>
-                      <ChevronRight size={18} />
-                    </button>
-                  ) : (
-                    <div className="wa-filter-tag-list">
-                      <button
-                        className={!tagFilter ? "selected" : ""}
-                        onClick={() => {
-                          setTagFilter("");
-                          setFilterMenuOpen(false);
-                          setFilterMenuPage("main");
-                        }}
-                      >
-                        <span>Todas as etiquetas</span>
-                        {!tagFilter && <Check size={16} />}
-                      </button>
-                      {availableChatTags.map((tag) => (
-                        <button
-                          key={tag}
-                          className={tagFilter === tag ? "selected" : ""}
-                          onClick={() => {
-                            setTagFilter(tag);
-                            setFilterMenuOpen(false);
-                            setFilterMenuPage("main");
-                          }}
-                        >
-                          <span>{tag}</span>
-                          {tagFilter === tag && <Check size={16} />}
-                        </button>
-                      ))}
-                      {!availableChatTags.length && (
-                        <p>Nenhuma etiqueta cadastrada.</p>
-                      )}
-                    </div>
-                  )}
-                </section>
-              )}
-            </div>
-          </div>
-          <div className="wa-filters" aria-label="Filtrar conversas">
-            {(
-              [
-                ["all", "Todas"],
-                ["unread", "Não lidas"],
-                ["mine", "Minhas"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                aria-pressed={filter === value}
-                className={filter === value ? "active" : ""}
-                onClick={() => setFilter(value)}
-              >
-                {label}
-                {value === "unread" && chats.some((c) => c.unread > 0) && (
-                  <span>{chats.filter((c) => c.unread > 0).length}</span>
-                )}
-              </button>
-            ))}
-            {tagFilter && (
-              <button
-                className="wa-applied-filter active"
-                onClick={() => setTagFilter("")}
-                title="Remover filtro de etiqueta"
-              >
-                Etiqueta: {tagFilter}
-                <X size={12} />
-              </button>
-            )}
-          </div>
-          <div className="list-caption">
-            <span>
-              {shownChats.length} conversa{shownChats.length === 1 ? "" : "s"}
-            </span>
-            <span>MAIS RECENTES</span>
-          </div>
-          {syncWarning && (
-            <p className="sync-warning" role="status">
-              {syncWarning}
-            </p>
-          )}
-          <div className="wa-chat-list">
-            {shownChats.length ? (
-              shownChats.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => chooseChat(chat)}
-                  aria-pressed={selected?.id === chat.id}
-                  className={`wa-chat ${selected?.id === chat.id ? "selected" : ""} ${chat.unread ? "has-unread" : ""}`}
-                >
-                  <ContactAvatar chat={chat} />
-                  <span className="wa-chat-copy">
-                    <span>
-                      <b>{chat.name}</b>
-                      <time className={chat.unread ? "unread-time" : ""}>
-                        {chat.time}
-                      </time>
-                    </span>
-                    <span>
-                      <i>{chat.last}</i>
-                      {assignments[chat.id] && (
-                        <span
-                          className="wa-owner-marker"
-                          title={`Atribuído para ${assignments[chat.id].assigneeName}`}
-                          aria-label={`Atribuído para ${assignments[chat.id].assigneeName}`}
-                        >
-                          <svg
-                            width="15"
-                            height="15"
-                            viewBox="0 0 24 24"
-                            fill="currentColor"
-                            aria-hidden="true"
-                          >
-                            <circle cx="12" cy="7" r="4" />
-                            <path d="M4 21v-3a8 8 0 0 1 16 0v3Z" />
-                          </svg>
-                        </span>
-                      )}
-                      {chat.unread > 0 && (
-                        <em>{chat.unread > 99 ? "99+" : chat.unread}</em>
-                      )}
-                    </span>
-                    <span
-                      className={`chat-owner-label ${assignments[chat.id] ? "assigned" : ""}`}
-                    >
-                      <UserRound size={11} />
-                      {assignments[chat.id]?.assigneeName || "Sem responsável"}
-                    </span>
-                  </span>
-                </button>
-              ))
-            ) : (
-              <div className="wa-list-empty">
-                <MessageCircle size={28} />
-                <p>
-                  {config.sessionId
-                    ? "Nenhuma conversa encontrada."
-                    : "Conecte o OpenWA para ver as conversas."}
-                </p>
-              </div>
-            )}
-          </div>
-        </aside>
+        <ConversationSidebar
+          search={search}
+          setSearch={setSearch}
+          filter={filter}
+          setFilter={setFilter}
+          tagFilter={tagFilter}
+          setTagFilter={setTagFilter}
+          filterMenuOpen={filterMenuOpen}
+          setFilterMenuOpen={setFilterMenuOpen}
+          filterMenuPage={filterMenuPage}
+          setFilterMenuPage={setFilterMenuPage}
+          filterPopoverRef={filterPopoverRef}
+          availableChatTags={availableChatTags}
+          shownChats={shownChats}
+          chats={chats}
+          selectedId={selected?.id}
+          assignments={assignments}
+          syncWarning={syncWarning}
+          hasSession={Boolean(config.sessionId)}
+          onChooseChat={chooseChat}
+        />
         <section
           className={`wa-conversation ${draggingFiles ? "is-file-dragging" : ""}`}
           onDragOver={(event) => {
@@ -3284,236 +2712,55 @@ export default function Home() {
                   </button>
                 </div>
               </header>
-              <div
-                ref={messageAreaRef}
-                className="wa-message-area"
-                onScroll={(event) => {
-                  const area = event.currentTarget;
-                  keepAtBottomRef.current =
-                    area.scrollHeight - area.scrollTop - area.clientHeight <
-                    100;
+              <ConversationThread
+                selected={selected}
+                messages={messages}
+                loading={loadingMessages}
+                config={config}
+                areaRef={messageAreaRef}
+                bottomRef={bottomRef}
+                keepAtBottomRef={keepAtBottomRef}
+                onReply={message => {
+                  setReplyingTo(message);
+                  requestAnimationFrame(() => composerInputRef.current?.focus());
                 }}
-              >
-                <p className="wa-encryption">
-                  Histórico da conversa · Atendimento da equipe
-                </p>
-                {loadingMessages ? (
-                  <p className="wa-no-messages">Carregando mensagens…</p>
-                ) : messages.length ? (
-                  messages.map((message) => {
-                    const hasAttachment = Boolean(message.media);
-                    const quotedId = message.quotedMessage?.id;
-                    const quotedOriginal = quotedId
-                      ? messages.find((candidate) => candidate.waMessageId === quotedId || candidate.identityIds?.includes(quotedId))
-                      : undefined;
-                    return (
-                      <div
-                        key={message.id}
-                        id={`wa-message-${message.id}`}
-                        className={`wa-message ${message.mine ? "mine" : ""}`}
-                      >
-                        <article>
-                          {message.forwarded && <span className="wa-forwarded-label"><Reply size={13} />Encaminhada</span>}
-                          {message.quotedMessage && <button type="button" className="wa-quoted-message" onClick={() => quotedOriginal && document.getElementById(`wa-message-${quotedOriginal.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })} title={quotedOriginal ? "Ir para a mensagem original" : undefined}><b>{quotedOriginal ? quotedOriginal.mine ? "Você" : selected.name : "Mensagem respondida"}</b><span>{quotedOriginal?.body || message.quotedMessage.body || "Mensagem original"}</span></button>}
-                          <MessageAttachment
-                            message={message}
-                            config={config}
-                            chatId={selected.id}
-                          />
-                          {message.body &&
-                            !(
-                              hasAttachment &&
-                              [
-                                "Imagem",
-                                "Vídeo",
-                                "Áudio",
-                                "Mensagem de voz",
-                                "Figurinha",
-                                "Documento",
-                              ].includes(message.body)
-                            ) && <MessageText text={message.body} />}
-                          <footer>
-                            {message.waMessageId && <button type="button" className="wa-message-reply" title="Responder a esta mensagem" aria-label="Responder a esta mensagem" onClick={() => { setReplyingTo(message); requestAnimationFrame(() => composerInputRef.current?.focus()); }}><Reply size={14} />Responder</button>}
-                            {message.waMessageId && <button type="button" className="wa-message-forward" title="Encaminhar mensagem para contatos" aria-label="Encaminhar mensagem para contatos" onClick={() => openForward(message)}><Forward size={14} />Encaminhar</button>}
-                            <span>{message.time}</span>
-                            {message.mine && <CheckCheck size={15} />}
-                          </footer>
-                        </article>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <p className="wa-no-messages">
-                    Nenhuma mensagem nesta conversa ainda.
-                  </p>
-                )}
-                <div ref={bottomRef} />
-              </div>
+                onForward={openForward}
+              />
               {replyingTo && <div className="wa-reply-composer-preview"><Reply size={17}/><div><b>Respondendo à mensagem</b><span>{replyingTo.body || "Mídia"}</span></div><button type="button" onClick={() => setReplyingTo(null)} aria-label="Cancelar resposta"><X size={17}/></button></div>}
-              <footer className="wa-composer">
-                <button
-                  ref={flowToggleRef}
-                  className={flowMenuOpen ? "active" : ""}
-                  onClick={() => {
-                    void loadFlows();
-                    setFlowMenuOpen((open) => !open);
-                    setEmojiOpen(false);
-                  }}
-                  aria-label="Enviar fluxo"
-                  title="Fluxos de conversa"
-                >
-                  <GitBranch size={23} />
-                </button>
-                <button
-                  ref={emojiToggleRef}
-                  onClick={() => {
-                    setEmojiOpen(!emojiOpen);
-                    setFlowMenuOpen(false);
-                  }}
-                  aria-label="Emojis"
-                >
-                  <Smile size={25} />
-                </button>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  aria-label="Anexar arquivo"
-                >
-                  <Paperclip size={24} />
-                </button>
-                <input
-                  ref={fileInputRef}
-                  className="wa-file-input"
-                  type="file"
-                  multiple
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files || []);
-                    if (files.length) void sendFiles(files);
-                    event.currentTarget.value = "";
-                  }}
-                />
-                {flowMenuOpen && (
-                  <div className="wa-flow-menu" ref={flowMenuRef}>
-                    <header>
-                      <GitBranch size={17} />
-                      <div>
-                        <b>Fluxos de conversa</b>
-                        <small>Escolha uma sequência para enviar</small>
-                      </div>
-                      <button type="button" onClick={() => setFlowMenuOpen(false)} aria-label="Fechar fluxos de conversa"><X size={16}/></button>
-                    </header>
-                    {flows.length ? (
-                      flows.map((flow) => (
-                        <button
-                          key={flow.id}
-                          disabled={busy}
-                          onClick={() => void sendFlow(flow)}
-                        >
-                          <b>{flow.name}</b>
-                          <span>
-                            {flow.description ||
-                              `${flow.steps.length} mensagem${flow.steps.length === 1 ? "" : "s"}`}
-                          </span>
-                          <em>{flow.steps.length}</em>
-                        </button>
-                      ))
-                    ) : (
-                      <p>Nenhum fluxo ativo. Crie um em Configurações.</p>
-                    )}
-                  </div>
-                )}
-                {emojiOpen && (
-                  <div className="wa-emojis" ref={emojiMenuRef}>
-                    {emojis.map((emoji) => (
-                      <button
-                        key={emoji}
-                        onClick={() => setDraft((value) => value + emoji)}
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {recording ? (
-                  <>
-                    <span className="wa-recording-label">
-                      {recordingPaused ? "Pausado" : "Gravando áudio"}
-                    </span>
-                    <button
-                      onClick={discardRecording}
-                      aria-label="Excluir gravação"
-                    >
-                      <Trash2 size={21} />
-                    </button>
-                    <button
-                      onClick={pauseOrResumeRecording}
-                      aria-label={
-                        recordingPaused ? "Retomar gravação" : "Pausar gravação"
-                      }
-                    >
-                      {recordingPaused ? (
-                        <Play size={21} />
-                      ) : (
-                        <Pause size={21} />
-                      )}
-                    </button>
-                    <button
-                      className="wa-send"
-                      onClick={sendRecording}
-                      aria-label="Enviar áudio"
-                    >
-                      <Send size={21} />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {quickReplyOpen && <div className="quick-reply-menu" id="quick-reply-options" role="listbox" aria-label="Mensagens rápidas">
-                      <small>Mensagens rápidas · ↑ ↓ para escolher · Enter para inserir</small>
-                      {quickReplyMatches.map((reply, index) => <button type="button" role="option" aria-selected={index === quickReplyIndex} id={`quick-reply-${reply.id}`} key={reply.id} className={index === quickReplyIndex ? "active" : ""} onMouseDown={event => event.preventDefault()} onClick={() => insertQuickReply(reply)}><b>/{reply.shortcut}</b><span>{reply.text}</span></button>)}
-                      {!quickReplyMatches.length && <p>{quickReplies.length ? "Nenhuma mensagem com esse atalho." : "Cadastre mensagens em Configurações → Mensagens rápidas."}</p>}
-                    </div>}
-                    <textarea
-                      ref={composerInputRef}
-                      rows={2}
-                      aria-label="Mensagem"
-                      aria-controls={quickReplyOpen ? "quick-reply-options" : undefined}
-                      aria-activedescendant={quickReplyOpen && quickReplyMatches[quickReplyIndex] ? `quick-reply-${quickReplyMatches[quickReplyIndex].id}` : undefined}
-                      value={draft}
-                      onChange={(event) => { setDraft(event.target.value); if (!event.target.value.trim()) setPastedTextPending(false); }}
-                      onPaste={(event) => { if (!event.clipboardData.files.length && event.clipboardData.getData("text/plain")) setPastedTextPending(true); }}
-                      onKeyDown={(event) => {
-                        if (quickReplyOpen && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setQuickReplyDismissed(true); return; }
-                        if (quickReplyOpen && quickReplyMatches.length && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key) && !event.shiftKey) {
-                          event.preventDefault();
-                          if (event.key === "ArrowDown" || event.key === "ArrowUp") setQuickReplyIndex(current => (current + (event.key === "ArrowDown" ? 1 : -1) + quickReplyMatches.length) % quickReplyMatches.length);
-                          else insertQuickReply(quickReplyMatches[Math.min(quickReplyIndex, quickReplyMatches.length - 1)]);
-                          return;
-                        }
-                        if (event.key === "Enter" && !event.shiftKey) {
-                          event.preventDefault();
-                          void sendMessage();
-                        }
-                      }}
-                      placeholder="Digite uma mensagem ou cole um arquivo"
-                    />
-                    {draft.trim() ? (
-                      <button
-                        className="wa-send"
-                        aria-label="Enviar mensagem"
-                        onClick={() => void sendMessage()}
-                      >
-                        <Send size={21} />
-                      </button>
-                    ) : (
-                      <button
-                        aria-label="Gravar áudio"
-                        onClick={startRecording}
-                      >
-                        <Mic size={24} />
-                      </button>
-                    )}
-                  </>
-                )}
-              </footer>
+              <MessageComposer
+                flowToggleRef={flowToggleRef}
+                flowMenuOpen={flowMenuOpen}
+                setFlowMenuOpen={setFlowMenuOpen}
+                loadFlows={loadFlows}
+                setEmojiOpen={setEmojiOpen}
+                emojiToggleRef={emojiToggleRef}
+                emojiOpen={emojiOpen}
+                fileInputRef={fileInputRef}
+                sendFiles={files => { void sendFiles(files); }}
+                flowMenuRef={flowMenuRef}
+                flows={flows}
+                busy={busy}
+                sendFlow={flow => { void sendFlow(flow); }}
+                emojiMenuRef={emojiMenuRef}
+                setDraft={setDraft}
+                recording={recording}
+                recordingPaused={recordingPaused}
+                discardRecording={discardRecording}
+                pauseOrResumeRecording={pauseOrResumeRecording}
+                sendRecording={sendRecording}
+                quickReplyOpen={quickReplyOpen}
+                quickReplyMatches={quickReplyMatches}
+                quickReplyIndex={quickReplyIndex}
+                quickReplies={quickReplies}
+                insertQuickReply={insertQuickReply}
+                composerInputRef={composerInputRef}
+                draft={draft}
+                setPastedTextPending={setPastedTextPending}
+                setQuickReplyDismissed={setQuickReplyDismissed}
+                setQuickReplyIndex={setQuickReplyIndex}
+                sendMessage={sendMessage}
+                startRecording={startRecording}
+              />
             </>
           ) : (
             <div className="wa-welcome">
@@ -3561,120 +2808,33 @@ export default function Home() {
             </div>
           )}
         </section>
-        {selected && (
-          <aside
-            className={`wa-details ${detailsOpen ? "profile-is-open" : "profile-is-closed"}`}
-          >
-            <header>
-              <div>
-                <span className="section-kicker">INFORMAÇÕES</span>
-                <b>Perfil do contato</b>
-              </div>
-              <button
-                onClick={() => setDetailsOpen(false)}
-                aria-label="Fechar perfil"
-              >
-                <X size={20} />
-              </button>
-            </header>
-            <section>
-              <ContactAvatar chat={selected} className="wa-detail-avatar" />
-              <b>{selected.name}</b>
-              <small>{selected.phone || "Telefone não informado"}</small>
-            </section>
-            <section className="wa-assignment">
-              <small>RESPONSÁVEL PELO ATENDIMENTO</small>
-              <strong>
-                {assignment?.assigneeName || "Nenhum atendente atribuído"}
-              </strong>
-              <p>
-                {assignment
-                  ? "Responsável por este atendimento"
-                  : "Assuma para organizar o atendimento."}
-              </p>
-              <button
-                className="wa-primary"
-                disabled={savingAssignment || !operator}
-                onClick={() => saveAssignment()}
-              >
-                {assignment ? "Assumir com minha conta" : "Assumir conversa"}
-              </button>
-              {(operator?.role === "admin" || operator?.canAssign) && (
-                <div className="transfer-controls">
-                  <label>
-                    Encaminhar para
-                    <select
-                      aria-label="Atendente de destino"
-                      value={transferId}
-                      onChange={(e) => setTransferId(e.target.value)}
-                    >
-                      <option value="">Selecione um atendente</option>
-                      {overview.agents.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.displayName}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button
-                    className="wa-primary"
-                    disabled={!transferId || savingAssignment}
-                    onClick={() => saveAssignment(transferId)}
-                  >
-                    Encaminhar atendimento
-                  </button>
-                </div>
-              )}
-              {assignment && (
-                <button
-                  className="wa-unassign"
-                  disabled={savingAssignment}
-                  onClick={clearAssignment}
-                >
-                  Remover atribuição
-                </button>
-              )}
-            </section>
-            <ContactProfile
-              apiKey={config.apiKey}
-              dirtyRef={profileDirtyRef}
-              key={`${config.sessionId}:${selected.id}:${profileReload}`}
-              baseUrl={config.baseUrl}
-              token={operatorToken}
-              sessionId={config.sessionId}
-              chatId={selected.id}
-              contactName={selected.name}
-              contactPhone={selected.phone}
-              onSaved={(data) => {
-                refreshGeneration.current++;
-                setChats((current) =>
-                  current.map((c) =>
-                    c.id === selected.id
-                      ? {
-                          ...c,
-                          name: data.name || data.phone || "Contato",
-                          phone: data.phone,
-                        }
-                      : c,
-                  ),
-                );
-                setSelected((current) =>
-                  current
-                    ? {
-                        ...current,
-                        name: data.name || data.phone || "Contato",
-                        phone: data.phone,
-                      }
-                    : null,
-                );
-                void refreshChats();
-              }}
-              canEdit={
-                operator?.role === "admin" || operator?.canAssign === true
-              }
-            />
-          </aside>
-        )}
+        {selected && <ConversationProfile
+          selected={selected}
+          detailsOpen={detailsOpen}
+          setDetailsOpen={setDetailsOpen}
+          assignment={assignment}
+          savingAssignment={savingAssignment}
+          operator={operator}
+          saveAssignment={targetId => { void saveAssignment(targetId); }}
+          clearAssignment={() => { void clearAssignment(); }}
+          transferId={transferId}
+          setTransferId={setTransferId}
+          agents={overview.agents}
+          config={config}
+          profileDirtyRef={profileDirtyRef}
+          profileReload={profileReload}
+          operatorToken={operatorToken}
+          onContactSaved={data => {
+            refreshGeneration.current++;
+            setChats(current => current.map(chat => chat.id === selected.id
+              ? { ...chat, name: data.name || data.phone || "Contato", phone: data.phone }
+              : chat));
+            setSelected(current => current
+              ? { ...current, name: data.name || data.phone || "Contato", phone: data.phone }
+              : null);
+            void refreshChats();
+          }}
+        />}
       </section>
       <div className="message-alerts" aria-live="polite">
         {teamAlerts.map(alert => <article key={alert.id}>

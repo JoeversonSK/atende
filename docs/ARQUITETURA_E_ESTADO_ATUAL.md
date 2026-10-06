@@ -33,7 +33,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | Assunto | Arquivo/pasta |
 | --- | --- |
 | Instalação local e portas | `README.md`, `docker-compose.yml`, `.env.example` |
-| Interface, navegação, sessão, conversas e envio | `app/page.tsx` |
+| Interface, navegação, sessão, conversas e envio | `app/page.tsx`, `app/conversations/components/`, `app/conversations/workspace-storage.ts` |
 | Tela de login e Ajustes | `app/account-panels.tsx` |
 | Módulos da API | `openwa/src/app.module.ts` |
 | Autenticação e dados da equipe | `openwa/src/modules/operator-auth/operator-auth.service.ts` |
@@ -58,7 +58,9 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| `page.tsx` | Componente principal: autenticação armazenada no navegador, conexão, lista e seleção de chats, mensagens, anexos, gravação de áudio, resposta, encaminhamento, notificações e composição das telas. Ainda é grande; localize a função com `rg` antes de editar. |
+| `page.tsx` | Controlador principal: estados, conexão, lista e seleção de chats, envio, gravação, resposta, encaminhamento, notificações e composição das telas. Ainda concentra regras de orquestração; localize a função com `rg` antes de editar. |
+| `conversations/components/` | Componentes visuais da caixa de entrada: barra lateral e filtros, histórico de mensagens e mídia, compositor, perfil, avatar e prévia de arquivos colados. Recebem estado e ações do controlador em `page.tsx`. |
+| `conversations/workspace-storage.ts` | Tipos, valores iniciais e persistência local da conexão, sessão do operador e preferências de notificação. Não é armazenamento de histórico de conversas. |
 | `atende-api.ts` | Cliente HTTP compartilhado: origem `/api`, cabeçalhos do Atende, leitura do token e tratamento uniforme de erros; `operatorRequest` preserva a resposta HTTP e `operatorJson<T>` tipa a resposta JSON. |
 | `conversation-model.ts` | Tipos e transformações puras de conversas/mensagens, incluindo identificação de mensagens, prévias de mídia e reconciliação. |
 | `operator-activity.tsx` | Estado, requisições e controle visual da atividade do operador e dos atendimentos externos. |
@@ -75,7 +77,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | `message-reconciliation.ts` | Reconciliação de mensagens no cliente. |
 | `connection-origin.ts` | Converte endereço local antigo da API para a origem atual do navegador. |
 
-A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. A tela principal usa `atende-api.ts` para todas as requisições HTTP; `request()` acrescenta `X-API-Key` e `X-Atende-Token`, enquanto `operatorRequest`/`operatorJson<T>` são usados também pelas telas de equipe, fluxos, mensagens rápidas, expediente e webhooks. Outros módulos de contatos e automações ainda têm chamadas específicas próprias. `workspace-polling.ts` conserva as frequências de equipe (4 s), validação do acesso (15 s) e reconciliação visível (15 s, condicionada ao intervalo desde a última atualização), mas as agenda por um só temporizador sem sobreposição por tarefa.
+A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. Para mudanças visuais na conversa, comece por `conversations/components/`; para comportamento de envio, seleção e eventos, comece por `page.tsx`. A tela principal usa `atende-api.ts` para todas as requisições HTTP; `request()` acrescenta `X-API-Key` e `X-Atende-Token`, enquanto `operatorRequest`/`operatorJson<T>` são usados também pelas telas de equipe, fluxos, mensagens rápidas, expediente e webhooks. Outros módulos de contatos e automações ainda têm chamadas específicas próprias. `workspace-polling.ts` conserva as frequências de equipe (4 s), validação do acesso (15 s) e reconciliação visível (15 s, condicionada ao intervalo desde a última atualização), mas as agenda por um só temporizador sem sobreposição por tarefa.
 
 ### API e WhatsApp (`openwa/`)
 
@@ -116,7 +118,7 @@ Leia [`AUTOMACOES.md`](AUTOMACOES.md) antes de mudar esse fluxo. A conexão reco
 - PostgreSQL (volume `atende-postgres`) guarda dados operacionais e tabelas do esquema `openwa`; Redis (`atende-redis`) suporta eventos/cache; a sessão do WhatsApp fica em `atende-openwa`, e a mídia em `atende-media`. Consulte [`MIGRACAO_VOLUME_MIDIA.md`](MIGRACAO_VOLUME_MIDIA.md) antes de atualizar instalações antigas com anexos. **Nunca remova volumes para “corrigir” um erro** sem plano de backup e autorização explícita.
 - A API original do OpenWA usa `X-API-Key`; as rotas Atende usam `X-Atende-Token` e checam permissões. Rotas decoradas com `@Public()` podem dispensar a guarda global de chave de API, mas devem validar o token dentro do controlador/serviço. Preserve o escopo da sessão (`sessionId`) para impedir acesso cruzado.
 - O cadastro inicial usa `GET /api/operator-auth/registration-status` e `POST /api/operator-auth/register`. O `register` só aceita a primeira conta, dentro de transação com trava; toda conta posterior exige `POST /api/operator-auth/admin/users` com token de administrador. O formulário administrativo fica em `app/team-settings.tsx`. Não reabra o registro público para facilitar a entrada de atendentes.
-- `app/page.tsx` guarda a configuração de conexão e a sessão do operador no armazenamento local do navegador. Não imprima tokens, chaves, `.env`, segredo do Apps Script ou conteúdo de clientes em logs/testes/relatórios.
+- `app/conversations/workspace-storage.ts` guarda a configuração de conexão e a sessão do operador no armazenamento local do navegador. Não imprima tokens, chaves, `.env`, segredo do Apps Script ou conteúdo de clientes em logs/testes/relatórios.
 - A aplicação pode enviar mensagens reais a clientes. Teste prévias e validações sem disparo quando possível; não inicie automações em produção só para testar.
 - HTTPS e certificados locais são tratados por `scripts/local-gateway.mjs` e `scripts/create-local-https.ps1`. A disponibilidade de notificações do sistema varia com a origem segura do navegador.
 
