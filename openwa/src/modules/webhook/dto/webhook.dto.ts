@@ -95,10 +95,23 @@ export const WEBHOOK_EVENTS = [
   'call.accepted',
   'call.rejected',
   'call.missed',
+  'contact.updated',
+  'contact.created',
+  'conversation.assigned',
+  'conversation.closed',
+  'team.message.sent',
+  'operator.activity.changed',
+  'automation.completed',
   ...WEBHOOK_RESERVED_EVENTS,
 ] as const;
 
 export class CreateWebhookDto {
+  @ApiPropertyOptional({ description: 'Enable or pause delivery immediately after creation.' })
+  @ToStrictBoolean()
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
+
   @ApiProperty({
     description: 'Webhook URL to receive events',
     example: 'https://your-server.com/webhook',

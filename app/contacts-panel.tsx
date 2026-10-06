@@ -6,6 +6,8 @@ import { ContactImport } from "./contact-import";
 import { ContactEditor } from "./contact-editor";
 
 type Contact = { id: string; name: string; phone?: string; avatar?: string; tags?: string[] };
+const CONTACTS_PER_PAGE = 100;
+const normalizeContactSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, apiKey, sessionId, token, onImported }: {
   contacts: Contact[];
@@ -19,8 +21,10 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   onImported: () => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [missingOnly, setMissingOnly] = useState(false);
-  const [tag, setTag] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagMode, setTagMode] = useState<"all" | "any">("all");
   const [tagSearch, setTagSearch] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
@@ -37,15 +41,23 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   }, [contacts]);
   const tags = useMemo(() => [...tagCounts.keys()].sort((a, b) => a.localeCompare(b, "pt-BR")), [tagCounts]);
   const visibleTags = tags.filter(value => value.toLocaleLowerCase("pt-BR").includes(tagSearch.toLocaleLowerCase("pt-BR")));
-  const normalized = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const query = normalized(search.trim());
-  const missingCount = contacts.filter(contact => !contact.phone).length;
-  const shown = contacts.filter(contact =>
-    !hiddenIds.includes(contact.id) &&
-    (!missingOnly || !contact.phone) &&
-    (!tag || contact.tags?.includes(tag)) &&
-    normalized(`${contact.name} ${contact.phone || "Não informado"}`).includes(query),
-  );
+  const indexedContacts = useMemo(() => contacts.map(contact => ({ contact, searchText: normalizeContactSearch(`${contact.name} ${contact.phone || "Não informado"}`) })), [contacts]);
+  const query = normalizeContactSearch(search.trim());
+  const missingCount = useMemo(() => contacts.filter(contact => !contact.phone).length, [contacts]);
+  const shown = useMemo(() => {
+    const hidden = new Set(hiddenIds);
+    return indexedContacts.filter(({ contact, searchText }) =>
+      !hidden.has(contact.id) &&
+      (!missingOnly || !contact.phone) &&
+      (selectedTags.length === 0 || (tagMode === "all"
+        ? selectedTags.every(value => contact.tags?.includes(value))
+        : selectedTags.some(value => contact.tags?.includes(value)))) &&
+      searchText.includes(query),
+    ).map(({ contact }) => contact);
+  }, [indexedContacts, hiddenIds, missingOnly, selectedTags, tagMode, query]);
+  const pageCount = Math.max(1, Math.ceil(shown.length / CONTACTS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount);
+  const pageContacts = shown.slice((currentPage - 1) * CONTACTS_PER_PAGE, currentPage * CONTACTS_PER_PAGE);
 
   async function remove(contact: Contact) {
     if (!window.confirm(`Excluir ${contact.name} da lista de contatos do Atende? O histórico da conversa e a agenda do WhatsApp serão preservados.`)) return;
@@ -94,16 +106,24 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
       <aside>
         <h2>Etiquetas <span>{tags.length}</span></h2>
         <label className="contact-tag-search"><Search size={16}/><input aria-label="Buscar etiqueta" placeholder="Buscar etiqueta" value={tagSearch} onChange={event => setTagSearch(event.target.value)}/></label>
-        <button className={!tag ? "active" : ""} onClick={() => setTag("")}>Todos os contatos <span>{contacts.length}</span></button>
-        <div className="contact-tag-options">{visibleTags.map(value => <button key={value} className={tag === value ? "active" : ""} onClick={() => setTag(value)}><span>{value}</span><span>{tagCounts.get(value)}</span></button>)}</div>
+        <button type="button" className={!selectedTags.length ? "active" : ""} onClick={() => { setSelectedTags([]); setPage(1); }}>Todos os contatos <span>{contacts.length}</span></button>
+        {selectedTags.length > 1 && <div className="contact-tag-mode" role="group" aria-label="Como combinar etiquetas">
+          <span>Mostrar contatos com:</span>
+          <div>
+            <button type="button" className={tagMode === "all" ? "active" : ""} aria-pressed={tagMode === "all"} onClick={() => { setTagMode("all"); setPage(1); }}>Todas (E)</button>
+            <button type="button" className={tagMode === "any" ? "active" : ""} aria-pressed={tagMode === "any"} onClick={() => { setTagMode("any"); setPage(1); }}>Qualquer uma (OU)</button>
+          </div>
+        </div>}
+        {selectedTags.length > 0 && <p className="contact-tag-selection">{selectedTags.length === 1 ? "Etiqueta" : "Etiquetas"}: {selectedTags.join(", ")}</p>}
+        <div className="contact-tag-options">{visibleTags.map(value => <button type="button" key={value} className={selectedTags.includes(value) ? "active" : ""} aria-pressed={selectedTags.includes(value)} onClick={() => { setSelectedTags(current => current.includes(value) ? current.filter(item => item !== value) : [...current, value]); setPage(1); }}><span>{selectedTags.includes(value) ? "✓ " : ""}{value}</span><span>{tagCounts.get(value)}</span></button>)}</div>
         {tags.length > 0 && !visibleTags.length && <p>Nenhuma etiqueta corresponde à busca.</p>}
         {!tags.length && <p>Nenhuma etiqueta cadastrada.</p>}
       </aside>
       <div className="contacts-main">
-        <div className="contacts-search-row"><label className="contacts-search"><Search size={18}/><input aria-label="Buscar contatos" placeholder="Buscar contato, telefone ou Não informado" value={search} onChange={event => setSearch(event.target.value)}/></label><button className={`contact-missing-filter${missingOnly ? " active" : ""}`} onClick={() => setMissingOnly(current => !current)}>Sem telefone <span>{missingCount}</span></button></div>
+        <div className="contacts-search-row"><label className="contacts-search"><Search size={18}/><input aria-label="Buscar contatos" placeholder="Buscar contato, telefone ou Não informado" value={search} onChange={event => { setSearch(event.target.value); setPage(1); }}/></label><button className={`contact-missing-filter${missingOnly ? " active" : ""}`} onClick={() => { setMissingOnly(current => !current); setPage(1); }}>Sem telefone <span>{missingCount}</span></button></div>
         <div className="contacts-table-wrap"><table>
           <thead><tr><th>Contato</th><th>WhatsApp</th><th>Etiquetas</th><th>Ações</th></tr></thead>
-          <tbody>{shown.map(contact => <tr key={contact.id}>
+          <tbody>{pageContacts.map(contact => <tr key={contact.id}>
             <td><span className="contact-cell"><span className="contact-avatar">{contact.avatar ? <img src={contact.avatar} alt="" referrerPolicy="no-referrer"/> : <UserRound size={20}/>}</span><strong>{contact.name}</strong></span></td>
             <td>{contact.phone ? `+${contact.phone.replace(/\D/g, "")}` : "Não informado"}</td>
             <td><div className="contact-tag-list">{contact.tags?.length ? [...new Set(contact.tags)].sort((a, b) => a.localeCompare(b, "pt-BR")).map(value => <span className="contact-tag" key={value}>{value}</span>) : <span className="contact-no-tags">Sem etiquetas</span>}</div></td>
@@ -114,6 +134,16 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
             </span></td>
           </tr>)}</tbody>
         </table>{!shown.length && <p className="contacts-empty">Nenhum contato encontrado.</p>}</div>
+        {shown.length > 0 && <nav className="contacts-pagination" aria-label="Páginas de contatos">
+          <span>Exibindo {(currentPage - 1) * CONTACTS_PER_PAGE + 1}–{Math.min(currentPage * CONTACTS_PER_PAGE, shown.length)} de {shown.length} contatos</span>
+          {pageCount > 1 && <div>
+            <button type="button" disabled={currentPage === 1} onClick={() => setPage(1)}>Primeira</button>
+            <button type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Anterior</button>
+            <span>Página {currentPage} de {pageCount}</span>
+            <button type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Próxima</button>
+            <button type="button" disabled={currentPage === pageCount} onClick={() => setPage(pageCount)}>Última</button>
+          </div>}
+        </nav>}
       </div>
     </div>
     {importOpen && <ContactImport baseUrl={baseUrl} sessionId={sessionId} token={token} onComplete={onImported} onClose={() => setImportOpen(false)}/>}

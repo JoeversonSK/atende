@@ -151,6 +151,7 @@ export class WebhookService implements OnModuleInit, OnModuleDestroy {
       sessionId,
       url: dto.url,
       events: dto.events || ['message.received'],
+      active: dto.active ?? true,
       secret: dto.secret || null,
       headers: dto.headers || {},
       filters: dto.filters ?? null,

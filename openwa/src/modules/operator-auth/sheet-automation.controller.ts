@@ -6,6 +6,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { DataSource } from 'typeorm';
 import { Public } from '../auth/decorators/auth.decorators';
 import { MessageService } from '../message/message.service';
+import { WebhookService } from '../webhook/webhook.service';
 import { OperatorAuthService } from './operator-auth.service';
 import { ContactImportService, normalizeImportPhone } from './contact-import.controller';
 import { ContactData, emptyContact } from './contact-profile.controller';
@@ -22,7 +23,7 @@ type SheetRule = {
   controlNameColumn: string; detailsNameColumn: string; legalNameColumn: string;
 };
 type SheetRows = { headers: string[]; rows: Record<string, string>[]; rowNumbers: number[] };
-const editableFields = new Set(['name', 'firstName', 'lastName', 'email', 'company', 'document', 'address', 'tags']);
+const editableFields = new Set(['name', 'firstName', 'lastName', 'email', 'company', 'document', 'address', 'tags', 'status', 'serviceType', 'priority', 'sequences', 'campaigns']);
 export const normalizeCnpj = (value: unknown) => String(value ?? '').replace(/\D/g, '');
 export const extractCnpjs = (value: unknown) => [...new Set((String(value ?? '').match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14}/g) || [])
   .map(normalizeCnpj).filter(cnpj => cnpj.length === 14))];
@@ -55,6 +56,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private readonly running = new Set<string>();
   private readonly paused = new Set<string>();
+  private publish(sessionId: string, rule: SheetRule, result: Record<string, unknown>) {
+    try { void this.modules.get(WebhookService, { strict: false }).dispatch(sessionId, 'automation.completed',
+      { automationId: rule.id, name: rule.name, mode: rule.mode, spreadsheetId: rule.spreadsheetId, result }).catch(() => undefined); }
+    catch { /* O webhook não deve interromper a automação. */ }
+  }
   constructor(
     @InjectDataSource('data') private readonly db: DataSource,
     private readonly auth: OperatorAuthService,
@@ -176,7 +182,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const mappings = (Array.isArray(row.mappings) ? row.mappings : []).map((item: unknown) => {
       const value = item && typeof item === 'object' ? item as Record<string, unknown> : {};
       return { column: String(value.column || '').trim(), target: String(value.target || '').trim() };
-    }).filter(item => item.column && item.target);
+    });
     const messageTemplate = String(row.messageTemplate || '').trim();
     const intervalMinutes = Number(row.intervalMinutes || 60);
     const sendPace = row.sendPace === '1-5' ? '1-5' : '5-10';
@@ -194,7 +200,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Confira a aba Clientes, os nomes das colunas e o intervalo do mês anterior.');
     if (mode === 'monthlyCall' && calledValue !== 'Nós chamamos')
       throw new BadRequestException('A primeira etapa deve registrar “Nós chamamos” para avançar corretamente para 2x e 3x.');
-    if (mode === 'contacts' && (!phoneColumn || phoneColumn.length > 120 || mappings.length > 40 || mappings.some(item => item.column.length > 120 || !(editableFields.has(item.target) || /^custom:.{1,80}$/.test(item.target)))))
+    if (mode === 'contacts' && (!phoneColumn || phoneColumn.length > 120 || mappings.length > 40 || mappings.some(item => !item.column || item.column.length > 120 || !(editableFields.has(item.target) || /^custom:.{1,80}$/.test(item.target))) || new Set(mappings.map(item => item.target)).size !== mappings.length))
       throw new BadRequestException('Revise o mapeamento das colunas e informe a coluna do telefone.');
     if (messageTemplate.length > 4000 || ((row.sendMessage === true || mode !== 'contacts') && !messageTemplate)) throw new BadRequestException('Escreva uma mensagem de até 4.000 caracteres.');
     if (![15, 30, 60, 180, 360, 1440].includes(intervalMinutes)) throw new BadRequestException('Intervalo de atualização inválido.');
@@ -206,7 +212,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     await this.auth.requireAdmin(token);
     const { sessionId } = await this.auth.connectionContext(token);
     const value = this.normalize(input);
-    const [existing] = id ? await this.db.query('SELECT mode,active FROM openwa.sheet_automations WHERE id=$1 AND session_id=$2', [id, sessionId]) : [];
+    const [existing] = id ? await this.db.query('SELECT mode,active,spreadsheet_id,sheet_range,details_range FROM openwa.sheet_automations WHERE id=$1 AND session_id=$2', [id, sessionId]) : [];
     if (id && !existing) throw new ConflictException('Automação não encontrada.');
     if (existing && existing.mode !== value.mode) throw new ConflictException('Crie outra automação para usar um tipo diferente.');
     if (existing?.active) throw new ConflictException('Pause a automação antes de alterar a configuração.');
@@ -224,6 +230,12 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
           value.mode, value.detailsRange, value.controlCnpjColumn, value.detailsCnpjColumn, value.calledColumn, value.calledValue,
           value.controlNameColumn, value.detailsNameColumn, value.legalNameColumn, value.sendPace]);
       if (!result.length) throw new ConflictException('Automação não encontrada.');
+      if ((existing.spreadsheet_id && existing.spreadsheet_id !== value.spreadsheetId) ||
+          (existing.sheet_range && existing.sheet_range !== value.range) ||
+          (existing.details_range && existing.details_range !== value.detailsRange)) {
+        await this.db.query('DELETE FROM openwa.sheet_automation_rows WHERE automation_id=$1', [ruleId]);
+        await this.db.query('UPDATE openwa.sheet_automations SET call_round=1,last_run_at=NULL,next_send_at=NULL WHERE id=$1 AND session_id=$2', [ruleId, sessionId]);
+      }
     } else {
       await this.db.query(`INSERT INTO openwa.sheet_automations
         (id,session_id,name,spreadsheet_id,sheet_range,phone_column,mappings,message_template,send_message,active,interval_minutes,
@@ -694,8 +706,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         controlNameColumn: raw.control_name_column, detailsNameColumn: raw.details_name_column, legalNameColumn: raw.legal_name_column };
       const monthSheet = rule.mode === 'monthlyCall' ? previousMonthSheet() : '';
       const sheet = await this.fetchSheet({ ...rule, range: monthSheet ? rule.range.replace(/^MES_ANTERIOR!/, `${monthSheet}!`) : rule.range });
-      if (rule.mode === 'monthlyCall') return await this.executeMonthlyCalls(sessionId, id, rule, sheet, monthSheet);
-      if (rule.mode === 'cnpjCall') return await this.executeCnpjCalls(sessionId, id, rule, sheet);
+      if (rule.mode === 'monthlyCall') { const result = await this.executeMonthlyCalls(sessionId, id, rule, sheet, monthSheet); this.publish(sessionId, rule, result); return result; }
+      if (rule.mode === 'cnpjCall') { const result = await this.executeCnpjCalls(sessionId, id, rule, sheet); this.publish(sessionId, rule, result); return result; }
       if (!sheet.headers.includes(rule.phoneColumn) || rule.mappings.some(mapping => !sheet.headers.includes(mapping.column)))
         throw new BadRequestException('Uma coluna mapeada não existe no cabeçalho da planilha.');
       if (rule.sendMessage && [...rule.messageTemplate.matchAll(/{{\s*([^{}]{1,120})\s*}}/g)].some(match => !sheet.headers.includes(match[1].trim())))
@@ -756,7 +768,9 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
         [id, failed ? `${failed} mensagem(ns) falharam. Essas linhas não serão reenviadas automaticamente; revise o contato e altere a linha para tentar de novo.` : null]);
       if (changed.length <= work.length) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);
-      return { total: sheet.rows.length, updated, unchanged: sheet.rows.length - changed.length, pending: changed.length - work.length, sent, failed };
+      const result = { total: sheet.rows.length, updated, unchanged: sheet.rows.length - changed.length, pending: changed.length - work.length, sent, failed };
+      this.publish(sessionId, rule, result);
+      return result;
     } catch (error) {
       await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
         [id, error instanceof Error ? error.message.slice(0, 500) : 'Falha na sincronização']).catch(() => undefined);
@@ -771,8 +785,14 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const lastName = field('lastName') || names.join(' ');
     const tags = field('tags').split(',').map(value => value.trim()).filter(Boolean);
     const profile: Record<string, string> = {};
-    for (const mapping of rule.mappings) if (row[mapping.column] && !['name', 'firstName', 'lastName', 'tags'].includes(mapping.target))
-      profile[mapping.target] = row[mapping.column];
+    for (const mapping of rule.mappings) if (row[mapping.column] && !['name', 'firstName', 'lastName', 'tags'].includes(mapping.target)) {
+      const value = row[mapping.column].trim();
+      if (mapping.target === 'status' && !['open', 'pending', 'closed'].includes(value))
+        throw new BadRequestException(`Status inválido na coluna “${mapping.column}”: use open, pending ou closed.`);
+      if (mapping.target === 'priority' && !['low', 'normal', 'high'].includes(value))
+        throw new BadRequestException(`Prioridade inválida na coluna “${mapping.column}”: use low, normal ou high.`);
+      profile[mapping.target] = value;
+    }
     return { importRow: { firstName, lastName, phone: row[rule.phoneColumn], tags }, profile };
   }
   private async patchProfile(sessionId: string, chatId: string, fields: Record<string, string>) {
@@ -788,7 +808,11 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
           const old = custom.find(item => item.label === label);
           data.custom = old ? custom.map(item => item.label === label ? { ...item, value } : item)
             : [...custom, { id: randomUUID(), label, value }];
-        } else if (['email', 'company', 'document', 'address'].includes(target)) (data as unknown as Record<string, unknown>)[target] = value;
+        } else if (['sequences', 'campaigns'].includes(target)) {
+          const key = target as 'sequences' | 'campaigns';
+          data[key] = value.split(',').map(item => item.trim()).filter(Boolean).slice(0, 50);
+        } else if (['email', 'company', 'document', 'address', 'status', 'serviceType', 'priority'].includes(target))
+          (data as unknown as Record<string, unknown>)[target] = value;
       }
       await db.query(`UPDATE openwa.contact_profiles SET data=$3::jsonb,revision=revision+1,updated_at=NOW()
         WHERE session_id=$1 AND chat_id=$2`, [sessionId, chatId, JSON.stringify(data)]);

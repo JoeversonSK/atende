@@ -109,6 +109,9 @@ services:
       DISCORD_UNASSIGNED_WEBHOOK_URL: ${DISCORD_UNASSIGNED_WEBHOOK_URL:-}
     volumes:
       - atende-openwa:/app/data
+      # Em instalações existentes, copie /app/data/media do volume antigo antes de recriar o serviço.
+      # Consulte docs/MIGRACAO_VOLUME_MIDIA.md; o volume antigo não é apagado.
+      - atende-media:/app/data/media
     ports:
       - "127.0.0.1:2785:2785"
     expose:
@@ -125,6 +128,7 @@ volumes:
   atende-postgres:
   atende-redis:
   atende-openwa:
+  atende-media:
 
 networks:
   atende-network:

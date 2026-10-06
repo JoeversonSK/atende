@@ -1,0 +1,122 @@
+# Guia de continuidade do Atende para outra IA
+
+Atualizado em 03/10/2026. Este arquivo é um **mapa do código existente**, não uma especificação de funcionalidades ainda não implementadas. Antes de alterar algo, confira o estado atual com `git status`, leia os arquivos indicados e confirme os fluxos em execução. O repositório pode conter alterações locais não commitadas.
+
+## 1. O que é o sistema
+
+O Atende é uma central de atendimento multiusuário conectada ao WhatsApp. O operador usa um painel web para conversar com contatos, enviar mídia, responder/encaminhar mensagens, organizar contatos e atribuir/concluir atendimentos. Administradores configuram equipe, permissões, fluxos, mensagens rápidas, horário de funcionamento, automações por planilha e webhooks. O painel operacional mostra fila, atendimentos, tempos e disponibilidade dos operadores.
+
+```
+Navegador → web :3000 (ou HTTPS :443)
+              ├─ interface React/vinext
+              └─ proxy /api e /socket.io → openwa :2785
+                                          ├─ PostgreSQL: dados operacionais
+                                          ├─ SQLite local: chaves/API e auditoria do OpenWA
+                                          ├─ Redis: presença/eventos/cache
+                                          └─ WhatsApp Web via navegador Chromium
+```
+
+O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro Compose em `openwa/`, pertencente ao projeto-base, que não substitui o da raiz. O OpenWA possui um dashboard próprio em `openwa/dashboard/`; **a interface Atende mostrada aos usuários está em `app/`**, não nesse dashboard.
+
+## 2. Primeiros arquivos a ler
+
+| Assunto | Arquivo/pasta |
+| --- | --- |
+| Instalação local e portas | `README-LOCAL.md`, `docker-compose.yml`, `.env.example` |
+| Interface, navegação, sessão, conversas e envio | `app/page.tsx` |
+| Tela de login e Ajustes | `app/account-panels.tsx` |
+| Módulos da API | `openwa/src/app.module.ts` |
+| Autenticação e dados da equipe | `openwa/src/modules/operator-auth/operator-auth.service.ts` |
+| Contatos, perfil e painel | `openwa/src/modules/operator-auth/contact-profile.controller.ts` |
+| Automações da planilha | `AUTOMACOES.md`, `openwa/src/modules/operator-auth/sheet-automation.controller.ts` |
+| Webhooks genéricos | `app/system-webhooks.tsx`, `openwa/src/modules/webhook/` |
+| Regras do painel operacional | `ATENDIMENTOS.md`, `app/ticket-dashboard.tsx` |
+| Documentação do motor OpenWA | `openwa/docs/README.md` e demais arquivos em `openwa/docs/` |
+
+## 3. Estrutura do repositório
+
+### Raiz e implantação
+
+- `docker-compose.yml`: serviços `web`, `openwa`, `postgres` e `redis`; volumes persistentes; variáveis de ambiente; portas. `openwa` só expõe a API em `127.0.0.1:2785` no host; os demais computadores devem acessar o painel, não essa porta.
+- `Dockerfile`: compila e executa o painel web. `scripts/local-gateway.mjs` serve uma origem única: encaminha `/api` e `/socket.io` ao OpenWA e o restante à interface. Isto evita que outros computadores tentem acessar `localhost:2785` da própria máquina.
+- `.env.example`: exemplo das variáveis obrigatórias e integrações opcionais. `.env` real não deve entrar no Git. Segredos da planilha, chave mestra e senhas ficam no servidor.
+- `docker/postgres-init/`: SQL executado **somente na criação de um volume PostgreSQL novo**; não é mecanismo de migração de uma instalação já existente.
+- `scripts/create-local-https.ps1`: certificado HTTPS local. Microfone e notificações de sistema em outros computadores exigem contexto seguro.
+- `package.json`: scripts do painel. `openwa/package.json`: scripts da API e do projeto-base.
+
+### Painel Atende (`app/`)
+
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `page.tsx` | Componente principal: autenticação armazenada no navegador, conexão, lista e seleção de chats, mensagens, anexos, gravação de áudio, resposta, encaminhamento, notificações, atividade do operador e composição das telas. É grande; localize a função com `rg` antes de editar. |
+| `account-panels.tsx` | Login, navegação e conteúdo de Ajustes; horário de funcionamento, perfil e notificações. |
+| `contacts-panel.tsx`, `contact-editor.tsx`, `contact-import.tsx`, `contact-profile.tsx` | Diretório, criação/edição, importação e perfil detalhado do contato. |
+| `ticket-dashboard.tsx`, `dashboard-model.ts` | Dashboard, filtros e transformação dos dados operacionais. |
+| `team-chat.tsx`, `team-chat.css` | Chat interno, sala geral e conversas individuais. |
+| `team-settings.tsx` | Contas da equipe, permissões e destinatários de avisos sem responsável. |
+| `quick-replies.tsx`, `flow-settings.tsx` | Mensagens rápidas e fluxos automáticos de conversa. |
+| `automation-settings.tsx` | Cadastro manual/mensal de automações, mapeamento de colunas, prévia, iniciar/pausar/avançar etapa. |
+| `webhook-settings.tsx`, `system-webhooks.tsx` | Avisos simples para Discord/JSON e integrações HTTP genéricas por evento. |
+| `modern.css`, `workspace.css`, `contacts.css`, `globals.css` | Estilos; confira seletores existentes antes de duplicar regras. |
+| `message-reconciliation.ts` | Reconciliação de mensagens no cliente. |
+| `connection-origin.ts` | Converte endereço local antigo da API para a origem atual do navegador. |
+
+A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. A função `request()` de `page.tsx` acrescenta `/api`, `X-API-Key` e `X-Atende-Token`. Algumas telas de Ajustes fazem `fetch` diretamente com `X-Atende-Token`.
+
+### API e WhatsApp (`openwa/`)
+
+- `openwa/src/main.ts` e `openwa/src/app.module.ts`: inicialização NestJS, configuração, bancos, módulos e prefixo de API. Consulte-os ao registrar controladores/provedores.
+- `openwa/src/modules/operator-auth/`: adaptações principais do Atende para contas, permissões, contatos, chat da equipe e automações. `operator-auth.module.ts` registra essas peças. Os controladores são acessados sob `/api/operator-auth/...`.
+- `openwa/src/modules/message/`: envio, consulta e processamento de mensagens. Rotas principais sob `/api/sessions/:sessionId/messages`.
+- `openwa/src/modules/session/`: sessões WhatsApp e atribuições de conversas.
+- `openwa/src/modules/events/`: eventos em tempo real/Socket.IO. Mudanças aqui precisam considerar repetição de notificações e limites de consultas.
+- `openwa/src/modules/webhook/`: cadastro, entrega, tentativas, outbox, assinatura, filtros e falhas de webhooks. `system-webhook.controller.ts` adapta a administração pela conta Atende, sob `/api/operator-auth/admin/system-webhooks`; `webhook.controller.ts` contém a API original por sessão/chave de API.
+- `openwa/src/engine/`: abstração e adaptadores de WhatsApp. O Compose da raiz usa `ENGINE_TYPE=whatsapp-web.js`; há também código Baileys no projeto-base. Verifique a interface do motor antes de depender de uma capacidade de mensagem/mídia.
+- `openwa/src/database/migrations/`: migrações do banco de dados do OpenWA. Várias tabelas operacionais do Atende são criadas ou ampliadas em `onModuleInit`/rotinas de inicialização dos serviços `operator-auth`; não assuma que todas têm migração TypeORM.
+- `openwa/openapi.json`: contrato gerado da API. `npm run openapi:export` em `openwa/` o atualiza; confira o diff, pois a exportação pode incluir alterações de rotas anteriores não refletidas no snapshot.
+
+## 4. Funcionalidades e caminhos de ponta a ponta
+
+| Recurso | Interface | API/serviço |
+| --- | --- | --- |
+| Login, perfil, permissões, disponibilidade e atendimento externo | `page.tsx`, `account-panels.tsx`, `team-settings.tsx` | `operator-auth.controller.ts` + `operator-auth.service.ts` |
+| Conversas WhatsApp, texto, áudio, arquivos, resposta e encaminhamento | `page.tsx` | `modules/message/`, `modules/session/`, `engine/` |
+| Contatos, etiquetas, campos personalizados e importação | `contacts-*`, `contact-profile.tsx` | `contact-profile.controller.ts`, `contact-import.controller.ts` |
+| Fila, responsáveis, conclusão e métricas | `ticket-dashboard.tsx`, `dashboard-model.ts` | `contact-profile.controller.ts` e atribuições em `modules/session/` |
+| Chat da equipe | `team-chat.tsx` | `team-chat.controller.ts` |
+| Mensagens rápidas, fluxos e expediente | `quick-replies.tsx`, `flow-settings.tsx`, `account-panels.tsx` | `operator-auth.controller.ts`/`operator-auth.service.ts`; continuação dos fluxos em `contact-profile.controller.ts` |
+| Google Sheets privado e envio automatizado | `automation-settings.tsx` | `sheet-automation.controller.ts`, `scripts/ponte-google-sheets.gs` |
+| Webhooks | `webhook-settings.tsx`, `system-webhooks.tsx` | `system-webhook.controller.ts`, `webhook.service.ts`, `webhook-delivery.service.ts` |
+
+### Automações: regras importantes
+
+Leia `AUTOMACOES.md` antes de mudar esse fluxo. A conexão recomendada à planilha privada é a ponte Apps Script `scripts/ponte-google-sheets.gs`, configurada por `GOOGLE_APPS_SCRIPT_URL` e `GOOGLE_APPS_SCRIPT_SECRET`; há alternativa com conta de serviço. A regra manual mapeia colunas a campos do contato. Há modos legados de CNPJ e de arquivos mensais; alterações na interface não significam remoção automática dos dados/regras persistidos. Na chamada mensal, a aba do mês anterior é calculada no fuso de São Paulo, `Clientes` fornece a razão social, `X` bloqueia envio, e um contato com vários CNPJs recebe uma mensagem consolidada. As etapas de chamada avançam manualmente; envio e marcação `Chamado` foram projetados para evitar duplicidade após falhas. A prévia não deve enviar nem alterar dados.
+
+### Webhooks: dois mecanismos coexistem
+
+`webhook-settings.tsx` mantém os avisos simples de nova mensagem (Discord ou JSON) para compatibilidade. `system-webhooks.tsx` usa o mecanismo genérico do OpenWA: eventos selecionáveis de mensagens/WhatsApp e eventos da central (contatos, atribuição/conclusão, chat da equipe, atividade e automação). O corpo inclui `event`, `timestamp`, `sessionId` e `data`; o formato de `data` depende do evento. A lista de eventos aceitos está em `openwa/src/modules/webhook/dto/webhook.dto.ts`. Para adicionar outro evento da central, **não basta** acrescentá-lo ao catálogo: emita-o no serviço responsável com `WebhookService.dispatch()`, documente o payload e teste. Webhooks enviam dados a destinos externos; avalie privacidade, autenticação, assinatura e proteção contra SSRF.
+
+## 5. Dados e segurança
+
+- PostgreSQL (volume `atende-postgres`) guarda dados operacionais e tabelas do esquema `openwa`; Redis (`atende-redis`) suporta eventos/cache; arquivos de sessão e mídia ficam em `atende-openwa`. **Nunca remova volumes para “corrigir” um erro** sem plano de backup e autorização explícita.
+- A API original do OpenWA usa `X-API-Key`; as rotas Atende usam `X-Atende-Token` e checam permissões. Rotas decoradas com `@Public()` podem dispensar a guarda global de chave de API, mas devem validar o token dentro do controlador/serviço. Preserve o escopo da sessão (`sessionId`) para impedir acesso cruzado.
+- `app/page.tsx` guarda a configuração de conexão e a sessão do operador no armazenamento local do navegador. Não imprima tokens, chaves, `.env`, segredo do Apps Script ou conteúdo de clientes em logs/testes/relatórios.
+- A aplicação pode enviar mensagens reais a clientes. Teste prévias e validações sem disparo quando possível; não inicie automações em produção só para testar.
+- HTTPS e certificados locais são tratados por `scripts/local-gateway.mjs` e `scripts/create-local-https.ps1`. A disponibilidade de notificações do sistema varia com a origem segura do navegador.
+
+## 6. Como executar e verificar
+
+1. Confira `git status --short` e preserve alterações existentes. Histórico anterior pode conter mudanças locais de outras tarefas; não faça reset/checkout destrutivo.
+2. Consulte `.env.example` e `README-LOCAL.md`. Não copie segredos de uma instalação para documentação. Com Docker Desktop iniciado, execute `docker compose up -d --build` **na raiz** para a primeira execução, ou `docker compose build web openwa` e `docker compose up -d --no-build web openwa` após mudanças de código.
+3. Verifique `docker compose ps`; `openwa` deve ficar `healthy`. O painel atende em `http://localhost:3000` e, se o certificado local existir, também em HTTPS na porta 443. Um `401` numa rota administrativa sem token indica que ela está protegida, não necessariamente defeito.
+4. Testes rápidos: `npm run build` na raiz; `npm run build` em `openwa/`; `npm test -- --runInBand --runTestsByPath <arquivo.spec.ts>` em `openwa/` para a área alterada. Rode testes de integração proporcionais ao risco. Evite usar uma sessão WhatsApp real para testes de envio sem necessidade.
+5. Para mudanças de API, confira o contrato `openwa/openapi.json` e os testes `openwa/test/`. Para UI, confira estados de carregamento/erro, telas menores e funcionamento nos outros computadores da rede.
+
+## 7. Orientações para a próxima IA
+
+1. Responda e escreva mensagens de commit em **português**, conforme preferência expressa pelo usuário.
+2. Não faça push, reescrita de histórico remoto, exclusão de dados ou envio real de mensagens sem pedido claro do usuário. Preserve o trabalho não commitado.
+3. Prefira correções no fluxo completo (UI, API, persistência e testes) em vez de apenas ocultar um erro na interface.
+4. Confirme capacidades existentes no código atual: há duas superfícies de UI, duas formas de autenticação e módulos originais do OpenWA que não são necessariamente usados pelo painel Atende.
+5. Quando mudar automações, confira idempotência, marcações na planilha, casos ambíguos e retomada após reinício. Quando mudar notificações, confira deduplicação e frequência das consultas. Quando mudar webhooks, confira escopo da sessão, proteção de segredos e retries.
+6. Documentação complementar: `ATENDIMENTOS.md`, `AUTOMACOES.md`, `RECUPERAR-ACESSO.md`, `README-LOCAL.md`, `openwa/docs/`. Estas páginas descrevem regras específicas; valide-as contra o código se houver divergência.

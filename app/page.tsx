@@ -137,9 +137,10 @@ export type NotificationPreferences = {
   notifyMessages: boolean;
   notifyAssignments: boolean;
   showPreview: boolean;
-  soundType: "classic" | "soft" | "bell" | "urgent";
+  soundType: "classic" | "soft" | "bell" | "urgent" | "custom";
   volume: number;
 };
+type CustomNotificationSound = { filename: string; mimetype: string; base64: string };
 const storageKey = "atende-openwa-config";
 const operatorStorageKey = "atende-operator-account";
 const notificationStorageKey = "atende-notification-preferences";
@@ -224,11 +225,17 @@ function persistOperator(value: { user: Operator; token: string } | null) {
   if (value) localStorage.setItem(operatorStorageKey, JSON.stringify(value));
   else localStorage.removeItem(operatorStorageKey);
 }
-function loadNotificationPreferences(): NotificationPreferences {
+function loadNotificationPreferences(userId: string): NotificationPreferences {
   try {
+    const key = `${notificationStorageKey}:${userId}`;
+    let saved = localStorage.getItem(key);
+    if (!saved && loadOperator()?.user.id === userId) {
+      saved = localStorage.getItem(notificationStorageKey);
+      if (saved) { localStorage.setItem(key, saved); localStorage.removeItem(notificationStorageKey); }
+    }
     return {
       ...defaultNotificationPreferences,
-      ...JSON.parse(localStorage.getItem(notificationStorageKey) || "{}"),
+      ...JSON.parse(saved || "{}"),
     };
   } catch {
     return defaultNotificationPreferences;
@@ -732,6 +739,9 @@ export default function Home() {
   const pendingReads = useRef(new Set<string>());
   const lastReadAttempt = useRef(new Map<string, number>());
   const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshQueued = useRef<Config | null>(null);
+  const lastChatsRefresh = useRef(0);
   const [config, setConfig] = useState<Config>(emptyConfig);
   const [status, setStatus] = useState<
     "unconfigured" | "offline" | "ready" | "connected"
@@ -842,6 +852,10 @@ export default function Home() {
   const recordingChunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const customSoundRef = useRef<CustomNotificationSound | null>(null);
+  const activeCustomAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [customSound, setCustomSound] = useState<CustomNotificationSound | null>(null);
+  const [customSoundBusy, setCustomSoundBusy] = useState(false);
   const chatsRef = useRef<Chat[]>([]);
   const selectedRef = useRef<Chat | null>(null);
   const refreshChatsRef = useRef<(active?: Config) => Promise<void>>(
@@ -896,7 +910,18 @@ export default function Home() {
     try {
       const context = audioContextRef.current;
       const preferences = notificationPreferencesRef.current;
-      if (!context || !preferences.sound || preferences.volume <= 0) return;
+      if (!preferences.sound || preferences.volume <= 0) return;
+      if (preferences.soundType === "custom" && customSoundRef.current) {
+        activeCustomAudioRef.current?.pause();
+        const sound = customSoundRef.current;
+        const audio = new Audio(`data:${sound.mimetype};base64,${sound.base64}`);
+        audio.volume = preferences.volume / 100;
+        activeCustomAudioRef.current = audio;
+        audio.onended = () => { if (activeCustomAudioRef.current === audio) activeCustomAudioRef.current = null; };
+        void audio.play().catch(() => undefined);
+        return;
+      }
+      if (!context) return;
       const patterns = {
         classic: [[880, 0, 0.14]],
         soft: [
@@ -912,9 +937,9 @@ export default function Home() {
           [880, 0.18, 0.12],
           [1175, 0.36, 0.24],
         ],
-      } as Record<NotificationPreferences["soundType"], number[][]>;
+      } as Record<Exclude<NotificationPreferences["soundType"], "custom">, number[][]>;
       for (const [frequency, offset, duration] of patterns[
-        preferences.soundType
+        preferences.soundType === "custom" ? "classic" : preferences.soundType
       ]) {
         const oscillator = context.createOscillator(),
           gain = context.createGain(),
@@ -942,7 +967,47 @@ export default function Home() {
     notificationsRef.current = next.enabled;
     setNotificationPreferences(next);
     setNotificationsEnabled(next.enabled);
-    localStorage.setItem(notificationStorageKey, JSON.stringify(next));
+    if (operator?.id) localStorage.setItem(`${notificationStorageKey}:${operator.id}`, JSON.stringify(next));
+  }
+  async function uploadNotificationSound(file: File) {
+    if (!operatorToken || customSoundBusy) return;
+    if (!file.size || file.size > 2 * 1024 * 1024) { setNotice("Escolha um áudio de até 2 MB."); return; }
+    setCustomSoundBusy(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, {
+        method: "PUT", headers: { "Content-Type": "application/json", "X-Atende-Token": operatorToken },
+        body: JSON.stringify({ filename: file.name, mimetype: file.type, base64 }),
+      });
+      const result = await response.json() as CustomNotificationSound & { message?: string };
+      if (!response.ok) throw new Error(result.message || "Não foi possível salvar o áudio.");
+      customSoundRef.current = result;
+      setCustomSound(result);
+      updateNotificationPreferences({ sound: true, soundType: "custom" });
+      setNotice("Áudio personalizado salvo para sua conta.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Não foi possível salvar o áudio."); }
+    finally { setCustomSoundBusy(false); }
+  }
+  async function removeNotificationSound() {
+    if (!operatorToken || customSoundBusy) return;
+    setCustomSoundBusy(true);
+    try {
+      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, {
+        method: "DELETE", headers: { "X-Atende-Token": operatorToken },
+      });
+      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+      activeCustomAudioRef.current?.pause();
+      customSoundRef.current = null;
+      setCustomSound(null);
+      if (notificationPreferencesRef.current.soundType === "custom") updateNotificationPreferences({ soundType: "classic" });
+      setNotice("Áudio personalizado removido da sua conta.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Não foi possível remover o áudio."); }
+    finally { setCustomSoundBusy(false); }
   }
   async function enableNotifications() {
     try {
@@ -997,12 +1062,27 @@ export default function Home() {
     }
   }
   useEffect(() => {
-    const saved = loadNotificationPreferences();
+    if (!operator?.id || !operatorToken) { activeCustomAudioRef.current?.pause(); customSoundRef.current = null; setCustomSound(null); return; }
+    activeCustomAudioRef.current?.pause();
+    customSoundRef.current = null;
+    setCustomSound(null);
+    const saved = loadNotificationPreferences(operator.id);
     notificationPreferencesRef.current = saved;
     notificationsRef.current = saved.enabled;
     setNotificationPreferences(saved);
     setNotificationsEnabled(saved.enabled);
-  }, []);
+    const abort = new AbortController();
+    fetch(`${config.baseUrl.replace(/\/$/, "")}/api/operator-auth/me/notification-sound`, { headers: { "X-Atende-Token": operatorToken }, signal: abort.signal })
+      .then(async response => { if (!response.ok) throw new Error("Não foi possível carregar o áudio personalizado."); return response.json() as Promise<CustomNotificationSound | null>; })
+      .then(sound => {
+        customSoundRef.current = sound;
+        setCustomSound(sound);
+        if (!sound && saved.soundType === "custom") updateNotificationPreferences({ soundType: "classic" });
+        if (sound && !localStorage.getItem(`${notificationStorageKey}:${operator.id}`)) updateNotificationPreferences({ soundType: "custom" });
+      })
+      .catch(() => { if (!abort.signal.aborted) setNotice("Não foi possível carregar o áudio personalizado."); });
+    return () => abort.abort();
+  }, [operator?.id, operatorToken, config.baseUrl]);
   const loadFlows = useCallback(async () => {
     if (!operatorToken) return;
     try {
@@ -1118,7 +1198,7 @@ export default function Home() {
     };
   }, [contactsOpen]);
 
-  const refreshChats = useCallback(
+  const loadChats = useCallback(
     async (active = config) => {
       if (!active.apiKey || !active.sessionId) return;
       const generation = ++refreshGeneration.current;
@@ -1172,6 +1252,7 @@ export default function Home() {
           unreadCount: c.unread,
         }));
       setOverview(meta);
+      const profilesByChat = new Map(meta.contacts.map((profile) => [profile.chatId, profile.data]));
       let next = listFrom(data)
         .filter(
           (chat) =>
@@ -1180,7 +1261,7 @@ export default function Home() {
         )
         .map((value) => {
           const chat = toChat(value),
-            profile = meta.contacts.find((p) => p.chatId === chat.id)?.data;
+            profile = profilesByChat.get(chat.id);
           return {
             ...chat,
             name: profile?.name || chat.name,
@@ -1246,9 +1327,38 @@ export default function Home() {
             rows.find((row) => row.chatId === selectedRef.current?.id) || null,
           );
       }
+      lastChatsRefresh.current = Date.now();
     },
     [config],
   );
+
+  const refreshChats = useCallback((active = config): Promise<void> => {
+    if (refreshInFlight.current) {
+      refreshQueued.current = active;
+      return refreshInFlight.current;
+    }
+    const task = (async () => {
+      let next: Config | null = active;
+      let lastError: unknown = null;
+      while (next) {
+        try {
+          await loadChats(next);
+          lastError = null;
+        } catch (error) {
+          lastError = error;
+        }
+        next = refreshQueued.current;
+        refreshQueued.current = null;
+      }
+      if (lastError) throw lastError;
+    })();
+    refreshInFlight.current = task;
+    const clear = () => {
+      if (refreshInFlight.current === task) refreshInFlight.current = null;
+    };
+    void task.then(clear, clear);
+    return task;
+  }, [config, loadChats]);
 
   async function markRead(chatId: string, active = config) {
     if (pendingReads.current.has(chatId)) return;
@@ -1524,6 +1634,18 @@ export default function Home() {
     if (!operatorToken) return;
     if (!config.apiKey || !config.sessionId) return;
     const active = config;
+    let eventRefreshTimer = 0;
+    let hasConnected = false;
+    const scheduleEventRefresh = () => {
+      if (eventRefreshTimer) return;
+      eventRefreshTimer = window.setTimeout(() => {
+        eventRefreshTimer = 0;
+        void refreshChatsRef.current(active).catch(() => undefined);
+        const current = selectedRef.current;
+        if (current)
+          void refreshMessagesRef.current(current, active).catch(() => undefined);
+      }, 350);
+    };
     const socket = io(`${active.baseUrl.replace(/\/$/, "")}/events`, {
       auth: { apiKey: active.apiKey },
       transports: ["websocket"],
@@ -1534,6 +1656,8 @@ export default function Home() {
     });
     socket.on("connect", () => {
       setStatus("connected");
+      if (hasConnected) scheduleEventRefresh();
+      hasConnected = true;
       socket.emit("message", {
         type: "subscribe",
         sessionId: active.sessionId,
@@ -1568,10 +1692,7 @@ export default function Home() {
           event.payload.event === "message.received" ||
           event.payload.event === "message.sent"
         ) {
-          refreshChatsRef.current(active).catch(() => undefined);
-          const current = selectedRef.current;
-          if (current)
-            refreshMessagesRef.current(current, active).catch(() => undefined);
+          scheduleEventRefresh();
         }
         if (event.payload.event === "message.received") {
           const data = event.payload.data || {};
@@ -1652,7 +1773,7 @@ export default function Home() {
             return;
           const chatId = String(data.chatId || "");
           if (!chatId) return;
-          void refreshChatsRef.current(active).catch(() => undefined);
+          scheduleEventRefresh();
           const customer =
             chatsRef.current.find((chat) => chat.id === chatId)?.name ||
             "Novo atendimento";
@@ -1697,6 +1818,7 @@ export default function Home() {
     );
     socketRef.current = socket;
     return () => {
+      window.clearTimeout(eventRefreshTimer);
       socket.disconnect();
       if (socketRef.current === socket) socketRef.current = null;
     };
@@ -1709,10 +1831,21 @@ export default function Home() {
   ]);
   useEffect(() => {
     if (!config.apiKey || !config.sessionId) return;
-    const interval = window.setInterval(() => {
-      refreshChats().catch(() => undefined);
-    }, 8000);
-    return () => window.clearInterval(interval);
+    const reconcile = () => {
+      if (document.visibilityState !== "visible") return;
+      const interval = socketRef.current?.connected ? 60000 : 15000;
+      if (Date.now() - lastChatsRefresh.current < interval) return;
+      void refreshChats().catch(() => undefined);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcile();
+    };
+    const interval = window.setInterval(reconcile, 15000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [config.apiKey, config.baseUrl, config.sessionId, refreshChats]);
   useEffect(() => {
     const chatChanged = scrolledChatRef.current !== (selected?.id || "");
@@ -2281,12 +2414,61 @@ export default function Home() {
       return;
     }
     const target = selected;
-    const hour = new Date().getHours(),
-      greeting = hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
+    const profile = overview.contacts.find((contact) => contact.chatId === target.id)?.data as
+      | (SupportOverview["contacts"][number]["data"] & {
+          name?: string;
+          email?: string;
+          company?: string;
+          document?: string;
+          address?: string;
+          tags?: string[];
+          serviceType?: string;
+          priority?: string;
+          custom?: { label?: string; value?: string }[];
+        })
+      | undefined;
+    const now = new Date();
+    const hour = Number(
+      new Intl.DateTimeFormat("pt-BR", {
+        timeZone: "America/Sao_Paulo",
+        hour: "2-digit",
+        hourCycle: "h23",
+      }).format(now),
+    );
+    const greeting = hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
+    const dateParts = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(now);
+    const timeParts = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(now);
+    const customFields = (profile?.custom || [])
+      .filter((field) => field.label?.trim() && field.value?.trim())
+      .map((field) => `${field.label}: ${field.value}`)
+      .join("; ");
     const variables: Record<string, string> = {
       "{{atendente}}": operator.displayName,
       "{{cliente}}": target.name || "cliente",
+      "{{nome}}": profile?.name || target.name || "cliente",
       "{{saudacao}}": greeting,
+      "{{telefone}}": target.phone || profile?.phone || "",
+      "{{email}}": profile?.email || "",
+      "{{empresa}}": profile?.company || "",
+      "{{documento}}": profile?.document || "",
+      "{{cpf_cnpj}}": profile?.document || "",
+      "{{endereco}}": profile?.address || "",
+      "{{etiquetas}}": profile?.tags?.join(", ") || "",
+      "{{status}}": profile?.status || "",
+      "{{tipo_atendimento}}": profile?.serviceType || "",
+      "{{prioridade}}": profile?.priority || "",
+      "{{campos_personalizados}}": customFields,
+      "{{data}}": dateParts,
+      "{{hora}}": timeParts,
     };
     const fill = (value = "") => {
       let result = value;
@@ -2859,7 +3041,9 @@ export default function Home() {
     for (const row of rows.values()) {
       const key = nameKey(row.name);
       if (key.length < 6 || !/[\p{L}]/u.test(key)) continue;
-      groups.set(key, [...(groups.get(key) || []), row]);
+      const group = groups.get(key);
+      if (group) group.push(row);
+      else groups.set(key, [row]);
     }
     for (const group of groups.values()) {
       if (group.length !== 2) continue;
@@ -3114,16 +3298,9 @@ export default function Home() {
                 : "Ativar notificações"}
             </span>
           </button>
-          <button onClick={() => setOperatorOpen(true)} title="Meu perfil">
-            <span className="account-avatar">
-              {initials(operator.displayName)}
-            </span>
-            <span>
-              <b>{operator.displayName}</b>
-              <small>
-                {operator.role === "admin" ? "Administrador" : "Atendente"}
-              </small>
-            </span>
+          <button className="workspace-profile" onClick={() => setOperatorOpen(true)} title="Meu perfil">
+            <span className="preview-avatar" aria-hidden="true">{operator.displayName?.slice(0, 1).toUpperCase()}</span>
+            <b>{operator.displayName}</b>
           </button>
         </div>
       </header>
@@ -4060,6 +4237,10 @@ export default function Home() {
           enableNotifications={enableNotifications}
           notificationPreferences={notificationPreferences}
           updateNotificationPreferences={updateNotificationPreferences}
+          customSound={customSound}
+          customSoundBusy={customSoundBusy}
+          uploadNotificationSound={uploadNotificationSound}
+          removeNotificationSound={removeNotificationSound}
           testNotification={testNotification}
           notice={notice}
           close={() => {

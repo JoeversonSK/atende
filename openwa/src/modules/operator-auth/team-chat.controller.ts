@@ -1,10 +1,11 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, Injectable, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Injectable, NotFoundException, Optional, Param, Patch, Post, Query } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource } from 'typeorm';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/decorators/auth.decorators';
 import { OperatorAuthService } from './operator-auth.service';
+import { WebhookService } from '../webhook/webhook.service';
 
 type Room = { id: string; displayName: string; lastMessage: string | null; lastAt: Date | null; unread: number };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -16,7 +17,8 @@ const pollingThrottle = {
 
 @Injectable()
 export class TeamChatService {
-  constructor(@InjectDataSource('data') private readonly db: DataSource, private readonly auth: OperatorAuthService) {}
+  constructor(@InjectDataSource('data') private readonly db: DataSource, private readonly auth: OperatorAuthService,
+    @Optional() private readonly webhooks?: WebhookService) {}
 
   private schemaReady?: Promise<void>;
   private ensureSchema() {
@@ -122,6 +124,9 @@ export class TeamChatService {
        FROM sent JOIN openwa.operator_users u ON u.id=sent.sender_id`,
       [randomUUID(), user.id, room === 'group' ? null : room, text, JSON.stringify(mentionIds)],
     );
+    if (this.webhooks) void this.auth.connectionContext(token)
+      .then(({ sessionId }) => this.webhooks!.dispatch(sessionId, 'team.message.sent', { room, message }))
+      .catch(() => undefined);
     return message;
   }
 

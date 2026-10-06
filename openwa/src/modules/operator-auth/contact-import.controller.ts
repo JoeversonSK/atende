@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Headers, Injectable, Optional, Param, Post } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { WebhookService } from '../webhook/webhook.service';
 import { Public } from '../auth/decorators/auth.decorators';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EventsGateway } from '../events/events.gateway';
@@ -50,6 +51,7 @@ export class ContactImportService {
     private readonly engines: EngineRegistry,
     private readonly events: EventsGateway,
     @Optional() private readonly lidMappings?: LidMappingStoreService,
+    @Optional() private readonly webhooks?: WebhookService,
   ) {}
 
   private async resolveMissingPhones(session: string, engine: IWhatsAppEngine, chats: ChatSummary[]) {
@@ -398,6 +400,8 @@ export class ContactImportService {
         });
       } catch { /* The import is committed; a notification failure must not invite a duplicate retry. */ }
     }
+    for (const plan of plans) void this.webhooks?.dispatch(session, plan.existed ? 'contact.updated' : 'contact.created',
+      { chatId: plan.chatId, phone: plan.row.phone, firstName: plan.row.firstName, lastName: plan.row.lastName, tags: plan.row.tags, source: 'import' }).catch(() => undefined);
     return { ...outcome, contacts: plans.map(plan => ({ phone: plan.row.phone, chatId: plan.chatId })) };
   }
 }

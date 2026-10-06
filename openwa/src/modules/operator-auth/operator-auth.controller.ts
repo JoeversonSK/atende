@@ -8,6 +8,7 @@ class RegisterDto extends LoginDto { @IsString() @IsNotEmpty() @MaxLength(160) d
 class ProfileDto { @IsString() @IsNotEmpty() @MaxLength(160) displayName!: string; }
 class ActivityDto { @IsIn(['available','break','meeting','away','custom']) status!: 'available'|'break'|'meeting'|'away'|'custom'; @IsOptional() @IsString() @MaxLength(120) note?: string; }
 class OnsiteStartDto { @IsString() @IsNotEmpty() @MaxLength(160) clientName!: string; }
+class NotificationSoundDto { @IsString() @IsNotEmpty() @MaxLength(120) filename!: string; @IsString() @IsNotEmpty() @MaxLength(80) mimetype!: string; @IsString() @IsNotEmpty() @MaxLength(3000000) base64!: string; }
 class QuickReplyDto { @IsString() @IsNotEmpty() @MaxLength(61) shortcut!:string; @IsString() @IsNotEmpty() @MaxLength(10000) text!:string; }
 class UserAccessDto { @IsIn(['admin','agent']) role!: string; @IsBoolean() active!: boolean; @IsBoolean() canSend!: boolean; @IsBoolean() canAssign!: boolean; @IsBoolean() dashboardVisible!: boolean; }
 class RecipientDto { @IsArray() @ArrayMaxSize(100) @IsUUID('4',{each:true}) userIds!: string[]; }
@@ -28,7 +29,7 @@ class NotificationWebhookDto {
   @IsString() @MaxLength(80) senderName!:string;
   @IsString() @MaxLength(120) title!:string;
   @IsHexColor() color!:string;
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(5) @IsIn(['contactName','phone','message','messageType','receivedAt'],{each:true}) fields!:string[];
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(8) @IsIn(['contactName','phone','message','messageType','receivedAt','contactProfile','messageDetails','assignment'],{each:true}) fields!:string[];
 }
 export class ConversationFlowStepDto {
   @IsOptional() @IsString() @MaxLength(80) id?:string;
@@ -51,6 +52,9 @@ export class OperatorAuthController { constructor(private readonly auth: Operato
   @Get('me/onsite') onsiteVisits(@Headers('x-atende-token') token='') { return this.auth.onsiteVisits(token); }
   @Post('me/onsite') startOnsite(@Headers('x-atende-token') token='', @Body() dto: OnsiteStartDto) { return this.auth.startOnsite(token,dto.clientName); }
   @Post('me/onsite/:id/finish') finishOnsite(@Headers('x-atende-token') token='', @Param('id') id:string) { return this.auth.finishOnsite(token,id); }
+  @Get('me/notification-sound') notificationSound(@Headers('x-atende-token') token='') { return this.auth.notificationSound(token); }
+  @Put('me/notification-sound') saveNotificationSound(@Headers('x-atende-token') token='', @Body() dto: NotificationSoundDto) { return this.auth.saveNotificationSound(token,dto); }
+  @Delete('me/notification-sound') deleteNotificationSound(@Headers('x-atende-token') token='') { return this.auth.deleteNotificationSound(token); }
   @Get('admin') administration(@Headers('x-atende-token') token='') { return this.auth.administration(token); }
   @Get('connection') async connection(@Headers('x-atende-token') token='') { const connection = await this.auth.connectionContext(token); return { sessionId: connection.sessionId }; }
   @Post('reset-password') resetPassword(@Body() dto: ResetPasswordDto) { return this.auth.resetPassword(dto.username,dto.code,dto.password); }

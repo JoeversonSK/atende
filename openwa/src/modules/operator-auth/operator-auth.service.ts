@@ -1,7 +1,8 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, OnModuleInit, Optional, UnauthorizedException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'crypto';
 import { DataSource } from 'typeorm';
+import { WebhookService } from '../webhook/webhook.service';
 
 export type OperatorActivity = 'available' | 'break' | 'meeting' | 'away' | 'custom' | 'onsite';
 export type OperatorUser = { id: string; username: string; displayName: string; role?: string; active?: boolean; canSend?: boolean; canAssign?: boolean; dashboardVisible?: boolean; activityStatus?: OperatorActivity; activityNote?: string; activityUntil?: string | null };
@@ -46,7 +47,8 @@ export class OperatorAuthService implements OnModuleInit {
       throw new ForbiddenException(`${target.displayName} não está disponível para novos atendimentos.`);
     return target;
   }
-  constructor(@InjectDataSource('data') private readonly dataSource: DataSource) {}
+  constructor(@InjectDataSource('data') private readonly dataSource: DataSource,
+    @Optional() private readonly webhooks?: WebhookService) {}
   async onModuleInit() {
     await this.dataSource.query(`CREATE TABLE IF NOT EXISTS openwa.operator_users (id varchar(36) PRIMARY KEY, username varchar(80) NOT NULL UNIQUE, display_name varchar(160) NOT NULL, password_hash varchar(128) NOT NULL, password_salt varchar(64) NOT NULL, created_at timestamptz NOT NULL DEFAULT NOW())`);
     await this.dataSource.query(`CREATE TABLE IF NOT EXISTS openwa.operator_sessions (token_hash varchar(64) PRIMARY KEY, user_id varchar(36) NOT NULL REFERENCES openwa.operator_users(id) ON DELETE CASCADE, expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT NOW())`);
@@ -106,14 +108,18 @@ export class OperatorAuthService implements OnModuleInit {
         activity_until=CASE WHEN $2::text='break' THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,activity_updated_at=NOW()
         WHERE id=$1 AND active=true`, [user.id, status, status === 'custom' ? note : '']);
     });
-    return this.me(token);
+    const updated = await this.me(token);
+    if (this.webhooks) void this.connectionContext(token)
+      .then(({ sessionId }) => this.webhooks!.dispatch(sessionId, 'operator.activity.changed', { operatorId: user.id, operatorName: user.displayName, status, note: updated.activityNote, until: updated.activityUntil }))
+      .catch(() => undefined);
+    return updated;
   }
   async startOnsite(token: string, clientInput: string) {
     const context = await this.connectionContext(token);
     const user = context.user;
     const clientName = clientInput.trim();
     if (!clientName || clientName.length > 160) throw new BadRequestException('Informe o cliente atendido em até 160 caracteres.');
-    return this.dataSource.transaction(async db => {
+    const visit = await this.dataSource.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [user.id]);
       const [operator] = await db.query('SELECT activity_status AS status,activity_until AS "until" FROM openwa.operator_users WHERE id=$1 AND active=true FOR UPDATE', [user.id]);
       if (!operator) throw new ForbiddenException('Conta inativa.');
@@ -127,10 +133,12 @@ export class OperatorAuthService implements OnModuleInit {
       await db.query("UPDATE openwa.operator_users SET activity_status='onsite',activity_note=$2,activity_until=NULL,activity_updated_at=NOW() WHERE id=$1", [user.id,clientName.slice(0,120)]);
       return visit;
     });
+    void this.webhooks?.dispatch(context.sessionId, 'operator.activity.changed', { operatorId: user.id, operatorName: user.displayName, status: 'onsite', visit }).catch(() => undefined);
+    return visit;
   }
   async finishOnsite(token: string, id: string) {
     const user = await this.me(token);
-    return this.dataSource.transaction(async db => {
+    const visit = await this.dataSource.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [user.id]);
       const [visit] = await db.query(`UPDATE openwa.operator_onsite_visits SET ended_at=NOW()
         WHERE id=$1 AND user_id=$2 AND ended_at IS NULL
@@ -140,12 +148,39 @@ export class OperatorAuthService implements OnModuleInit {
       await db.query("UPDATE openwa.operator_users SET activity_status='available',activity_note='',activity_until=NULL,activity_updated_at=NOW() WHERE id=$1", [user.id]);
       return visit;
     });
+    if (this.webhooks) void this.connectionContext(token)
+      .then(({ sessionId }) => this.webhooks!.dispatch(sessionId, 'operator.activity.changed', { operatorId: user.id, operatorName: user.displayName, status: 'available', visit }))
+      .catch(() => undefined);
+    return visit;
   }
   async onsiteVisits(token: string) {
     const user = await this.me(token);
     return this.dataSource.query(`SELECT id,client_name AS "clientName",started_at AS "startedAt",ended_at AS "endedAt",
       CASE WHEN ended_at IS NULL THEN NULL ELSE EXTRACT(EPOCH FROM (ended_at-started_at))::integer END AS "durationSeconds"
       FROM openwa.operator_onsite_visits WHERE user_id=$1 ORDER BY started_at DESC LIMIT 20`, [user.id]);
+  }
+  async notificationSound(token: string) {
+    const user = await this.me(token);
+    const [sound] = await this.dataSource.query('SELECT filename,mimetype,data FROM openwa.operator_notification_sounds WHERE user_id=$1', [user.id]);
+    return sound ? { filename: sound.filename, mimetype: sound.mimetype, base64: (sound.data as Buffer).toString('base64') } : null;
+  }
+  async saveNotificationSound(token: string, input: { filename: string; mimetype: string; base64: string }) {
+    const user = await this.me(token);
+    const filename = input.filename.trim();
+    const mimetype = input.mimetype.trim().toLowerCase();
+    const allowed = new Set(['audio/mpeg','audio/mp3','audio/wav','audio/x-wav','audio/ogg','audio/webm','audio/mp4','audio/aac']);
+    if (!filename || filename.length > 120 || !allowed.has(mimetype)) throw new BadRequestException('Escolha um arquivo de áudio MP3, WAV, OGG, WebM, MP4 ou AAC.');
+    if (!input.base64 || input.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64)) throw new BadRequestException('O arquivo de áudio é inválido.');
+    const data = Buffer.from(input.base64, 'base64');
+    if (!data.length || data.length > 2 * 1024 * 1024) throw new BadRequestException('O áudio deve ter no máximo 2 MB.');
+    await this.dataSource.query(`INSERT INTO openwa.operator_notification_sounds (user_id,filename,mimetype,data)
+      VALUES ($1,$2,$3,$4) ON CONFLICT (user_id) DO UPDATE SET filename=$2,mimetype=$3,data=$4,updated_at=NOW()`, [user.id,filename,mimetype,data]);
+    return { filename, mimetype, base64: input.base64 };
+  }
+  async deleteNotificationSound(token: string) {
+    const user = await this.me(token);
+    await this.dataSource.query('DELETE FROM openwa.operator_notification_sounds WHERE user_id=$1', [user.id]);
+    return { success: true };
   }
   async logout(token: string) { await this.dataSource.query('DELETE FROM openwa.operator_sessions WHERE token_hash = $1', [this.tokenHash(token)]); }
   private async issue(user: OperatorUser) { const token = randomBytes(32).toString('base64url'); await this.dataSource.query("INSERT INTO openwa.operator_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 days')", [this.tokenHash(token), user.id]); return { user: await this.me(token), token }; }
@@ -166,6 +201,9 @@ export class OperatorAuthService implements OnModuleInit {
         id varchar(36) PRIMARY KEY,session_id varchar(255) NOT NULL,user_id varchar(36) NOT NULL REFERENCES openwa.operator_users(id) ON DELETE CASCADE,
         client_name varchar(160) NOT NULL,started_at timestamptz NOT NULL DEFAULT NOW(),ended_at timestamptz)`);
       await db.query('CREATE UNIQUE INDEX IF NOT EXISTS operator_onsite_active_idx ON openwa.operator_onsite_visits(user_id) WHERE ended_at IS NULL');
+      await db.query(`CREATE TABLE IF NOT EXISTS openwa.operator_notification_sounds (
+        user_id varchar(36) PRIMARY KEY REFERENCES openwa.operator_users(id) ON DELETE CASCADE,
+        filename varchar(120) NOT NULL,mimetype varchar(80) NOT NULL,data bytea NOT NULL,updated_at timestamptz NOT NULL DEFAULT NOW())`);
       await db.query('CREATE TABLE IF NOT EXISTS openwa.operator_settings (id integer PRIMARY KEY CHECK (id=1), unassigned_user_id varchar(36) REFERENCES openwa.operator_users(id) ON DELETE SET NULL)');
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS unassigned_user_ids text[]');
       await db.query("UPDATE openwa.operator_settings SET unassigned_user_ids=CASE WHEN unassigned_user_id IS NULL THEN ARRAY[]::text[] ELSE ARRAY[unassigned_user_id] END WHERE unassigned_user_ids IS NULL");

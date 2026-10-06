@@ -8,6 +8,7 @@ import {
   Headers,
   Injectable,
   OnModuleInit,
+  Optional,
   Param,
   Post,
   Put,
@@ -17,6 +18,7 @@ import { DataSource } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Public } from '../auth/decorators/auth.decorators';
 import { OperatorAuthService } from './operator-auth.service';
+import { WebhookService } from '../webhook/webhook.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, PollVoteEvent } from '../../engine/interfaces/whatsapp-engine.interface';
 import { ConversationFlowStep } from './operator-auth.service';
@@ -411,7 +413,7 @@ export class ContactProfileService implements OnModuleInit {
   async start(token: string, session: string, chat: string) {
     const user = await this.auth.assignmentTarget(token);
     this.identifiers(session, chat);
-    return this.db.transaction(async db => {
+    const result = await this.db.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
       const [current] = await db.query(
         'SELECT data,revision FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',
@@ -439,11 +441,13 @@ export class ContactProfileService implements OnModuleInit {
         assignment,
       };
     });
+    this.publish(session, 'conversation.assigned', { chatId: chat, assignee: result.assignment, contactProfile: result.data, actorId: user.id });
+    return result;
   }
   async close(token: string, session: string, chat: string) {
     const user = await this.auth.requirePermission(token, 'canAssign');
     this.identifiers(session, chat);
-    return this.db.transaction(async db => {
+    const result = await this.db.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
       const [current] = await db.query(
         'SELECT data,revision FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',
@@ -485,6 +489,8 @@ export class ContactProfileService implements OnModuleInit {
         data: await this.dataForOperator(db, session, chat, saved.data, user.id),
       };
     });
+    this.publish(session, 'conversation.closed', { chatId: chat, contactProfile: result.data, actorId: user.id });
+    return result;
   }
   // Called only by the live, deduplicated inbound pipeline, never by history imports.
   async reopenOnIncoming(session: string, chat: string, timestamp: number, fromMe = false, isGroup = false) {
@@ -589,7 +595,11 @@ export class ContactProfileService implements OnModuleInit {
     @InjectDataSource('data') private readonly db: DataSource,
     private readonly auth: OperatorAuthService,
     private readonly engines: EngineRegistry,
+    @Optional() private readonly webhooks?: WebhookService,
   ) {}
+  private publish(session: string, event: string, data: Record<string, unknown>) {
+    void this.webhooks?.dispatch(session, event, data).catch(() => undefined);
+  }
   async onModuleInit() {
     await this.db.query(
       'CREATE TABLE IF NOT EXISTS openwa.contact_profiles (session_id varchar(255) NOT NULL,chat_id varchar(255) NOT NULL,data jsonb NOT NULL,revision integer NOT NULL DEFAULT 1,updated_at timestamptz NOT NULL DEFAULT NOW(),PRIMARY KEY(session_id,chat_id))',
@@ -775,7 +785,7 @@ export class ContactProfileService implements OnModuleInit {
       throw new BadRequestException('Preencha os títulos, notas e datas.');
     if (new Set(cleaned.notes.map(n => n.id)).size !== cleaned.notes.length)
       throw new BadRequestException('Notas duplicadas.');
-    return this.db.transaction(async db => {
+    const result = await this.db.transaction(async db => {
       // Serialize initial creation as well as later edits of this contact.
       await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
       const [current] = await db.query(
@@ -834,6 +844,8 @@ export class ContactProfileService implements OnModuleInit {
       );
       return { ...row, data: await this.dataForOperator(db, session, chat, row.data, user.id) };
     });
+    this.publish(session, 'contact.updated', { chatId: chat, contactProfile: result.data, revision: result.revision, actorId: user.id });
+    return result;
   }
 }
 @Public()

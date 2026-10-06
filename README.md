@@ -13,6 +13,8 @@
 
 Central de atendimento multiusuário para WhatsApp, executada no seu próprio computador com Docker. A equipe acessa uma caixa de entrada compartilhada, identifica o atendente responsável e acompanha a fila e os atendimentos em tempo real.
 
+Para assumir o desenvolvimento, consulte o [guia de arquitetura e localização do código](docs/GUIA_DO_SISTEMA_PARA_IA.md).
+
 O projeto usa uma versão personalizada do [OpenWA](https://github.com/rmyndharis/OpenWA) e não depende da API oficial do WhatsApp.
 
 ## Recursos
@@ -173,6 +175,8 @@ Não use `docker compose down -v` em uma instalação com dados importantes: a o
 
 Antes de atualizar, faça backup dos volumes ou do banco de dados. Depois:
 
+Se esta instalação já contém anexos no volume antigo, siga antes o [guia de migração da mídia](docs/MIGRACAO_VOLUME_MIDIA.md). A atualização cria um volume separado para os arquivos; ignorar essa etapa pode ocultar os anexos antigos no container, embora eles continuem no volume original.
+
 ```bash
 git pull
 docker compose up -d --build
@@ -192,7 +196,7 @@ Restaure em uma instalação vazia:
 docker compose exec -T postgres psql -U atende -d atende < atende-backup.sql
 ```
 
-A autenticação do WhatsApp e os arquivos de mídia ficam no volume `atende-openwa`; faça backup desse volume separadamente quando precisar recuperar a instalação completa.
+A autenticação do WhatsApp fica no volume `atende-openwa`, e os arquivos de mídia ficam no volume `atende-media`. Faça backup de ambos para recuperar a instalação completa, além do banco PostgreSQL.
 
 ## Estrutura do repositório
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  ArrowDown, ArrowUp, AudioLines, CheckCircle2, Clock3, FileText, GitBranch,
+  ArrowDown, ArrowUp, AudioLines, CheckCircle2, CircleAlert, Clock3, FileText, GitBranch,
   GripVertical, Image as ImageIcon, ListChecks, MessageSquareText, Pencil, Plus, Save,
   Trash2, UserCheck, Video, X,
 } from "lucide-react";
@@ -66,6 +66,7 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const load=()=>{setLoading(true);api("/flows").then((items:ConversationFlow[])=>setFlows(items.map(normalizeFlow))).catch(error=>setFeedback(error.message)).finally(()=>setLoading(false));};
   useEffect(()=>{load();},[endpoint,token]);
   useEffect(()=>{if(selected>=flows.length)setSelected(Math.max(0,flows.length-1));},[flows.length,selected]);
+  useEffect(()=>{if(!feedback)return;const timer=window.setTimeout(()=>setFeedback(current=>current===feedback?"":current),5000);return()=>window.clearTimeout(timer);},[feedback]);
   const flow=flows[selected];
   const patchFlow=(patch:Partial<ConversationFlow>)=>setFlows(current=>current.map((item,index)=>index===selected?{...item,...patch}:item));
   const patchStep=(index:number,patch:Partial<ConversationFlowStep>)=>patchFlow({steps:flow.steps.map((item,i)=>i===index?{...item,...patch}:item)});
@@ -73,7 +74,7 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const removeBlock=(index:number)=>patchFlow({steps:flow.steps.filter((_,i)=>i!==index)});
   const moveBlock=(from:number,to:number)=>{if(to<0||to>=flow.steps.length||from===to)return;const steps=[...flow.steps], [item]=steps.splice(from,1);steps.splice(to,0,item);patchFlow({steps});};
   const addFlow=()=>{setFlows(current=>[...current,blankFlow()]);setSelected(flows.length);setEditingDetails(true);};
-  async function save(){if(!flow)return;const validation=validateFlow(flow);if(validation){setFeedback(validation);return;}setSaving(flow.id||"new");setFeedback("");try{const path=flow.id?`/admin/flows/${flow.id}`:"/admin/flows";const payload={name:flow.name,description:flow.description||"",active:flow.active,kind:flow.kind,steps:flow.steps,pollOptions:flow.kind==="evaluation"?defaultPollOptions:[]};const saved=normalizeFlow(await api(path,{method:flow.id?"PUT":"POST",body:JSON.stringify(payload)}));setFlows(current=>current.map((item,index)=>index===selected?saved:item));setFeedback(`Fluxo “${saved.name}” salvo.`);}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving("");}}
+  async function save(){if(!flow)return;const validation=validateFlow(flow);if(validation){setFeedback(validation);return;}setSaving(flow.id||"new");setFeedback("");try{const path=flow.id?`/admin/flows/${flow.id}`:"/admin/flows";const payload={name:flow.name,description:flow.description||"",active:flow.active,kind:flow.kind,steps:flow.steps,pollOptions:flow.kind==="evaluation"?defaultPollOptions:[]};const result=await api(path,{method:flow.id?"PUT":"POST",body:JSON.stringify(payload)});const returnedFlow=result?.flow||(result?.data&&!Array.isArray(result.data)?result.data:result);const saved=normalizeFlow({...flow,...(returnedFlow&&typeof returnedFlow==="object"&&!Array.isArray(returnedFlow)?returnedFlow:{}),id:returnedFlow?.id||flow.id,name:typeof returnedFlow?.name==="string"&&returnedFlow.name.trim()?returnedFlow.name:flow.name});setFlows(current=>current.map((item,index)=>index===selected?saved:item));setFeedback(`Fluxo “${saved.name||flow.name}” salvo com sucesso.`);}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving("");}}
   async function remove(){if(!flow)return;if(!flow.id){setFlows(current=>current.filter((_,i)=>i!==selected));return;}if(!window.confirm(`Excluir o fluxo “${flow.name}”?`))return;setSaving(flow.id);try{await api(`/admin/flows/${flow.id}`,{method:"DELETE"});setFlows(current=>current.filter(item=>item.id!==flow.id));setFeedback("Fluxo excluído.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível excluir.");}finally{setSaving("");}}
   async function selectFile(index:number,file?:File){if(!file)return;if(file.size>8*1024*1024){setFeedback("O arquivo do fluxo pode ter no máximo 8 MB.");return;}const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");reader.onerror=()=>reject(new Error("Não foi possível ler o arquivo."));reader.readAsDataURL(file);});patchStep(index,{data,mimetype:file.type||"application/octet-stream",filename:file.name});}
   const [editingDetails,setEditingDetails]=useState(false);
@@ -88,7 +89,7 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
     {flow?<section className="flow-workspace">
       <header className="flow-toolbar"><button className="flow-details-trigger" onClick={()=>setEditingDetails(current=>!current)} aria-expanded={editingDetails}><Pencil size={16}/>Editar detalhes</button><label className="flow-active"><input type="checkbox" checked={flow.active} onChange={event=>patchFlow({active:event.target.checked})}/><span/>{flow.active?"Ativo":"Inativo"}</label><button className="flow-delete" onClick={()=>void remove()} disabled={!!saving}><Trash2 size={17}/></button><button className="solid-button" onClick={()=>void save()} disabled={!!saving}><Save size={17}/>{saving?"Salvando…":"Salvar fluxo"}</button></header>
       {editingDetails&&<div className="flow-details-editor"><label>Nome do fluxo<input value={flow.name} maxLength={100} onChange={event=>patchFlow({name:event.target.value})}/></label><label>Descrição<input value={flow.description||""} maxLength={240} onChange={event=>patchFlow({description:event.target.value})} placeholder="Descrição para a equipe"/></label></div>}
-      {feedback&&<p className="settings-feedback flow-feedback" role="status">{feedback}<button onClick={()=>setFeedback("")}><X size={14}/></button></p>}
+      {feedback&&<div className="workspace-feedback" role="status" aria-live="polite"><CircleAlert size={15}/><span>{feedback}</span><button type="button" aria-label="Dispensar aviso" onClick={()=>setFeedback("")}><X size={15}/></button></div>}
       <div className="flow-editor-layout">
         <div className="flow-canvas">
           <div className="flow-canvas-grid"/>
@@ -110,7 +111,15 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
             <PaletteButton type="delay" text="Espera" detail="Intervalo entre blocos" add={addBlock}/>
             <PaletteButton type="action" text="Ação" detail="Atribuir ou encerrar" add={addBlock}/>
           </div>}
-          <div className="flow-variables-card"><b>Campos automáticos</b><code>{"{{atendente}}"}</code><code>{"{{cliente}}"}</code><code>{"{{saudacao}}"}</code></div>
+          <div className="flow-variables-card">
+            <b>Campos automáticos</b>
+            <code>{"{{atendente}}"}</code><code>{"{{cliente}}"}</code><code>{"{{nome}}"}</code><code>{"{{saudacao}}"}</code>
+            <code>{"{{telefone}}"}</code><code>{"{{email}}"}</code><code>{"{{empresa}}"}</code>
+            <code>{"{{documento}}"}</code><code>{"{{cpf_cnpj}}"}</code><code>{"{{endereco}}"}</code><code>{"{{etiquetas}}"}</code>
+            <code>{"{{status}}"}</code><code>{"{{tipo_atendimento}}"}</code><code>{"{{prioridade}}"}</code>
+            <code>{"{{campos_personalizados}}"}</code><code>{"{{data}}"}</code><code>{"{{hora}}"}</code>
+            <small>Os campos sem informação cadastrada ficam vazios. Data e hora usam o fuso de Brasília.</small>
+          </div>
         </aside>
       </div>
     </section>:<section className="flow-empty"><GitBranch size={38}/><h2>Crie seu primeiro fluxo</h2><p>Combine mensagens, enquetes, arquivos e ações automáticas.</p><button className="solid-button" onClick={addFlow}><Plus size={17}/>Criar fluxo</button></section>}

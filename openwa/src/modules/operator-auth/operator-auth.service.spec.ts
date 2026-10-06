@@ -6,6 +6,26 @@ describe('OperatorAuthService unassigned notifications', () => {
   const second='22222222-2222-4222-8222-222222222222';
   const outsider='33333333-3333-4333-8333-333333333333';
 
+  it('salva e consulta o áudio somente na conta autenticada', async () => {
+    const data = Buffer.from('audio de teste');
+    const query = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([{filename:'aviso.mp3',mimetype:'audio/mpeg',data}]);
+    const service = new OperatorAuthService({query} as never);
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    const input = {filename:'aviso.mp3',mimetype:'audio/mpeg',base64:data.toString('base64')};
+    expect(await service.saveNotificationSound('token',input)).toEqual(input);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('operator_notification_sounds'),[first,input.filename,input.mimetype,data]);
+    expect(await service.notificationSound('token')).toEqual(input);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE user_id=$1'),[first]);
+  });
+
+  it('recusa áudio acima do limite antes de gravar', async () => {
+    const query = jest.fn();
+    const service = new OperatorAuthService({query} as never);
+    jest.spyOn(service,'me').mockResolvedValue({id:first,username:'ana',displayName:'Ana'});
+    await expect(service.saveNotificationSound('token',{filename:'grande.mp3',mimetype:'audio/mpeg',base64:Buffer.alloc(2*1024*1024+1).toString('base64')})).rejects.toBeInstanceOf(BadRequestException);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('notifies every selected user until the conversation is assigned', async () => {
     const query=jest.fn().mockImplementation((sql:string) => {
       if(sql.includes('conversation_assignments')) return Promise.resolve([]);

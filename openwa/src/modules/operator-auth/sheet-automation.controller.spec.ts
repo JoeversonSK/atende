@@ -28,6 +28,17 @@ describe('SheetAutomationService mapping and safety', () => {
     expect(methods.render(rule.messageTemplate, row)).toBe('Olá, Maria! Vence em 10/10/2026.');
   });
 
+  it('aceita campos adicionais no mapeamento manual e valida os valores controlados', () => {
+    const rule = methods.normalize({ ...draft, mappings: [
+      { column: 'Prioridade', target: 'priority' },
+      { column: 'Campanhas', target: 'campaigns' },
+      { column: 'CNPJ', target: 'document' },
+    ] });
+    expect(methods.prepare({ Telefone: '11999999999', Prioridade: 'high', Campanhas: 'Mensal, Retorno', CNPJ: '48.102.421/0001-50' }, rule).profile)
+      .toEqual({ priority: 'high', campaigns: 'Mensal, Retorno', document: '48.102.421/0001-50' });
+    expect(() => methods.prepare({ Telefone: '11999999999', Prioridade: 'urgente' }, rule)).toThrow('Prioridade inválida');
+  });
+
   it('rejects unbounded ranges and unknown profile destinations', () => {
     expect(() => methods.normalize({ ...draft, range: 'A1:Z9999' })).toThrow('até 1.000 contatos');
     expect(() => methods.normalize({ ...draft, mappings: [{ column: 'Segredo', target: 'password' }] })).toThrow('mapeamento');
@@ -97,6 +108,16 @@ describe('Arquivos mensais', () => {
     const insert = query.mock.calls.find(([sql]) => sql.includes('INSERT INTO openwa.sheet_automations'));
     expect(insert?.[1][9]).toBe(false);
     expect(query.mock.calls.some(([sql, params]) => sql.includes('call_round=1,call_month=$1') && params[0] === previousMonthSheet())).toBe(true);
+  });
+  it('reinicia o histórico ao trocar a planilha de uma regra pausada', async () => {
+    const query = jest.fn(async (sql: string) => sql.includes('SELECT mode,active,spreadsheet_id')
+      ? [{ mode: 'monthlyCall', active: false, spreadsheet_id: '1A234567890abcdefghijklmnop' }]
+      : sql.includes('UPDATE openwa.sheet_automations SET name=') ? [{ id: 'regra' }] : []);
+    const auth = { requireAdmin: jest.fn().mockResolvedValue(undefined), connectionContext: jest.fn().mockResolvedValue({ sessionId: 'sessao' }) };
+    const service = new SheetAutomationService({ query } as never, auth as never, {} as never, {} as never);
+    await service.save('admin-token', { ...draft, spreadsheetId: '1B234567890abcdefghijklmnop' }, 'regra');
+    expect(query).toHaveBeenCalledWith('DELETE FROM openwa.sheet_automation_rows WHERE automation_id=$1', ['regra']);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('SET call_round=1,last_run_at=NULL'), ['regra', 'sessao']);
   });
   it('só avança a etapa quando está pausada e não há contatos aptos', async () => {
     const query = jest.fn(async (sql: string) => sql.includes('SELECT mode,active,call_round')

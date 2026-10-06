@@ -31,13 +31,13 @@ export function QuickReplySettings({ baseUrl, token }: { baseUrl: string; token:
   }
   return <><h2>Mensagens rápidas</h2><p>Cadastre atalhos para toda a equipe. Na conversa, digite / e escolha uma mensagem.</p>
     <section className="settings-card quick-reply-settings">
-      <div className="quick-reply-list">{items.map(item => <button key={item.id} disabled={busy} onClick={() => setEditing(item)}><b>/{item.shortcut}</b><span>{item.text}</span></button>)}{!items.length && <p>Nenhuma mensagem rápida cadastrada.</p>}</div>
+      <div className="quick-reply-columns"><div className="quick-reply-list">{items.map(item => <button key={item.id} disabled={busy} onClick={() => setEditing(item)}><b>/{item.shortcut}</b><span>{item.text}</span></button>)}{!items.length && <p>Nenhuma mensagem rápida cadastrada.</p>}</div>
       <form onSubmit={event => { event.preventDefault(); void update(); }}>
         <h3>{editing.id ? "Editar mensagem" : "Nova mensagem"}</h3>
         <label>Nome do atalho<input required maxLength={60} pattern="[a-zA-Z0-9_-]+" placeholder="boasvindas" value={editing.shortcut} disabled={busy} onChange={event => setEditing({ ...editing, shortcut: event.target.value })}/><small>Use letras sem acento, números, hífen ou sublinhado. Exemplo: /boasvindas.</small></label>
         <label>Mensagem pronta<textarea required maxLength={10000} rows={6} value={editing.text} disabled={busy} onChange={event => setEditing({ ...editing, text: event.target.value })}/></label>
         <button className="solid-button" disabled={busy}>{busy ? "Salvando…" : "Salvar mensagem rápida"}</button>
         {editing.id && <><button type="button" className="back-link" disabled={busy} onClick={() => setEditing({ id: "", shortcut: "", text: "" })}>Nova mensagem</button><button type="button" className="back-link" disabled={busy} onClick={() => { if (window.confirm("Excluir esta mensagem rápida?")) void update(true); }}>Excluir mensagem</button></>}
-      </form><p role="status">{feedback}</p>
+      </form></div><p role="status">{feedback}</p>
     </section></>;
 }

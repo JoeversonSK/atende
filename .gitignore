@@ -56,3 +56,5 @@ next-env.d.ts
 /openwa/data/
 /openwa/.env
 /openwa/.git/
+# Arquivo-fonte de arte não necessário para instalar ou executar o sistema.
+/openwa/docs/logo/*.psd

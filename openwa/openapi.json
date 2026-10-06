@@ -1700,6 +1700,131 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/conversations/assignments": {
+      "get": {
+        "operationId": "ConversationAssignmentController_listAssignments",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "conversation assignments"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/conversations/{chatId}/assignment": {
+      "get": {
+        "operationId": "ConversationAssignmentController_getAssignment",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Get the operator assigned to a conversation",
+        "tags": [
+          "conversation assignments"
+        ]
+      },
+      "put": {
+        "operationId": "ConversationAssignmentController_assign",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignConversationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Assign a conversation to an operator",
+        "tags": [
+          "conversation assignments"
+        ]
+      },
+      "delete": {
+        "operationId": "ConversationAssignmentController_clear",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Remove the operator assigned to a conversation",
+        "tags": [
+          "conversation assignments"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/webhooks": {
       "post": {
         "operationId": "WebhookController_create",
@@ -2960,6 +3085,47 @@
           }
         },
         "summary": "Send a native WhatsApp poll",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/sessions/{sessionId}/messages/send-list": {
+      "post": {
+        "operationId": "MessageController_sendList",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendListDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Interactive list sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Send an interactive WhatsApp option list",
         "tags": [
           "messages"
         ]
@@ -9465,6 +9631,1485 @@
         ]
       }
     },
+    "/api/operator-auth/register": {
+      "post": {
+        "operationId": "OperatorAuthController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/login": {
+      "post": {
+        "operationId": "OperatorAuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/me": {
+      "get": {
+        "operationId": "OperatorAuthController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "put": {
+        "operationId": "OperatorAuthController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/logout": {
+      "post": {
+        "operationId": "OperatorAuthController_logout",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/me/activity": {
+      "put": {
+        "operationId": "OperatorAuthController_activity",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivityDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/me/onsite": {
+      "get": {
+        "operationId": "OperatorAuthController_onsiteVisits",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorAuthController_startOnsite",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnsiteStartDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/me/onsite/{id}/finish": {
+      "post": {
+        "operationId": "OperatorAuthController_finishOnsite",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/me/notification-sound": {
+      "get": {
+        "operationId": "OperatorAuthController_notificationSound",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "put": {
+        "operationId": "OperatorAuthController_saveNotificationSound",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationSoundDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "delete": {
+        "operationId": "OperatorAuthController_deleteNotificationSound",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin": {
+      "get": {
+        "operationId": "OperatorAuthController_administration",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/connection": {
+      "get": {
+        "operationId": "OperatorAuthController_connection",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/reset-password": {
+      "post": {
+        "operationId": "OperatorAuthController_resetPassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/users/{id}": {
+      "put": {
+        "operationId": "OperatorAuthController_updateUser",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserAccessDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/notifications": {
+      "put": {
+        "operationId": "OperatorAuthController_recipient",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipientDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/notifications/{id}": {
+      "put": {
+        "operationId": "OperatorAuthController_recipientEnabled",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipientEnabledDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/operation-hours": {
+      "get": {
+        "operationId": "OperatorAuthController_operationHours",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/operation-hours": {
+      "put": {
+        "operationId": "OperatorAuthController_updateOperationHours",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationHoursDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/flows": {
+      "get": {
+        "operationId": "OperatorAuthController_flows",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/quick-replies": {
+      "get": {
+        "operationId": "OperatorAuthController_quickReplies",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/quick-replies": {
+      "post": {
+        "operationId": "OperatorAuthController_createQuickReply",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/quick-replies/{id}": {
+      "put": {
+        "operationId": "OperatorAuthController_updateQuickReply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuickReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "delete": {
+        "operationId": "OperatorAuthController_deleteQuickReply",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/flows": {
+      "post": {
+        "operationId": "OperatorAuthController_createFlow",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationFlowDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/flows/{id}": {
+      "put": {
+        "operationId": "OperatorAuthController_updateFlow",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationFlowDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "delete": {
+        "operationId": "OperatorAuthController_deleteFlow",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/notification-webhooks": {
+      "get": {
+        "operationId": "OperatorAuthController_notificationWebhooks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "post": {
+        "operationId": "OperatorAuthController_createNotificationWebhook",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/notification-webhooks/{id}": {
+      "put": {
+        "operationId": "OperatorAuthController_updateNotificationWebhook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      },
+      "delete": {
+        "operationId": "OperatorAuthController_deleteNotificationWebhook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/notification-webhooks/{id}/test": {
+      "post": {
+        "operationId": "OperatorAuthController_testNotificationWebhook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/notification": {
+      "get": {
+        "operationId": "OperatorAuthController_notification",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "OperatorAuth"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}": {
+      "delete": {
+        "operationId": "ContactProfileController_removeFromDirectory",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      },
+      "get": {
+        "operationId": "ContactProfileController_get",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      },
+      "put": {
+        "operationId": "ContactProfileController_save",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}/start": {
+      "post": {
+        "operationId": "ContactProfileController_start",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}/evaluation": {
+      "post": {
+        "operationId": "ContactProfileController_evaluation",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}/flow-continuation": {
+      "post": {
+        "operationId": "ContactProfileController_flowContinuation",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}/close": {
+      "post": {
+        "operationId": "ContactProfileController_close",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}": {
+      "get": {
+        "operationId": "ContactProfileController_overview",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/catalog/tags": {
+      "get": {
+        "operationId": "ContactProfileController_tags",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/{chat}/priority": {
+      "put": {
+        "operationId": "ContactProfileController_priority",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "chat",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/reconcile": {
+      "post": {
+        "operationId": "ContactImportController_reconcile",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactImport"
+        ]
+      }
+    },
+    "/api/operator-auth/contacts/{session}/import": {
+      "post": {
+        "operationId": "ContactImportController_import",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactImport"
+        ]
+      }
+    },
+    "/api/operator-auth/team-chat/rooms": {
+      "get": {
+        "operationId": "TeamChatController_rooms",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      }
+    },
+    "/api/operator-auth/team-chat/messages": {
+      "get": {
+        "operationId": "TeamChatController_messages",
+        "parameters": [
+          {
+            "name": "before",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      },
+      "post": {
+        "operationId": "TeamChatController_send",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      }
+    },
+    "/api/operator-auth/team-chat/messages/{id}": {
+      "patch": {
+        "operationId": "TeamChatController_edit",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      },
+      "delete": {
+        "operationId": "TeamChatController_remove",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      }
+    },
+    "/api/operator-auth/team-chat/alerts": {
+      "get": {
+        "operationId": "TeamChatController_alerts",
+        "parameters": [
+          {
+            "name": "afterAt",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "afterId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      }
+    },
+    "/api/operator-auth/team-chat/read": {
+      "post": {
+        "operationId": "TeamChatController_read",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "TeamChat"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets": {
+      "get": {
+        "operationId": "SheetAutomationController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      },
+      "post": {
+        "operationId": "SheetAutomationController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/{id}": {
+      "put": {
+        "operationId": "SheetAutomationController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      },
+      "delete": {
+        "operationId": "SheetAutomationController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/preview": {
+      "post": {
+        "operationId": "SheetAutomationController_preview",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/{id}/run": {
+      "post": {
+        "operationId": "SheetAutomationController_run",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/{id}/start": {
+      "post": {
+        "operationId": "SheetAutomationController_start",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/{id}/pause": {
+      "post": {
+        "operationId": "SheetAutomationController_pause",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/automations/sheets/{id}/advance": {
+      "post": {
+        "operationId": "SheetAutomationController_advance",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SheetAutomation"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/system-webhooks/catalog": {
+      "get": {
+        "operationId": "SystemWebhookController_catalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/system-webhooks": {
+      "get": {
+        "operationId": "SystemWebhookController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      },
+      "post": {
+        "operationId": "SystemWebhookController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/system-webhooks/{id}": {
+      "put": {
+        "operationId": "SystemWebhookController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      },
+      "delete": {
+        "operationId": "SystemWebhookController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      }
+    },
+    "/api/operator-auth/admin/system-webhooks/{id}/test": {
+      "post": {
+        "operationId": "SystemWebhookController_test",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "SystemWebhook"
+        ]
+      }
+    },
     "/api/search": {
       "get": {
         "operationId": "SearchController_search",
@@ -10811,6 +12456,10 @@
           "memoryUsage"
         ]
       },
+      "AssignConversationDto": {
+        "type": "object",
+        "properties": {}
+      },
       "WebhookFilterConditionDto": {
         "type": "object",
         "properties": {
@@ -10879,6 +12528,10 @@
       "CreateWebhookDto": {
         "type": "object",
         "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Enable or pause delivery immediately after creation."
+          },
           "url": {
             "type": "string",
             "description": "Webhook URL to receive events",
@@ -10918,6 +12571,13 @@
                 "call.accepted",
                 "call.rejected",
                 "call.missed",
+                "contact.updated",
+                "contact.created",
+                "conversation.assigned",
+                "conversation.closed",
+                "team.message.sent",
+                "operator.activity.changed",
+                "automation.completed",
                 "*"
               ]
             }
@@ -11014,6 +12674,13 @@
                 "call.accepted",
                 "call.rejected",
                 "call.missed",
+                "contact.updated",
+                "contact.created",
+                "conversation.assigned",
+                "conversation.closed",
+                "team.message.sent",
+                "operator.activity.changed",
+                "automation.completed",
                 "*"
               ]
             }
@@ -11112,6 +12779,13 @@
                 "call.accepted",
                 "call.rejected",
                 "call.missed",
+                "contact.updated",
+                "contact.created",
+                "conversation.assigned",
+                "conversation.closed",
+                "team.message.sent",
+                "operator.activity.changed",
+                "automation.completed",
                 "*"
               ]
             }
@@ -11848,6 +13522,10 @@
           "name",
           "options"
         ]
+      },
+      "SendListDto": {
+        "type": "object",
+        "properties": {}
       },
       "ReplyMessageDto": {
         "type": "object",
@@ -16801,6 +18479,62 @@
             "description": "Per-instance config slice passed to the adapter."
           }
         }
+      },
+      "RegisterDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ProfileDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ActivityDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "OnsiteStartDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "NotificationSoundDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ResetPasswordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UserAccessDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RecipientDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RecipientEnabledDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "OperationHoursDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "QuickReplyDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ConversationFlowDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "NotificationWebhookDto": {
+        "type": "object",
+        "properties": {}
       },
       "SearchHitDto": {
         "type": "object",
