@@ -55,21 +55,46 @@ export class OperatorAuthService implements OnModuleInit {
     await this.dataSource.query('CREATE TABLE IF NOT EXISTS openwa.operator_recovery (user_id varchar(36) PRIMARY KEY REFERENCES openwa.operator_users(id) ON DELETE CASCADE, token_hash varchar(64) NOT NULL, expires_at timestamptz NOT NULL)');
     await this.ensureAccessSchema();
   }
-  async register(usernameInput: string, displayNameInput: string, password: string) {
-    await this.ensureAccessSchema();
-    const username = usernameInput.trim().toLowerCase(); const displayName = displayNameInput.trim();
+  async registrationStatus() {
+    const rows = await this.dataSource.query('SELECT EXISTS(SELECT 1 FROM openwa.operator_users) AS "hasUsers"');
+    return { registrationOpen: !rows[0]?.hasUsers };
+  }
+  private validateNewUser(usernameInput: string, displayNameInput: string, password: string) {
+    const username = usernameInput.trim().toLowerCase();
+    const displayName = displayNameInput.trim();
     if (!/^[a-z0-9._-]{3,80}$/.test(username)) throw new ConflictException('Usuário deve ter de 3 a 80 caracteres.');
     if (!displayName || displayName.length > 160) throw new ConflictException('Informe um nome de exibição válido.');
-    if (password.length < 8) throw new ConflictException('A senha deve ter pelo menos 8 caracteres.');
-    if ((await this.dataSource.query('SELECT 1 FROM openwa.operator_users WHERE username = $1', [username])).length) throw new ConflictException('Este usuário já existe.');
+    if (password.length < 8 || password.length > 128) throw new ConflictException('A senha deve ter de 8 a 128 caracteres.');
+    return { username, displayName };
+  }
+  async register(usernameInput: string, displayNameInput: string, password: string) {
+    await this.ensureAccessSchema();
+    const { username, displayName } = this.validateNewUser(usernameInput, displayNameInput, password);
     const salt = randomBytes(16).toString('hex'); const user: OperatorUser = { id: randomUUID(), username, displayName };
     await this.dataSource.transaction(async db => {
       await db.query('SELECT pg_advisory_xact_lock(7349201)');
-      if ((await db.query('SELECT 1 FROM openwa.operator_users WHERE username=$1',[username])).length) throw new ConflictException('Este usuário já existe.');
-      const first = !(await db.query('SELECT 1 FROM openwa.operator_users LIMIT 1')).length;
-      await db.query('INSERT INTO openwa.operator_users (id, username, display_name, password_hash, password_salt, role) VALUES ($1,$2,$3,$4,$5,$6)', [user.id,username,displayName,this.passwordHash(password,salt),salt,first ? 'admin' : 'agent']);
+      if ((await db.query('SELECT 1 FROM openwa.operator_users LIMIT 1')).length)
+        throw new ForbiddenException('O cadastro público está encerrado. Peça a um administrador para criar sua conta.');
+      await db.query('INSERT INTO openwa.operator_users (id, username, display_name, password_hash, password_salt, role) VALUES ($1,$2,$3,$4,$5,$6)', [user.id,username,displayName,this.passwordHash(password,salt),salt,'admin']);
     });
     return this.issue(user);
+  }
+  async createUser(token: string, usernameInput: string, displayNameInput: string, password: string) {
+    await this.requireAdmin(token);
+    const { username, displayName } = this.validateNewUser(usernameInput, displayNameInput, password);
+    const salt = randomBytes(16).toString('hex');
+    return this.dataSource.transaction(async db => {
+      await db.query('SELECT pg_advisory_xact_lock(7349201)');
+      await this.requireAdmin(token);
+      if ((await db.query('SELECT 1 FROM openwa.operator_users WHERE username=$1', [username])).length)
+        throw new ConflictException('Este usuário já existe.');
+      const id = randomUUID();
+      const [user] = await db.query(`WITH created AS (
+        INSERT INTO openwa.operator_users (id,username,display_name,password_hash,password_salt,role)
+        VALUES ($1,$2,$3,$4,$5,'agent') RETURNING *
+      ) SELECT ${accessFields} FROM created`, [id, username, displayName, this.passwordHash(password,salt), salt]);
+      return user as OperatorUser;
+    });
   }
   async login(usernameInput: string, password: string) {
     await this.ensureAccessSchema();

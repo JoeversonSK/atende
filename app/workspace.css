@@ -85,6 +85,14 @@ body .wa-top-actions .finish-ticket:disabled{opacity:.55;cursor:default}
 /* Team administration */
 .settings-card select { width:100%; border:1px solid #d9e4e1; border-radius:10px; padding:12px; background:#fff; color:#183c34; font:inherit; }
 .team-feedback { padding:12px 16px; border-radius:10px; color:#176d51; background:#e4f5ec; }
+.team-create { margin-top:18px; padding:17px 20px; border:1px solid #dce8e2; border-radius:12px; background:#fff; }
+.team-create summary { cursor:pointer; color:#087f6d; font-weight:650; }
+.team-create form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; margin-top:18px; }
+.team-create label { display:block; color:#30433e; font-size:13px; font-weight:600; }
+.team-create input { display:block; width:100%; height:42px; margin-top:6px; padding:0 12px; border:1px solid #dce5e0; border-radius:8px; color:#1b322b; background:#fff; font:inherit; }
+.team-create p { grid-column:1/-1; margin:0; color:#6b7b78; font-size:12px; }
+.team-create .solid-button { grid-column:1/-1; justify-self:start; }
+@media(max-width:650px){.team-create form{grid-template-columns:1fr}}
 .team-check-cell input { width:18px; height:18px; accent-color:#11866e; cursor:pointer; }
 .team-table-scroll { width:100%; overflow-x:auto; margin-top:20px; border:1px solid #e0e9e5; border-radius:12px; background:#fff; }
 .team-table { width:100%; min-width:920px; border-collapse:collapse; font-size:13px; }

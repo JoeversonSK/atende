@@ -2,7 +2,7 @@
 
 A área **Ajustes → Automações** lê uma planilha privada, associa colunas aos campos do contato e, opcionalmente, envia uma mensagem usando valores da linha. Apenas administradores podem configurá-la. A planilha não precisa ser publicada. O caminho recomendado usa uma ponte no **Apps Script da própria planilha**, sem Google Cloud Console ou chave de conta de serviço.
 
-1. Abra a planilha com a conta proprietária e escolha **Extensões → Apps Script**. Cole o conteúdo de [`scripts/ponte-google-sheets.gs`](scripts/ponte-google-sheets.gs) no projeto vinculado à planilha.
+1. Abra a planilha com a conta proprietária e escolha **Extensões → Apps Script**. Cole o conteúdo de [`scripts/ponte-google-sheets.gs`](../scripts/ponte-google-sheets.gs) no projeto vinculado à planilha.
 2. Em **Configurações do projeto → Propriedades do script**, crie `ATENDE_BRIDGE_SECRET` com um segredo aleatório de pelo menos 32 caracteres. Não coloque o segredo no código nem no Git.
 3. Em **Implantar → Nova implantação → App da Web**, configure **Executar como: eu** e **Quem tem acesso: qualquer pessoa**. Autorize o script com a conta que pode editar a planilha. Copie a URL final `/exec`. O endpoint é público, mas toda leitura e escrita exige o segredo e é restrita à planilha vinculada. Proteja a URL e o segredo no servidor; não os distribua para operadores nem os coloque no navegador.
 4. No `.env` **local** do servidor, defina `GOOGLE_APPS_SCRIPT_URL` com a URL `/exec` e `GOOGLE_APPS_SCRIPT_SECRET` com o mesmo segredo. Reinicie/recrie o serviço `openwa` para carregar as variáveis. **Não ative a automação ainda**: primeiro confira a prévia e os contatos aptos.
@@ -16,9 +16,9 @@ Limites de segurança: no máximo 1.000 contatos e 52 colunas por regra; uma men
 
 Outros sistemas podem receber eventos pela área **Webhooks**. O formato JSON pode incluir o perfil completo do contato (inclusive campos personalizados), os detalhes da mensagem e o responsável pelo atendimento.
 
-## Chamar clientes por CNPJ
+## Regra antiga por CNPJ (somente regras já existentes)
 
-Crie uma automação do tipo **Chamar clientes por CNPJ**. Informe a aba de controle (por exemplo, `Controle!A1:H201`) e a aba de dados (`Clientes!A1:D201`) da **mesma planilha**, ambas com cabeçalho na primeira linha. Configure o nome exato das colunas de CNPJ em cada aba, a coluna de retorno `Chamado` e o texto a escrever após o envio (por padrão, `Nós chamamos`). A mensagem pode usar `{{Razão social}}`, `{{Nome do cliente}}` ou qualquer outra coluna das duas abas.
+A interface atual permite criar apenas a automação personalizada e a de arquivos mensais. O tipo **Chamar clientes por CNPJ** permanece no código para preservar e editar regras antigas; não aparece como opção ao criar uma regra nova. Em uma regra existente, informe a aba de controle (por exemplo, `Controle!A1:H201`) e a aba de dados (`Clientes!A1:D201`) da **mesma planilha**, ambas com cabeçalho na primeira linha. Configure o nome exato das colunas de CNPJ em cada aba, a coluna de retorno `Chamado` e o texto a escrever após o envio (por padrão, `Nós chamamos`). A mensagem pode usar `{{Razão social}}`, `{{Nome do cliente}}` ou qualquer outra coluna das duas abas.
 
 O sistema ignora linhas cujo `Chamado` já tem algum valor. Para as demais, normaliza o CNPJ, procura uma única linha na aba de dados e um único contato existente cujo campo **Documento** ou campo personalizado **CNPJ** coincida. Não cria contatos nem associa uma empresa por semelhança de nome. CNPJs ausentes, inválidos ou ambíguos não geram mensagem; a prévia mostra as respectivas contagens.
 

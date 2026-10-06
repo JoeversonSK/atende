@@ -13,6 +13,15 @@ export function LoginScreen({ baseUrl, registering, setRegistering, username, se
   const [visible, setVisible] = useState(false);
   const [confirm, setConfirm] = useState("");
   const [validation, setValidation] = useState("");
+  const [registrationOpen,setRegistrationOpen] = useState(false);
+  useEffect(()=>{
+    let live=true;
+    fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/registration-status`)
+      .then(async response=>{if(!response.ok)throw new Error("Não foi possível consultar o cadastro.");return response.json();})
+      .then(data=>{if(live){setRegistrationOpen(data.registrationOpen===true);if(!data.registrationOpen)setRegistering(false);}})
+      .catch(()=>{if(live){setRegistrationOpen(false);setRegistering(false);}});
+    return()=>{live=false;};
+  },[baseUrl]);
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (registering && password !== confirm) { setValidation("As senhas precisam ser iguais."); return; }
@@ -30,7 +39,7 @@ export function LoginScreen({ baseUrl, registering, setRegistering, username, se
       {!registering && <button type="button" className="back-link" disabled={busy} onClick={()=>{setPassword("");setRecovering(true);}}>Esqueci minha senha</button>}
       {(validation || error) && <p className="form-error" role="alert">{validation || error}</p>}
       <button className="solid-button" disabled={busy} type="submit">{busy && <LoaderCircle className="wa-spin" size={18} />}{busy ? "Aguarde…" : registering ? "Criar minha conta" : "Entrar no atendimento"}</button>
-      <p className="auth-switch">{registering ? "Já tem uma conta?" : "Primeiro acesso?"} <button type="button" onClick={() => { setRegistering(!registering); setValidation(""); setConfirm(""); }}>{registering ? "Entrar" : "Criar conta"}</button></p>
+      {registrationOpen && <p className="auth-switch">{registering ? "Já tem uma conta?" : "Primeiro acesso?"} <button type="button" onClick={() => { setRegistering(!registering); setValidation(""); setConfirm(""); }}>{registering ? "Entrar" : "Criar conta"}</button></p>}
     </form></section>
   </main>;
 }

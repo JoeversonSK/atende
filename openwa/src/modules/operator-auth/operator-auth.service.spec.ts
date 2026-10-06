@@ -126,3 +126,47 @@ describe('OperatorAuthService unassigned notifications', () => {
     expect(query).not.toHaveBeenCalledWith(expect.stringContaining('UPDATE openwa.operator_users'),expect.anything());
   });
 });
+
+describe('OperatorAuthService cadastro da equipe', () => {
+  const admin = {id:'11111111-1111-4111-8111-111111111111',username:'admin',displayName:'Admin',role:'admin'};
+
+  it('permite somente o primeiro cadastro público e cria um administrador', async () => {
+    let users = 0;
+    const query = jest.fn().mockImplementation((sql:string,params?:unknown[]) => {
+      if(sql.includes('FROM openwa.operator_users LIMIT 1')) return Promise.resolve(users ? [{id:'existing'}] : []);
+      if(sql.includes('INSERT INTO openwa.operator_users')) { users++; return Promise.resolve([]); }
+      return Promise.resolve([]);
+    });
+    const service = new OperatorAuthService({query,transaction:(work:(db:unknown)=>Promise<unknown>)=>work({query})} as never);
+    jest.spyOn(service as never,'ensureAccessSchema').mockResolvedValue(undefined);
+    jest.spyOn(service as never,'issue').mockResolvedValue({user:admin,token:'token-de-teste'});
+    await expect(service.register(' Admin ','Administrador','senha-segura')).resolves.toMatchObject({user:admin});
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO openwa.operator_users'),expect.arrayContaining(['admin','Administrador','admin']));
+    await expect(service.register('outra','Outra Pessoa','senha-segura')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(users).toBe(1);
+  });
+
+  it('mostra o cadastro inicial como fechado quando já existe uma conta', async () => {
+    const query = jest.fn().mockResolvedValue([{hasUsers:true}]);
+    const service = new OperatorAuthService({query} as never);
+    expect(await service.registrationStatus()).toEqual({registrationOpen:false});
+  });
+
+  it('exige administrador para criar outra conta e não cria sessão automaticamente', async () => {
+    const user = {id:'22222222-2222-4222-8222-222222222222',username:'agente',displayName:'Agente',role:'agent',active:true};
+    const query = jest.fn().mockImplementation((sql:string) => {
+      if(sql.includes('WHERE username=$1')) return Promise.resolve([]);
+      if(sql.includes('WITH created AS')) return Promise.resolve([user]);
+      return Promise.resolve([]);
+    });
+    const transaction = jest.fn((work:(db:unknown)=>Promise<unknown>)=>work({query}));
+    const service = new OperatorAuthService({query,transaction} as never);
+    const requireAdmin = jest.spyOn(service,'requireAdmin').mockRejectedValueOnce(new ForbiddenException('Apenas administradores podem gerenciar a equipe.')).mockResolvedValue(admin);
+    await expect(service.createUser('agente-token','agente','Agente','senha-segura')).rejects.toBeInstanceOf(ForbiddenException);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(await service.createUser('admin-token','agente','Agente','senha-segura')).toEqual(user);
+    expect(requireAdmin).toHaveBeenCalledTimes(3);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WITH created AS'),expect.arrayContaining(['agente','Agente']));
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining('operator_sessions'),expect.anything());
+  });
+});

@@ -13,7 +13,7 @@
 
 Central de atendimento multiusuário para WhatsApp, executada no seu próprio computador com Docker. A equipe acessa uma caixa de entrada compartilhada, identifica o atendente responsável e acompanha a fila e os atendimentos em tempo real.
 
-Para assumir o desenvolvimento, consulte o [guia de arquitetura e localização do código](docs/GUIA_DO_SISTEMA_PARA_IA.md).
+Para assumir o desenvolvimento, comece pelo [índice da documentação](docs/README.md) e pelo [mapa de arquitetura e estado atual](docs/ARQUITETURA_E_ESTADO_ATUAL.md). Agentes de código devem seguir também o [roteiro curto de manutenção](AGENTS.md).
 
 O projeto usa uma versão personalizada do [OpenWA](https://github.com/rmyndharis/OpenWA) e não depende da API oficial do WhatsApp.
 
@@ -111,16 +111,16 @@ http://localhost:3000
 
 Os certificados HTTPS locais são opcionais e não vêm no clone. Sem eles, o painel inicia normalmente em HTTP na porta 3000. Para acesso seguro pela rede local (necessário para recursos do navegador como microfone e notificações), no Windows execute `powershell -ExecutionPolicy Bypass -File .\scripts\create-local-https.ps1` no computador-servidor e depois `docker compose up -d --build web`. Cada instalação deve gerar e confiar em sua própria autoridade local. Nunca copie certificados ou chaves privadas gerados para o repositório.
 
-Para a automação com Google Sheets privado, a instalação inicial funciona sem credenciais, mas a leitura da planilha e os envios ficam indisponíveis até configurar a ponte do Apps Script conforme [AUTOMACOES.md](AUTOMACOES.md). O segredo fica apenas no `.env` local; não vem no clone.
+Para a automação com Google Sheets privado, a instalação inicial funciona sem credenciais, mas a leitura da planilha e os envios ficam indisponíveis até configurar a ponte do Apps Script conforme o [guia de automações](docs/AUTOMACOES.md). O segredo fica apenas no `.env` local; não vem no clone.
 
 ### 4. Faça o primeiro acesso
 
 1. Clique em **Criar conta**.
-2. A primeira conta criada torna-se administradora.
+2. A primeira conta criada torna-se administradora. O cadastro público fecha automaticamente depois disso; somente um administrador pode criar as demais contas.
 3. Entre em **Configurações > WhatsApp**.
 4. Crie a sessão e leia o QR Code pelo WhatsApp do celular.
 5. Aguarde a conexão aparecer como ativa.
-6. Crie as contas dos atendentes em **Configurações > Equipe e permissões**.
+6. Crie as contas dos atendentes em **Configurações > Equipe e permissões > Adicionar pessoa à equipe**. Informe uma senha inicial para cada pessoa e ajuste as permissões na tabela.
 
 ## Acesso por outros computadores
 
@@ -203,12 +203,13 @@ A autenticação do WhatsApp fica no volume `atende-openwa`, e os arquivos de m�
 ```text
 app/                 Interface da central de atendimento
 docker/              Inicialização do PostgreSQL
-docs/                Imagens e documentação visual
+docs/                Guias do Atende; comece por docs/README.md
 openwa/              OpenWA personalizado para o Atende
 scripts/             Gateway local e verificações
 docker-compose.yml   Orquestração completa
 Dockerfile           Imagem da interface
 .env.example         Modelo seguro de configuração
+AGENTS.md            Roteiro curto para agentes de desenvolvimento
 ```
 
 ## Desenvolvimento

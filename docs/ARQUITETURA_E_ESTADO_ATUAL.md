@@ -1,6 +1,6 @@
-# Guia de continuidade do Atende para outra IA
+# Arquitetura e estado atual do Atende
 
-Atualizado em 03/10/2026. Este arquivo é um **mapa do código existente**, não uma especificação de funcionalidades ainda não implementadas. Antes de alterar algo, confira o estado atual com `git status`, leia os arquivos indicados e confirme os fluxos em execução. O repositório pode conter alterações locais não commitadas.
+Atualizado em 06/10/2026. Este arquivo é um **mapa do código existente**, não uma especificação de funcionalidades ainda não implementadas. Antes de alterar algo, confira o estado atual com `git status`, leia os arquivos indicados e confirme os fluxos em execução. O repositório pode conter alterações locais não commitadas. O índice canônico está em [`docs/README.md`](README.md); o roteiro curto para agentes está em [`AGENTS.md`](../AGENTS.md).
 
 ## 1. O que é o sistema
 
@@ -16,28 +16,38 @@ Navegador → web :3000 (ou HTTPS :443)
                                           └─ WhatsApp Web via navegador Chromium
 ```
 
-O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro Compose em `openwa/`, pertencente ao projeto-base, que não substitui o da raiz. O OpenWA possui um dashboard próprio em `openwa/dashboard/`; **a interface Atende mostrada aos usuários está em `app/`**, não nesse dashboard.
+O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro Compose em `openwa/`, pertencente ao projeto-base, que não substitui o da raiz. O OpenWA possui um dashboard próprio em `openwa/dashboard/`; **a interface Atende mostrada aos usuários está em `app/`**, não nesse dashboard. A interface do OpenWA é compilada dentro da imagem `openwa` e servida como arquivos estáticos pelo processo da API; não há um quinto serviço Docker para ela. `SERVE_DASHBOARD=false` impede servi-la, mas o Dockerfile atual ainda a compila e copia, portanto essa variável sozinha não reduz significativamente o tamanho da imagem. O Atende depende da API do OpenWA, não do seu dashboard.
+
+### Estado funcional em 06/10/2026
+
+- **Atendimento:** caixa compartilhada, histórico de texto e mídia, resposta vinculada a uma mensagem, encaminhamento de mensagens a contatos, atribuição e conclusão de conversas, chat interno e notificações. Arquivos colados na conversa passam por prévia e confirmação antes do envio.
+- **Contatos e equipe:** cadastro/importação de contatos, notas, etiquetas e campos personalizados; filtro de várias etiquetas com opção de exigir todas ou aceitar qualquer uma; contas, permissões e destinatários de notificações. A equipe pode informar indisponibilidade e registrar início/fim de atendimento externo.
+- **Dashboard:** fila, atendimentos em andamento e concluídos, tempos, atividade dos atendentes e modo de tela cheia. Consulte o guia de atendimentos para as regras de contagem; não infira métricas apenas pela aparência da tela.
+- **Configurações:** expediente e resposta fora de horário, mensagens rápidas, fluxos de conversa, preferências de notificação e áudio personalizado por usuário, integração com Google Sheets privado e webhooks genéricos.
+- **Implantação:** quatro serviços no Compose da raiz (`web`, `openwa`, `postgres`, `redis`). O painel do OpenWA ainda é compilado na imagem da API, mesmo que a interface operacional seja o Atende. A separação dele foi avaliada como possibilidade de otimização, mas não foi implementada.
+
+**Limites a considerar:** o projeto usa WhatsApp Web, sujeito a mudanças externas; notificações nativas precisam de contexto HTTPS ou `localhost`; a automação de planilhas requer credenciais locais e não deve ser testada enviando mensagens reais sem autorização. No estado verificado em 06/10/2026, `docker compose build web openwa` e 41 testes direcionados passaram, mas o lint do frontend ainda apontava 26 erros e 25 avisos. Compilação aprovada não significa lint limpo. Essas verificações são um registro datado, não uma garantia sobre alterações futuras.
 
 ## 2. Primeiros arquivos a ler
 
 | Assunto | Arquivo/pasta |
 | --- | --- |
-| Instalação local e portas | `README-LOCAL.md`, `docker-compose.yml`, `.env.example` |
+| Instalação local e portas | `README.md`, `docker-compose.yml`, `.env.example` |
 | Interface, navegação, sessão, conversas e envio | `app/page.tsx` |
 | Tela de login e Ajustes | `app/account-panels.tsx` |
 | Módulos da API | `openwa/src/app.module.ts` |
 | Autenticação e dados da equipe | `openwa/src/modules/operator-auth/operator-auth.service.ts` |
 | Contatos, perfil e painel | `openwa/src/modules/operator-auth/contact-profile.controller.ts` |
-| Automações da planilha | `AUTOMACOES.md`, `openwa/src/modules/operator-auth/sheet-automation.controller.ts` |
+| Automações da planilha | `docs/AUTOMACOES.md`, `openwa/src/modules/operator-auth/sheet-automation.controller.ts` |
 | Webhooks genéricos | `app/system-webhooks.tsx`, `openwa/src/modules/webhook/` |
-| Regras do painel operacional | `ATENDIMENTOS.md`, `app/ticket-dashboard.tsx` |
+| Regras do painel operacional | `docs/ATENDIMENTOS.md`, `app/ticket-dashboard.tsx` |
 | Documentação do motor OpenWA | `openwa/docs/README.md` e demais arquivos em `openwa/docs/` |
 
 ## 3. Estrutura do repositório
 
 ### Raiz e implantação
 
-- `docker-compose.yml`: serviços `web`, `openwa`, `postgres` e `redis`; volumes persistentes; variáveis de ambiente; portas. `openwa` só expõe a API em `127.0.0.1:2785` no host; os demais computadores devem acessar o painel, não essa porta.
+- `docker-compose.yml`: serviços `web`, `openwa`, `postgres` e `redis`; volumes persistentes; variáveis de ambiente; portas. `openwa` só publica a porta em `127.0.0.1:2785` no host; os demais computadores devem acessar o painel, não essa porta. `atende-postgres`, `atende-redis`, `atende-openwa` (sessão) e `atende-media` (anexos) são volumes distintos.
 - `Dockerfile`: compila e executa o painel web. `scripts/local-gateway.mjs` serve uma origem única: encaminha `/api` e `/socket.io` ao OpenWA e o restante à interface. Isto evita que outros computadores tentem acessar `localhost:2785` da própria máquina.
 - `.env.example`: exemplo das variáveis obrigatórias e integrações opcionais. `.env` real não deve entrar no Git. Segredos da planilha, chave mestra e senhas ficam no servidor.
 - `docker/postgres-init/`: SQL executado **somente na criação de um volume PostgreSQL novo**; não é mecanismo de migração de uma instalação já existente.
@@ -90,7 +100,7 @@ A navegação principal não usa páginas independentes para cada recurso: `app/
 
 ### Automações: regras importantes
 
-Leia `AUTOMACOES.md` antes de mudar esse fluxo. A conexão recomendada à planilha privada é a ponte Apps Script `scripts/ponte-google-sheets.gs`, configurada por `GOOGLE_APPS_SCRIPT_URL` e `GOOGLE_APPS_SCRIPT_SECRET`; há alternativa com conta de serviço. A regra manual mapeia colunas a campos do contato. Há modos legados de CNPJ e de arquivos mensais; alterações na interface não significam remoção automática dos dados/regras persistidos. Na chamada mensal, a aba do mês anterior é calculada no fuso de São Paulo, `Clientes` fornece a razão social, `X` bloqueia envio, e um contato com vários CNPJs recebe uma mensagem consolidada. As etapas de chamada avançam manualmente; envio e marcação `Chamado` foram projetados para evitar duplicidade após falhas. A prévia não deve enviar nem alterar dados.
+Leia [`AUTOMACOES.md`](AUTOMACOES.md) antes de mudar esse fluxo. A conexão recomendada à planilha privada é a ponte Apps Script `scripts/ponte-google-sheets.gs`, configurada por `GOOGLE_APPS_SCRIPT_URL` e `GOOGLE_APPS_SCRIPT_SECRET`; há alternativa com conta de serviço. A regra manual mapeia colunas a campos do contato. A interface permite criar regras manuais e de arquivos mensais; o modo antigo de chamada por CNPJ aparece apenas para regras já existentes. Alterações na interface não removem automaticamente regras persistidas. Na chamada mensal, a aba do mês anterior é calculada no fuso de São Paulo, `Clientes` fornece a razão social, `X` bloqueia envio, e um contato com vários CNPJs recebe uma mensagem consolidada. As etapas de chamada avançam manualmente; envio e marcação `Chamado` foram projetados para evitar duplicidade após falhas. A prévia não deve enviar nem alterar dados.
 
 ### Webhooks: dois mecanismos coexistem
 
@@ -98,8 +108,9 @@ Leia `AUTOMACOES.md` antes de mudar esse fluxo. A conexão recomendada à planil
 
 ## 5. Dados e segurança
 
-- PostgreSQL (volume `atende-postgres`) guarda dados operacionais e tabelas do esquema `openwa`; Redis (`atende-redis`) suporta eventos/cache; arquivos de sessão e mídia ficam em `atende-openwa`. **Nunca remova volumes para “corrigir” um erro** sem plano de backup e autorização explícita.
+- PostgreSQL (volume `atende-postgres`) guarda dados operacionais e tabelas do esquema `openwa`; Redis (`atende-redis`) suporta eventos/cache; a sessão do WhatsApp fica em `atende-openwa`, e a mídia em `atende-media`. Consulte [`MIGRACAO_VOLUME_MIDIA.md`](MIGRACAO_VOLUME_MIDIA.md) antes de atualizar instalações antigas com anexos. **Nunca remova volumes para “corrigir” um erro** sem plano de backup e autorização explícita.
 - A API original do OpenWA usa `X-API-Key`; as rotas Atende usam `X-Atende-Token` e checam permissões. Rotas decoradas com `@Public()` podem dispensar a guarda global de chave de API, mas devem validar o token dentro do controlador/serviço. Preserve o escopo da sessão (`sessionId`) para impedir acesso cruzado.
+- O cadastro inicial usa `GET /api/operator-auth/registration-status` e `POST /api/operator-auth/register`. O `register` só aceita a primeira conta, dentro de transação com trava; toda conta posterior exige `POST /api/operator-auth/admin/users` com token de administrador. O formulário administrativo fica em `app/team-settings.tsx`. Não reabra o registro público para facilitar a entrada de atendentes.
 - `app/page.tsx` guarda a configuração de conexão e a sessão do operador no armazenamento local do navegador. Não imprima tokens, chaves, `.env`, segredo do Apps Script ou conteúdo de clientes em logs/testes/relatórios.
 - A aplicação pode enviar mensagens reais a clientes. Teste prévias e validações sem disparo quando possível; não inicie automações em produção só para testar.
 - HTTPS e certificados locais são tratados por `scripts/local-gateway.mjs` e `scripts/create-local-https.ps1`. A disponibilidade de notificações do sistema varia com a origem segura do navegador.
@@ -107,7 +118,7 @@ Leia `AUTOMACOES.md` antes de mudar esse fluxo. A conexão recomendada à planil
 ## 6. Como executar e verificar
 
 1. Confira `git status --short` e preserve alterações existentes. Histórico anterior pode conter mudanças locais de outras tarefas; não faça reset/checkout destrutivo.
-2. Consulte `.env.example` e `README-LOCAL.md`. Não copie segredos de uma instalação para documentação. Com Docker Desktop iniciado, execute `docker compose up -d --build` **na raiz** para a primeira execução, ou `docker compose build web openwa` e `docker compose up -d --no-build web openwa` após mudanças de código.
+2. Consulte `.env.example` e [`README.md`](../README.md). Não copie segredos de uma instalação para documentação. Com Docker Desktop iniciado, execute `docker compose up -d --build` **na raiz** para a primeira execução, ou `docker compose build web openwa` e `docker compose up -d --no-build web openwa` após mudanças de código. Em atualização de instalação com mídia antiga, siga antes o guia de migração.
 3. Verifique `docker compose ps`; `openwa` deve ficar `healthy`. O painel atende em `http://localhost:3000` e, se o certificado local existir, também em HTTPS na porta 443. Um `401` numa rota administrativa sem token indica que ela está protegida, não necessariamente defeito.
 4. Testes rápidos: `npm run build` na raiz; `npm run build` em `openwa/`; `npm test -- --runInBand --runTestsByPath <arquivo.spec.ts>` em `openwa/` para a área alterada. Rode testes de integração proporcionais ao risco. Evite usar uma sessão WhatsApp real para testes de envio sem necessidade.
 5. Para mudanças de API, confira o contrato `openwa/openapi.json` e os testes `openwa/test/`. Para UI, confira estados de carregamento/erro, telas menores e funcionamento nos outros computadores da rede.
@@ -119,4 +130,4 @@ Leia `AUTOMACOES.md` antes de mudar esse fluxo. A conexão recomendada à planil
 3. Prefira correções no fluxo completo (UI, API, persistência e testes) em vez de apenas ocultar um erro na interface.
 4. Confirme capacidades existentes no código atual: há duas superfícies de UI, duas formas de autenticação e módulos originais do OpenWA que não são necessariamente usados pelo painel Atende.
 5. Quando mudar automações, confira idempotência, marcações na planilha, casos ambíguos e retomada após reinício. Quando mudar notificações, confira deduplicação e frequência das consultas. Quando mudar webhooks, confira escopo da sessão, proteção de segredos e retries.
-6. Documentação complementar: `ATENDIMENTOS.md`, `AUTOMACOES.md`, `RECUPERAR-ACESSO.md`, `README-LOCAL.md`, `openwa/docs/`. Estas páginas descrevem regras específicas; valide-as contra o código se houver divergência.
+6. Documentação complementar: [`ATENDIMENTOS.md`](ATENDIMENTOS.md), [`AUTOMACOES.md`](AUTOMACOES.md), [`RECUPERAR-ACESSO.md`](RECUPERAR-ACESSO.md), [`MIGRACAO_VOLUME_MIDIA.md`](MIGRACAO_VOLUME_MIDIA.md) e `openwa/docs/`. Estas páginas descrevem regras específicas; valide-as contra o código se houver divergência.

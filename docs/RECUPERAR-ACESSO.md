@@ -1,4 +1,4 @@
-# Recuperação de acesso
+# Recuperação de acesso às contas do Atende
 
 Na tela de login, escolha **Esqueci minha senha**. A recuperação não utiliza
 e-mail nem depende de serviços pagos.
