@@ -58,13 +58,15 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| `page.tsx` | Controlador principal: estados, conexão, seleção de chats, reconciliação do histórico com a tela, envio, gravação, resposta, encaminhamento e composição das telas. Ainda concentra regras de orquestração; localize a função com `rg` antes de editar. |
+| `page.tsx` | Controlador principal: estados, seleção de chats, reconciliação do histórico com a tela, envio, gravação, resposta, encaminhamento e composição das telas. Orquestra a conexão e as atribuições, mas as requisições dessas operações ficam em módulos específicos. |
 | `conversations/components/` | Componentes visuais da caixa de entrada: barra lateral e filtros, histórico de mensagens e mídia, compositor, perfil, avatar e prévia de arquivos colados. Recebem estado e ações do controlador em `page.tsx`. |
 | `conversations/contact-list.ts` | Montagem pura do diretório a partir de chats e perfis, reconciliação conservadora de LID com perfil importado, etiquetas disponíveis e busca de destinatários para encaminhamento. Testes em `scripts/test-contact-list.mjs`. |
 | `conversations/conversation-sync.ts` | Busca paginada dos chats, modo com WhatsApp indisponível, fotos de perfil e montagem da lista com leitura otimista. Testes em `scripts/test-conversation-sync.mjs`. |
 | `conversations/conversation-history.ts` | Busca do histórico local/ao vivo, fallback e reconciliação dos registros; preserva mensagens otimistas durante a atualização. Testes no mesmo arquivo de sincronização. |
 | `conversations/message-delivery.ts`, `flow-variables.ts` | Transporte de texto e mídia (inclusive áudio de voz) e substituição dos campos automáticos dos fluxos. A autorização, o estado visual e a sequência dos fluxos permanecem em `page.tsx`. Testes em `scripts/test-message-delivery.mjs`. |
 | `conversations/conversation-forwarding.ts` | Encaminhamento sequencial para até dez destinatários selecionados na tela; retorna sucessos e falhas individuais para manter selecionados só os que precisam de nova tentativa. Testes em `scripts/test-conversation-forwarding.mjs`. |
+| `conversations/session-connection.ts` | Consultas de saúde/sessão, restauração da sessão existente, criação e leitura do QR Code. `page.tsx` decide quando persistir a configuração e atualizar a tela. Testes em `scripts/test-conversation-operations.mjs`. |
+| `conversations/ticket-actions.ts` | Leitura, atribuição, remoção e encerramento de atendimentos; retorna os dados de reabertura ou perfil sem manipular o estado React. Testes em `scripts/test-conversation-operations.mjs`. |
 | `conversations/use-notification-settings.ts` | Hook das preferências do navegador, áudio personalizado por usuário, reprodução, ativação e teste das notificações. `page.tsx` continua decidindo quando avisar por eventos das conversas e da equipe. |
 | `conversations/workspace-storage.ts` | Tipos, valores iniciais e persistência local da conexão, sessão do operador e preferências de notificação. Não é armazenamento de histórico de conversas. |
 | `atende-api.ts` | Cliente HTTP compartilhado: origem `/api`, cabeçalhos do Atende, leitura do token e tratamento uniforme de erros; `operatorRequest` preserva a resposta HTTP e `operatorJson<T>` tipa a resposta JSON. |
@@ -84,6 +86,8 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | `connection-origin.ts` | Converte endereço local antigo da API para a origem atual do navegador. |
 
 A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. Para mudanças visuais na conversa, comece por `conversations/components/`; para busca e composição dos dados, consulte `conversation-sync.ts` e `conversation-history.ts`; para a preparação do envio, consulte `message-delivery.ts`, `conversation-forwarding.ts` e `flow-variables.ts`; para preferências de aviso e áudio, consulte `use-notification-settings.ts`; para seleção, estados e eventos, comece por `page.tsx`. A tela principal usa `atende-api.ts` para todas as requisições HTTP; `request()` acrescenta `X-API-Key` e `X-Atende-Token`, enquanto `operatorRequest`/`operatorJson<T>` são usados também pelas telas de equipe, fluxos, mensagens rápidas, expediente e webhooks. Outros módulos de contatos e automações ainda têm chamadas específicas próprias. `workspace-polling.ts` conserva as frequências de equipe (4 s), validação do acesso (15 s) e reconciliação visível (15 s, condicionada ao intervalo desde a última atualização), mas as agenda por um só temporizador sem sobreposição por tarefa.
+
+Para mudanças na conexão com a sessão WhatsApp ou nas operações de atribuir/encerrar, comece respectivamente por `app/conversations/session-connection.ts` e `app/conversations/ticket-actions.ts`; `page.tsx` conserva os efeitos de interface e a ordem de persistência da configuração.
 
 ### API e WhatsApp (`openwa/`)
 

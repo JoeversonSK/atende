@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { LoginScreen, SettingsScreen } from "./account-panels";
-import { apiRequest, errorMessage, operatorJson, operatorRequest, request, type ApiConfig } from "./atende-api";
+import { errorMessage, operatorJson, operatorRequest, request, type ApiConfig } from "./atende-api";
 import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } from "./operator-activity";
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
 import { ContactsPanel } from "./contacts-panel";
@@ -24,6 +24,8 @@ import { fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords }
 import { forwardMessageToContacts } from "./conversations/conversation-forwarding";
 import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
 import { useNotificationSettings } from "./conversations/use-notification-settings";
+import { createSessionRecord, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr } from "./conversations/session-connection";
+import { assignConversation, closeTicket, readAssignment, removeAssignment, type Assignment } from "./conversations/ticket-actions";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
 import {
@@ -74,11 +76,6 @@ type PendingPaste =
   | { kind: "text"; text: string; chatId: string; chatName: string };
 type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
 type Account = { name: string; phone: string };
-type Assignment = {
-  assigneeName: string;
-  assigneeId?: string;
-  updatedAt?: string;
-};
 type Operator = OperatorIdentity;
 export type { NotificationPreferences } from "./conversations/workspace-storage";
 
@@ -871,45 +868,12 @@ export default function Home() {
     }
     setBusy(true);
     try {
-      const health = await apiRequest(active.baseUrl, "/health");
-      if (!health.ok) throw new Error("O OpenWA respondeu com erro.");
-      let sessionId = active.sessionId;
-      if (!sessionId) {
-        const response = await request(active, "/sessions?limit=100");
-        const data = await response.json();
-        const first = listFrom(data)[0];
-        if (first) sessionId = String(first.id || first.sessionId);
-      }
+      const sessionId = await resolveSessionId(active);
       const next = { ...active, sessionId };
       setConfig(next);
       persistConfig(next);
-      if (sessionId) {
-        const sessionResponse = await request(
-          next,
-          `/sessions/${encodeURIComponent(sessionId)}`,
-        );
-        if (!sessionResponse.ok)
-          throw new Error(
-            errorMessage(await sessionResponse.json().catch(() => null)),
-          );
-        const session = (await sessionResponse.json()) as { status?: string };
-        if (
-          ["failed", "disconnected", "created"].includes(
-            String(session.status).toLowerCase(),
-          )
-        ) {
-          setNotice("Restaurando a sessão existente do WhatsApp…");
-          const restored = await request(
-            next,
-            `/sessions/${encodeURIComponent(sessionId)}/start`,
-            { method: "POST" },
-          );
-          if (!restored.ok)
-            throw new Error(
-              errorMessage(await restored.json().catch(() => null)),
-            );
-        }
-      }
+      if (sessionId)
+        await restoreSessionIfNeeded(next, () => setNotice("Restaurando a sessão existente do WhatsApp…"));
       setStatus(sessionId ? "ready" : "offline");
       setNotice(
         sessionId
@@ -937,27 +901,10 @@ export default function Home() {
   async function createSession() {
     setBusy(true);
     try {
-      const response = await request(config, "/sessions", {
-        method: "POST",
-        body: JSON.stringify({ name: `atende-${Date.now()}` }),
-      });
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const data = await response.json() as { id?: string; sessionId?: string };
-      const next = { ...config, sessionId: String(data.id || data.sessionId) };
+      const next = await createSessionRecord(config);
       setConfig(next);
       persistConfig(next);
-      await request(
-        next,
-        `/sessions/${encodeURIComponent(next.sessionId)}/start`,
-        { method: "POST" },
-      );
-      const qrResponse = await request(
-        next,
-        `/sessions/${encodeURIComponent(next.sessionId)}/qr`,
-      );
-      const qrData = await qrResponse.json() as { qrCode?: string; data?: string } | string;
-      setQr(typeof qrData === "string" ? qrData : String(qrData.qrCode || qrData.data || qrData));
+      setQr(await startSessionAndReadQr(next));
       setStatus("ready");
       setNotice("Sessão criada. Leia o QR Code no WhatsApp da empresa.");
     } catch (error) {
@@ -1083,13 +1030,9 @@ export default function Home() {
   async function loadAssignment(chat: Chat, active = config) {
     if (!active.apiKey || !active.sessionId) return;
     try {
-      const response = await request(
-        active,
-        `/sessions/${encodeURIComponent(active.sessionId)}/conversations/${encodeURIComponent(chat.id)}/assignment`,
-      );
-      if (!response.ok) return;
-      const data = (await response.json()) as Assignment | null;
-      if (selectedRef.current?.id === chat.id) setAssignment(data);
+      const assignment = await readAssignment(active, chat.id);
+      if (assignment !== undefined && selectedRef.current?.id === chat.id)
+        setAssignment(assignment);
     } catch {
       /* A conversation can still be used if assignment data is temporarily unavailable. */
     }
@@ -1101,23 +1044,8 @@ export default function Home() {
     }
     setSavingAssignment(true);
     try {
-      const response = await request(
-        config,
-        `/sessions/${encodeURIComponent(config.sessionId)}/conversations/${encodeURIComponent(selected.id)}/assignment`,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            assigneeName: operator.displayName,
-            assigneeId: targetId || operator.id,
-          }),
-        },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const owner = (await response.json()) as Assignment & {
-        reopened?: boolean;
-        profileData?: SupportOverview["contacts"][number]["data"];
-      };
+      const owner = await assignConversation(config, selected.id,
+        operator.displayName, targetId || operator.id);
       setAssignment(owner);
       setAssignments((current) => ({ ...current, [selected.id]: owner }));
       setNotice("Conversa atribuída com sucesso.");
@@ -1150,13 +1078,7 @@ export default function Home() {
     if (!selected) return;
     setSavingAssignment(true);
     try {
-      const response = await request(
-        config,
-        `/sessions/${encodeURIComponent(config.sessionId)}/conversations/${encodeURIComponent(selected.id)}/assignment`,
-        { method: "DELETE" },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
+      await removeAssignment(config, selected.id);
       setAssignment(null);
       setNotice("Conversa removida da fila do atendente.");
       setAssignments((current) => {
@@ -1186,13 +1108,7 @@ export default function Home() {
     const chatId = selected.id;
     setClosingTickets((current) => new Set(current).add(chatId));
     try {
-      const response = await request(
-        config,
-        `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(chatId)}/close`,
-        { method: "POST" },
-      );
-      const result = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
-      if (!response.ok) throw new Error(errorMessage(result));
+      const profileData = await closeTicket(config, chatId);
       refreshGeneration.current++;
       setAssignments((current) => {
         const next = { ...current };
@@ -1203,7 +1119,7 @@ export default function Home() {
         ...current,
         contacts: [
           ...current.contacts.filter((c) => c.chatId !== chatId),
-          { chatId, data: result.data },
+          { chatId, data: profileData },
         ],
       }));
       if (selectedRef.current?.id === chatId) {

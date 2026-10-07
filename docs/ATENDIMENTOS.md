@@ -11,6 +11,7 @@ O painel segue o modelo em duas colunas: resumo dos analistas e atendimentos ati
 
 - **Painel**: lista os chamados, a fila sem responsável, quem está atendendo e os clientes que ainda não responderam. Os cartões filtram a tabela; a busca aceita cliente ou atendente.
 - **Abrir / encaminhar**: abre a conversa e seu perfil. Em **Encaminhar para**, escolha uma conta ativa e confirme **Encaminhar atendimento**. A conta precisa da permissão de atribuição, configurada pelo administrador.
+- **Código da atribuição e encerramento**: `app/conversations/ticket-actions.ts` concentra as requisições de ler, atribuir, remover e encerrar; `app/page.tsx` continua atualizando a fila, o perfil e os avisos após cada resposta. Reatribuir pode devolver um perfil reaberto, que deve substituir o perfil anterior na tela.
 - **Dados do usuário**: nome e telefone são campos independentes. Use **Salvar informações** após editar. O nome salvo tem prioridade na lista e no cabeçalho e é compartilhado pela equipe. Não altera a agenda do celular.
 - **Telefone**: quando possível, vem da consulta de telefone do WhatsApp. Um identificador `@lid` não é tratado como número telefônico. Se o WhatsApp não informar o número, preencha manualmente.
 - **Leitura**: abrir a conversa solicita a confirmação ao WhatsApp. Quando a conversa está visível e o navegador em foco, novas mensagens também são marcadas como lidas. Se o WhatsApp recusar ou estiver desconectado, aparece um aviso; o sistema não confirma falsamente a leitura.
