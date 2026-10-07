@@ -11,7 +11,7 @@
     "dev": "node scripts/run-framework.mjs dev",
     "build": "node scripts/run-framework.mjs build",
     "typecheck:app": "tsc --project tsconfig.app.json --noEmit",
-    "test:conversation": "node --import tsx --test scripts/test-conversation-model.mjs scripts/test-message-reconciliation.mjs scripts/test-contact-list.mjs scripts/test-conversation-sync.mjs scripts/test-message-delivery.mjs scripts/test-conversation-forwarding.mjs scripts/test-conversation-operations.mjs scripts/test-flow-execution.mjs",
+    "test:conversation": "node --import tsx --test scripts/test-conversation-model.mjs scripts/test-message-reconciliation.mjs scripts/test-contact-list.mjs scripts/test-conversation-sync.mjs scripts/test-message-delivery.mjs scripts/test-conversation-forwarding.mjs scripts/test-conversation-operations.mjs scripts/test-flow-execution.mjs scripts/test-contact-creation-and-account.mjs",
     "test:workspace": "node --import tsx --test scripts/test-workspace-infrastructure.mjs",
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

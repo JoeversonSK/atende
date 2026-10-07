@@ -12,6 +12,14 @@ export type AssignedConversation = Assignment & {
   profileData?: SupportOverview["contacts"][number]["data"];
 };
 
+export type AssignmentRow = Assignment & { chatId: string };
+
+export async function listAssignments(config: ApiConfig): Promise<AssignmentRow[] | null> {
+  const response = await request(config,
+    `/sessions/${encodeURIComponent(config.sessionId)}/conversations/assignments`);
+  return response.ok ? await response.json() as AssignmentRow[] : null;
+}
+
 function assignmentPath(config: ApiConfig, chatId: string): string {
   return `/sessions/${encodeURIComponent(config.sessionId)}/conversations/${encodeURIComponent(chatId)}/assignment`;
 }

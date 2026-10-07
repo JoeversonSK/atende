@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  createSessionRecord, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr,
+  createSessionRecord, fetchSessionAccount, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr,
 } from "../app/conversations/session-connection.ts";
 import {
-  assignConversation, closeTicket, readAssignment, removeAssignment,
+  assignConversation, closeTicket, listAssignments, readAssignment, removeAssignment,
 } from "../app/conversations/ticket-actions.ts";
 
 const config = { baseUrl: "http://atende.test", apiKey: "teste", sessionId: "sessao" };
@@ -102,6 +102,25 @@ test("erro de atribuição não é tratado como sucesso", async () => {
     assert.equal(await readAssignment(config, "cliente@c.us"), undefined);
     await assert.rejects(assignConversation(config, "cliente@c.us", "Ana", "1"), /Sem permissão/);
     await assert.rejects(removeAssignment(config, "cliente@c.us"), /Sem permissão/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("consulta a conta e as atribuições sem alterar dados quando a API não responde", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("/assignments"))
+      return Response.json([{ chatId: "cliente@c.us", assigneeName: "Ana" }]);
+    return Response.json([{ id: "outra", name: "Outra" }, { id: "sessao", pushName: "Empresa", phone: "5511999999999" }]);
+  };
+  try {
+    assert.deepEqual(await fetchSessionAccount(config), { name: "Empresa", phone: "5511999999999" });
+    assert.deepEqual(await listAssignments(config), [{ chatId: "cliente@c.us", assigneeName: "Ana" }]);
+    globalThis.fetch = async () => new Response(null, { status: 503 });
+    assert.equal(await fetchSessionAccount(config), null);
+    assert.equal(await listAssignments(config), null);
   } finally {
     globalThis.fetch = originalFetch;
   }

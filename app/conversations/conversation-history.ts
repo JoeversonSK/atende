@@ -1,5 +1,6 @@
 import { errorMessage, request, type ApiConfig } from "../atende-api";
-import { listFrom, mergeMessages, toMessage, type MessageWithTimestamp } from "../conversation-model";
+import { listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId,
+  toMessage, type MessageWithTimestamp } from "../conversation-model";
 
 type MessageSource = "database" | "history";
 type FetchedHistory = {
@@ -59,4 +60,59 @@ export function reconcileMessageRecords(
     ? [...current.filter(message => message.source === "optimistic"), ...incoming]
     : [...current, ...incoming];
   return mergeMessages(combined);
+}
+
+export function createOptimisticText(
+  body: string,
+  id: string,
+  timestamp: number,
+  quoted?: { id: string; body: string },
+): MessageWithTimestamp {
+  return {
+    id, identityIds: [id], body, mine: true,
+    time: messageDateTime(new Date(timestamp)), timestamp, type: "text",
+    ...(quoted ? { quotedMessage: quoted } : {}),
+    source: "optimistic",
+  };
+}
+
+export function appendOptimisticText(
+  current: MessageWithTimestamp[],
+  body: string,
+  id: string,
+  timestamp: number,
+  quoted?: { id: string; body: string },
+): MessageWithTimestamp[] {
+  return mergeMessages([...current, createOptimisticText(body, id, timestamp, quoted)]);
+}
+
+export function confirmOptimisticText(
+  current: MessageWithTimestamp[],
+  optimisticId: string,
+  result: { messageId?: unknown; timestamp?: number } | null,
+  optimisticTimestamp: number,
+): MessageWithTimestamp[] {
+  const confirmedId = serializedMessageId(result?.messageId);
+  const confirmedTimestamp = Number(result?.timestamp) > 0
+    ? Number(result?.timestamp) * 1000 : optimisticTimestamp;
+  return mergeMessages(current.map(message =>
+    message.identityIds.includes(optimisticId)
+      ? {
+          ...message,
+          id: confirmedId || message.id,
+          waMessageId: confirmedId || message.waMessageId,
+          identityIds: confirmedId
+            ? [...new Set([...message.identityIds, ...messageIdentityIds(confirmedId)])]
+            : message.identityIds,
+          timestamp: confirmedTimestamp,
+          time: messageDateTime(new Date(confirmedTimestamp)),
+          source: "history" as const,
+        }
+      : message));
+}
+
+export function discardOptimisticText(
+  current: MessageWithTimestamp[], optimisticId: string,
+): MessageWithTimestamp[] {
+  return current.filter(message => !message.identityIds.includes(optimisticId));
 }

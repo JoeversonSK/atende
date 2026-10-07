@@ -81,3 +81,12 @@ export async function fetchProfilePictures(
   const result = await response.json() as { pictures?: Record<string, string | null> };
   return result.pictures || {};
 }
+
+export async function confirmChatRead(config: ApiConfig, chatId: string): Promise<void> {
+  const response = await request(config,
+    `/sessions/${encodeURIComponent(config.sessionId)}/chats/read`,
+    { method: "POST", body: JSON.stringify({ chatId }) });
+  const result = await response.json() as { success?: boolean };
+  if (!response.ok || !result.success)
+    throw new Error("O WhatsApp não confirmou a leitura. Tente abrir a conversa novamente.");
+}

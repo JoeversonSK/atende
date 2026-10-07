@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSyncedChats, fetchChatSnapshot } from "../app/conversations/conversation-sync.ts";
-import { fetchMessageRecords, reconcileMessageRecords } from "../app/conversations/conversation-history.ts";
+import { appendOptimisticText, confirmOptimisticText, discardOptimisticText,
+  fetchMessageRecords, reconcileMessageRecords } from "../app/conversations/conversation-history.ts";
 
 const config = { baseUrl: "http://atende.test", apiKey: "teste", sessionId: "sessao" };
 const overview = { contacts: [], activity: [], agents: [], completed: [] };
@@ -100,4 +101,19 @@ test("preserva envio otimista ao substituir o histórico e ignora registros pend
   ], "database");
   assert.equal(stored.length, 1);
   assert.equal(stored[0].body, "Enviada");
+});
+
+test("confirma mensagem otimista sem perder resposta vinculada ou outras mensagens", () => {
+  const pending = appendOptimisticText([], "Olá", "optimistic-1", 1_000,
+    { id: "original", body: "Pergunta" });
+  assert.equal(pending[0].source, "optimistic");
+  assert.equal(pending[0].quotedMessage.id, "original");
+  const confirmed = confirmOptimisticText(pending, "optimistic-1",
+    { messageId: "enviada-1", timestamp: 2 }, 1_000);
+  assert.equal(confirmed.length, 1);
+  assert.equal(confirmed[0].waMessageId, "enviada-1");
+  assert.equal(confirmed[0].timestamp, 2_000);
+  assert.equal(confirmed[0].quotedMessage.body, "Pergunta");
+  assert.ok(confirmed[0].identityIds.includes("optimistic-1"));
+  assert.deepEqual(discardOptimisticText(pending, "optimistic-1"), []);
 });

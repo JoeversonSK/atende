@@ -6,7 +6,7 @@ Este arquivo vale para o projeto Atende na raiz. Leia primeiro [`docs/README.md`
 | --- | --- |
 | Instalação, Docker, portas, backup ou volumes | `README.md`, `docker-compose.yml`, `docs/MIGRACAO_VOLUME_MIDIA.md` |
 | Navegação, conversas, notificações ou envio de mídia | `docs/ARQUITETURA_E_ESTADO_ATUAL.md` → `app/page.tsx` e `app/conversations/` → `openwa/src/modules/message/` |
-| Contatos, etiquetas, permissões ou dashboard | `docs/ATENDIMENTOS.md`, `app/contacts-panel.tsx`, `app/ticket-dashboard.tsx`, `openwa/src/modules/operator-auth/` |
+| Contatos, etiquetas, permissões ou dashboard | `docs/ATENDIMENTOS.md`, `app/contacts-panel.tsx`, `app/conversations/contact-creation.ts` (cadastro na conversa), `app/ticket-dashboard.tsx`, `openwa/src/modules/operator-auth/` |
 | Automações ou Google Sheets | `docs/AUTOMACOES.md`, `app/automation-settings.tsx`, `openwa/src/modules/operator-auth/sheet-automation.controller.ts` |
 | Webhooks | `docs/ARQUITETURA_E_ESTADO_ATUAL.md` (seção Webhooks), `app/system-webhooks.tsx`, `openwa/src/modules/webhook/` |
 | Recuperação de senha | `docs/RECUPERAR-ACESSO.md` |

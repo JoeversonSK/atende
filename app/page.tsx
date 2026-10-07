@@ -1,32 +1,36 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { io, type Socket } from "socket.io-client";
 import { LoginScreen, SettingsScreen } from "./account-panels";
 import { errorMessage, operatorJson, operatorRequest, request, type ApiConfig } from "./atende-api";
+import { authenticateOperator, logoutOperator, updateOperatorName } from "./operator-account";
 import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } from "./operator-activity";
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
-import { eventId, listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId,
+import { eventId,
   type Chat, type Message, type MessageWithTimestamp } from "./conversation-model";
 import { ContactAvatar } from "./conversations/components/contact-avatar";
 import { ConversationSidebar } from "./conversations/components/conversation-sidebar";
 import { ConversationProfile } from "./conversations/components/conversation-profile";
 import { ConversationThread } from "./conversations/components/conversation-thread";
 import { MessageComposer } from "./conversations/components/message-composer";
-import { PasteFilePreview } from "./conversations/components/paste-file-preview";
+import { ForwardMessageDialog, NewContactDialog, PasteConfirmationDialog, type PendingPaste } from "./conversations/components/conversation-dialogs";
 import { availableContactTags, buildContactRows, findForwardCandidates } from "./conversations/contact-list";
-import { buildSyncedChats, fetchChatSnapshot, fetchProfilePictures } from "./conversations/conversation-sync";
+import { buildSyncedChats, confirmChatRead, fetchChatSnapshot, fetchProfilePictures } from "./conversations/conversation-sync";
+import { prepareNewContact, saveNewContact, type NewContact } from "./conversations/contact-creation";
 import { deliverMedia, deliverText } from "./conversations/message-delivery";
 import { createFlowTemplate } from "./conversations/flow-variables";
 import { executeConversationFlow } from "./conversations/flow-execution";
-import { fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
+import { appendOptimisticText, confirmOptimisticText, discardOptimisticText,
+  fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
 import { forwardMessageToContacts } from "./conversations/conversation-forwarding";
 import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
 import { useNotificationSettings } from "./conversations/use-notification-settings";
-import { createSessionRecord, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr } from "./conversations/session-connection";
-import { assignConversation, closeTicket, readAssignment, removeAssignment, type Assignment } from "./conversations/ticket-actions";
+import { useConversationEvents } from "./conversations/use-conversation-events";
+import { useVoiceRecorder } from "./conversations/use-voice-recorder";
+import { createSessionRecord, fetchSessionAccount, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr } from "./conversations/session-connection";
+import { assignConversation, closeTicket, listAssignments, readAssignment, removeAssignment, type Assignment } from "./conversations/ticket-actions";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
 import {
@@ -35,46 +39,23 @@ import {
   type SupportOverview,
 } from "./ticket-dashboard";
 import {
-  Bell,
-  ChevronRight,
-  Inbox,
-  PanelRight,
-  UserRound,
-  UsersRound,
-  Wifi,
-  WifiOff,
-} from "lucide-react";
-import {
-  Archive,
   ArrowLeft,
-  Check,
+  Bell,
   CheckCheck,
   CircleAlert,
-  Filter,
-  Forward,
-  GitBranch,
+  Inbox,
   LoaderCircle,
   MessageCircle,
-  Mic,
+  PanelRight,
   Paperclip,
-  Pause,
-  Phone,
-  Play,
   Reply,
-  Search,
-  Send,
   Settings,
-  Smile,
-  Smartphone,
-  Trash2,
-  Video,
+  UserRound,
+  UsersRound,
   X,
 } from "lucide-react";
 
 type Config = ApiConfig;
-type PendingPaste =
-  | { kind: "files"; files: File[]; omittedFiles: number; chatId: string; chatName: string }
-  | { kind: "text"; text: string; chatId: string; chatName: string };
 type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
 type Account = { name: string; phone: string };
 type Operator = OperatorIdentity;
@@ -178,7 +159,6 @@ export default function Home() {
     updateNotificationPreferences, uploadNotificationSound, removeNotificationSound,
     enableNotifications, testNotification,
   } = useNotificationSettings({ operatorId: operator?.id, operatorToken, baseUrl: config.baseUrl, setNotice });
-  const notifiedIds = useRef(new Set<string>());
   const [emojiOpen, setEmojiOpen] = useState(false);
   const emojiToggleRef = useRef<HTMLButtonElement>(null);
   const emojiMenuRef = useRef<HTMLDivElement>(null);
@@ -186,15 +166,16 @@ export default function Home() {
   const [flowMenuOpen, setFlowMenuOpen] = useState(false);
   const flowToggleRef = useRef<HTMLButtonElement>(null);
   const flowMenuRef = useRef<HTMLDivElement>(null);
-  const [recording, setRecording] = useState(false);
-  const [recordingPaused, setRecordingPaused] = useState(false);
+  const { recording, recordingPaused, startRecording,
+    pauseOrResumeRecording, sendRecording, discardRecording } = useVoiceRecorder({
+      onVoice: file => { void sendMedia(file, true); }, setNotice,
+    });
   const [qr, setQr] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [contactFirstName, setContactFirstName] = useState("");
   const [contactLastName, setContactLastName] = useState("");
   const [contactCountryCode, setContactCountryCode] = useState("55");
   const [contactFormError, setContactFormError] = useState("");
-  const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const keepAtBottomRef = useRef(true);
@@ -203,9 +184,6 @@ export default function Home() {
   const profilePicturesRef = useRef(new Map<string, string | null>());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const filterPopoverRef = useRef<HTMLDivElement | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const recordingChunksRef = useRef<Blob[]>([]);
-  const discardRecordingRef = useRef(false);
   const chatsRef = useRef<Chat[]>([]);
   const selectedRef = useRef<Chat | null>(null);
   const refreshChatsRef = useRef<(active?: Config) => Promise<void>>(
@@ -298,6 +276,12 @@ export default function Home() {
     },
     [],
   );
+
+  const socketRef = useConversationEvents({
+    config, operatorToken, chatsRef, selectedRef, operatorRef,
+    refreshChatsRef, refreshMessagesRef, notificationsRef, notificationPreferencesRef,
+    playNotificationSound, showMessageAlert, setQr, setStatus, setNotice,
+  });
 
   useWorkspacePolling({
     baseUrl: config.baseUrl,
@@ -416,14 +400,8 @@ export default function Home() {
       setSelected((current) =>
         current ? next.find((c) => c.id === current.id) || current : null,
       );
-      const owners = await request(
-        active,
-        `/sessions/${encodeURIComponent(active.sessionId)}/conversations/assignments`,
-      );
-      if (owners.ok) {
-        const rows = (await owners.json()) as (Assignment & {
-          chatId: string;
-        })[];
+      const rows = await listAssignments(active);
+      if (rows) {
         if (generation !== refreshGeneration.current) return;
         setAssignments(
           Object.fromEntries(rows.map((row) => [row.chatId, row])),
@@ -478,16 +456,7 @@ export default function Home() {
       current.map((c) => (c.id === chatId ? { ...c, unread: 0 } : c)),
     );
     try {
-      const response = await request(
-        active,
-        `/sessions/${encodeURIComponent(active.sessionId)}/chats/read`,
-        { method: "POST", body: JSON.stringify({ chatId }) },
-      );
-      const result = await response.json() as { success?: boolean };
-      if (!response.ok || !result.success)
-        throw new Error(
-          "O WhatsApp não confirmou a leitura. Tente abrir a conversa novamente.",
-        );
+      await confirmChatRead(active, chatId);
     } catch (error) {
       setNotice(
         error instanceof Error ? error.message : "Erro ao sincronizar leitura.",
@@ -559,16 +528,8 @@ export default function Home() {
   const refreshAccount = useCallback(
     async (active = config) => {
       if (!active.apiKey || !active.sessionId) return;
-      const response = await request(active, "/sessions?limit=100");
-      if (!response.ok) return;
-      const session = listFrom(await response.json()).find(
-        (item) => String(item.id || item.sessionId) === active.sessionId,
-      );
-      if (session)
-        setAccount({
-          name: String(session.pushName || session.name || "WhatsApp"),
-          phone: String(session.phone || ""),
-        });
+      const account = await fetchSessionAccount(active);
+      if (account) setAccount(account);
     },
     [config],
   );
@@ -655,203 +616,6 @@ export default function Home() {
     refreshChats(active).catch(() => undefined);
     refreshAccount(active).catch(() => undefined);
   }, [config.apiKey, config.baseUrl, config.sessionId, operatorToken]);
-  useEffect(() => {
-    if (!operatorToken) return;
-    if (!config.apiKey || !config.sessionId) return;
-    const active = config;
-    let eventRefreshTimer = 0;
-    let hasConnected = false;
-    const scheduleEventRefresh = () => {
-      if (eventRefreshTimer) return;
-      eventRefreshTimer = window.setTimeout(() => {
-        eventRefreshTimer = 0;
-        void refreshChatsRef.current(active).catch(() => undefined);
-        const current = selectedRef.current;
-        if (current)
-          void refreshMessagesRef.current(current, active).catch(() => undefined);
-      }, 350);
-    };
-    const socket = io(`${active.baseUrl.replace(/\/$/, "")}/events`, {
-      auth: { apiKey: active.apiKey },
-      transports: ["websocket"],
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 8000,
-    });
-    socket.on("connect", () => {
-      setStatus("connected");
-      if (hasConnected) scheduleEventRefresh();
-      hasConnected = true;
-      socket.emit("message", {
-        type: "subscribe",
-        sessionId: active.sessionId,
-        events: [
-          "message.received",
-          "message.sent",
-          "conversation.assigned",
-          "session.status",
-          "session.qr",
-        ],
-        requestId: eventId(),
-      });
-    });
-    socket.on(
-      "message",
-      (event: {
-        type?: string;
-        payload?: {
-          event?: string;
-          sessionId?: string;
-          data?: Record<string, unknown>;
-        };
-      }) => {
-        if (
-          event.type !== "event" ||
-          event.payload?.sessionId !== active.sessionId
-        )
-          return;
-        if (event.payload.event === "session.qr")
-          setQr(String(event.payload.data?.qrCode || ""));
-        if (
-          event.payload.event === "message.received" ||
-          event.payload.event === "message.sent"
-        ) {
-          scheduleEventRefresh();
-        }
-        if (event.payload.event === "message.received") {
-          const data = event.payload.data || {};
-          const chatId = String(data.chatId || data.from || "");
-          if (
-            !chatId ||
-            /@(g\.us|broadcast|newsletter)$/.test(chatId) ||
-            data.isGroup === true
-          )
-            return;
-          const notificationOperatorId = operatorRef.current?.id;
-          void request(
-            active,
-            `/operator-auth/notification?sessionId=${encodeURIComponent(active.sessionId)}&chatId=${encodeURIComponent(chatId)}`,
-          )
-            .then(async (response) => {
-              const eligibility = response.ok
-                ? ((await response.json()) as { allowed: boolean })
-                : null;
-              const currentOperator = operatorRef.current;
-              const preferences = notificationPreferencesRef.current;
-              if (
-                !currentOperator ||
-                !eligibility?.allowed ||
-                currentOperator.id !== notificationOperatorId ||
-                !notificationsRef.current ||
-                !preferences.notifyMessages
-              )
-                return;
-              const notificationId = String(
-                data.id || data.messageId || data.waMessageId || eventId(),
-              );
-              if (notifiedIds.current.has(notificationId)) return;
-              notifiedIds.current.add(notificationId);
-              if (notifiedIds.current.size > 500)
-                notifiedIds.current.delete(
-                  notifiedIds.current.values().next().value!,
-                );
-              const sender =
-                chatsRef.current.find((chat) => chat.id === chatId)?.name ||
-                String(
-                  data.chatName || data.author || data.from || "Novo contato",
-                );
-              const body = String(data.body || data.text || "Nova mensagem");
-              playNotificationSound();
-              showMessageAlert({
-                id: notificationId,
-                chatId,
-                name: sender,
-                body,
-              });
-              if (
-                preferences.desktop &&
-                window.isSecureContext &&
-                typeof Notification !== "undefined" &&
-                Notification.permission === "granted"
-              )
-                new Notification(sender, {
-                  body: preferences.showPreview
-                    ? body
-                    : "Nova mensagem recebida",
-                  tag: `atende-${chatId}-${notificationId}`,
-                });
-            })
-            .catch(() => undefined);
-        }
-        if (event.payload.event === "conversation.assigned") {
-          const data = event.payload.data || {},
-            currentOperator = operatorRef.current;
-          const assigneeId = String(data.assigneeId || ""),
-            assignedById = String(data.assignedById || "");
-          if (
-            !currentOperator ||
-            assigneeId !== currentOperator.id ||
-            assignedById === currentOperator.id
-          )
-            return;
-          const chatId = String(data.chatId || "");
-          if (!chatId) return;
-          scheduleEventRefresh();
-          const customer =
-            chatsRef.current.find((chat) => chat.id === chatId)?.name ||
-            "Novo atendimento";
-          const assignedBy = String(data.assignedByName || "outro atendente");
-          const body = `Atendimento encaminhado por ${assignedBy}.`;
-          showMessageAlert({
-            id: `assignment-${chatId}-${String(data.updatedAt || Date.now())}`,
-            chatId,
-            name: customer,
-            body,
-          });
-          const preferences = notificationPreferencesRef.current;
-          if (notificationsRef.current && preferences.notifyAssignments) {
-            playNotificationSound();
-            if (
-              preferences.desktop &&
-              window.isSecureContext &&
-              typeof Notification !== "undefined" &&
-              Notification.permission === "granted"
-            )
-              new Notification("Novo atendimento atribuído", {
-                body: preferences.showPreview
-                  ? `${customer} · ${body}`
-                  : "Você recebeu um novo atendimento.",
-                tag: `atende-assignment-${chatId}-${String(data.updatedAt || Date.now())}`,
-              });
-          }
-        }
-        if (event.payload.event === "session.status")
-          setStatus(
-            String(event.payload.data?.status).toLowerCase() === "connected"
-              ? "connected"
-              : "ready",
-          );
-      },
-    );
-    socket.on("connect_error", () =>
-      setNotice(
-        "Não foi possível ouvir os eventos agora; tentando reconectar automaticamente.",
-      ),
-    );
-    socketRef.current = socket;
-    return () => {
-      window.clearTimeout(eventRefreshTimer);
-      socket.disconnect();
-      if (socketRef.current === socket) socketRef.current = null;
-    };
-  }, [
-    config.apiKey,
-    config.baseUrl,
-    config.sessionId,
-    operatorToken,
-    showMessageAlert,
-  ]);
   useEffect(() => {
     const chatChanged = scrolledChatRef.current !== (selected?.id || "");
     if (chatChanged) {
@@ -1153,20 +917,10 @@ export default function Home() {
   async function submitOperator() {
     if (authBusy) return;
     setAuthBusy(true);
-    const endpoint = registering ? "register" : "login";
-    const body = registering
-      ? {
-          username: operatorUsername,
-          displayName: operatorName,
-          password: operatorPassword,
-        }
-      : { username: operatorUsername, password: operatorPassword };
     try {
       setOperatorError("");
-      const data = await operatorJson<{ user: Operator; token: string }>(config.baseUrl, "", `/${endpoint}`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      const data = await authenticateOperator(config.baseUrl, registering,
+        operatorUsername, operatorName, operatorPassword);
       setOperator(data.user);
       setOperatorToken(data.token);
       setOperatorName(data.user.displayName);
@@ -1190,10 +944,7 @@ export default function Home() {
   async function saveOperatorName() {
     if (!operator || !operatorName.trim()) return;
     try {
-      const user = await operatorJson<Operator>(config.baseUrl, operatorToken, "/me", {
-        method: "PUT",
-        body: JSON.stringify({ displayName: operatorName.trim() }),
-      });
+      const user = await updateOperatorName(config.baseUrl, operatorToken, operatorName);
       setOperator(user);
       persistOperator({ user, token: operatorToken });
       setNotice("Nome do usuário atualizado.");
@@ -1225,64 +976,30 @@ export default function Home() {
     const signedText = `*${operator.displayName}:*\n\n${originalText}`;
     const optimisticId = `optimistic-${eventId()}`;
     const optimisticTimestamp = Date.now();
-    const optimisticMessage: MessageWithTimestamp = {
-      id: optimisticId,
-      identityIds: [optimisticId],
-      body: signedText,
-      mine: true,
-      time: messageDateTime(new Date(optimisticTimestamp)),
-      timestamp: optimisticTimestamp,
-      type: "text",
-      ...(replyTarget ? { quotedMessage: { id: replyTarget, body: replyingTo?.body || "" } } : {}),
-      source: "optimistic",
-    };
-    const optimisticList = mergeMessages([
-      ...(historyCacheRef.current.get(target.id) || []),
-      optimisticMessage,
-    ]);
-    historyCacheRef.current.set(target.id, optimisticList);
-    if (selectedRef.current?.id === target.id) setMessages(optimisticList);
+    const pendingList = appendOptimisticText(
+      historyCacheRef.current.get(target.id) || [],
+      signedText, optimisticId, optimisticTimestamp,
+      replyTarget ? { id: replyTarget, body: replyingTo?.body || "" } : undefined,
+    );
+    historyCacheRef.current.set(target.id, pendingList);
+    if (selectedRef.current?.id === target.id) setMessages(pendingList);
     setDraft("");
     setPastedTextPending(false);
     setReplyingTo(null);
     setEmojiOpen(false);
     try {
       const result = await deliverText(config, target.id, signedText, replyTarget);
-      const confirmedId = serializedMessageId(result?.messageId);
-      const confirmedTimestamp =
-        Number(result?.timestamp) > 0
-          ? Number(result?.timestamp) * 1000
-          : optimisticTimestamp;
-      const confirmedList = mergeMessages(
-        (historyCacheRef.current.get(target.id) || []).map((message) =>
-          message.identityIds.includes(optimisticId)
-            ? {
-                ...message,
-                id: confirmedId || message.id,
-                waMessageId: confirmedId || message.waMessageId,
-                identityIds: confirmedId
-                  ? [
-                      ...new Set([
-                        ...message.identityIds,
-                        ...messageIdentityIds(confirmedId),
-                      ]),
-                    ]
-                  : message.identityIds,
-                timestamp: confirmedTimestamp,
-                time: messageDateTime(new Date(confirmedTimestamp)),
-                source: "history" as const,
-              }
-            : message,
-        ),
+      const confirmedList = confirmOptimisticText(
+        historyCacheRef.current.get(target.id) || [], optimisticId, result, optimisticTimestamp,
       );
       historyCacheRef.current.set(target.id, confirmedList);
       if (selectedRef.current?.id === target.id) setMessages(confirmedList);
       void refreshMessages(target).catch(() => undefined);
       void refreshChats().catch(() => undefined);
     } catch (error) {
-      const withoutFailed = (
-        historyCacheRef.current.get(target.id) || []
-      ).filter((message) => !message.identityIds.includes(optimisticId));
+      const withoutFailed = discardOptimisticText(
+        historyCacheRef.current.get(target.id) || [], optimisticId,
+      );
       historyCacheRef.current.set(target.id, withoutFailed);
       if (selectedRef.current?.id === target.id) {
         setMessages(withoutFailed);
@@ -1484,78 +1201,14 @@ export default function Home() {
     config,
     operator,
   ]);
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      recordingChunksRef.current = [];
-      discardRecordingRef.current = false;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) recordingChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        setRecording(false);
-        setRecordingPaused(false);
-        const blob = new Blob(recordingChunksRef.current, {
-          type: recorder.mimeType || "audio/webm",
-        });
-        if (!discardRecordingRef.current && blob.size)
-          void sendMedia(
-            new File([blob], "mensagem-de-voz.webm", { type: blob.type }),
-            true,
-          );
-      };
-      recorder.start();
-      setRecording(true);
-      setNotice("Gravando áudio.");
-    } catch {
-      setNotice("Permita o uso do microfone para gravar um áudio.");
-    }
-  }
-  function pauseOrResumeRecording() {
-    const recorder = recorderRef.current;
-    if (!recorder) return;
-    if (recorder.state === "recording") {
-      recorder.pause();
-      setRecordingPaused(true);
-    } else if (recorder.state === "paused") {
-      recorder.resume();
-      setRecordingPaused(false);
-    }
-  }
-  function sendRecording() {
-    if (recorderRef.current && recorderRef.current.state !== "inactive")
-      recorderRef.current.stop();
-  }
-  function discardRecording() {
-    discardRecordingRef.current = true;
-    if (recorderRef.current && recorderRef.current.state !== "inactive")
-      recorderRef.current.stop();
-    else {
-      setRecording(false);
-      setRecordingPaused(false);
-    }
-  }
   async function startChat() {
-    const countryCode = contactCountryCode.replace(/\D/g, "");
-    const typedNumber = phone.replace(/\D/g, "");
-    const nationalMin = ({55:10,1:10,351:9,34:9,54:10} as Record<string,number>)[contactCountryCode] || 9;
-    const nationalMax = ({55:11,1:10,351:9,34:9,54:11} as Record<string,number>)[contactCountryCode] || 11;
-    const number = phone.trim().startsWith("+") || (typedNumber.startsWith(countryCode) && typedNumber.length > nationalMax)
-      ? typedNumber
-      : `${countryCode}${typedNumber}`;
-    const fullName = [contactFirstName.trim(), contactLastName.trim()].filter(Boolean).join(" ");
     if (savingContact) return;
     setContactFormError("");
-    if (!contactFirstName.trim()) {
-      setContactFormError("Informe o primeiro nome do contato.");
-      return;
-    }
-    const nationalNumber = number.startsWith(countryCode) ? number.slice(countryCode.length) : "";
-    if (!/^\d{10,15}$/.test(number) || nationalNumber.length < nationalMin || nationalNumber.length > nationalMax) {
-      setContactFormError("Informe um número válido com DDD.");
+    let contact: NewContact;
+    try {
+      contact = prepareNewContact(contactFirstName, contactLastName, contactCountryCode, phone);
+    } catch (error) {
+      setContactFormError(error instanceof Error ? error.message : "Informe os dados do contato.");
       return;
     }
     if (!config.sessionId) {
@@ -1564,33 +1217,13 @@ export default function Home() {
     }
     setSavingContact(true);
     try {
-      const id = `${number}@c.us`,
-        path = `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(id)}`;
-      const current = await request(config, path);
-      const profile = await current.json() as {
-        revision?: number;
-        data: SupportOverview["contacts"][number]["data"];
-      };
-      if (!current.ok) throw new Error(errorMessage(profile));
-      const response = await request(config, path, {
-        method: "PUT",
-        body: JSON.stringify({
-          ...profile,
-          data: {
-            ...profile.data,
-            name: fullName,
-            phone: number,
-          },
-        }),
-      });
-      const saved = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
-      if (!response.ok) throw new Error(errorMessage(saved));
+      const saved = await saveNewContact(config, contact);
       refreshGeneration.current++;
       setOverview((current) => ({
         ...current,
         contacts: [
-          ...current.contacts.filter((c) => c.chatId !== id),
-          { chatId: id, data: saved.data },
+          ...current.contacts.filter((c) => c.chatId !== contact.id),
+          { chatId: contact.id, data: saved },
         ],
       }));
       setPhone("");
@@ -1687,7 +1320,7 @@ export default function Home() {
 
   async function logout() {
     try {
-      await operatorRequest(config.baseUrl, operatorToken, "/logout", { method: "POST" });
+      await logoutOperator(config.baseUrl, operatorToken);
     } catch {
       setNotice("Conta encerrada neste navegador.");
     }
@@ -2170,58 +1803,40 @@ export default function Home() {
           </button>
         </div>
       )}
-      {pendingPaste && (
-        <div className="wa-backdrop paste-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) setPendingPaste(null); }}>
-          <form className="forward-modal paste-modal" role="dialog" aria-modal="true" aria-labelledby="paste-confirm-title" onSubmit={event => { event.preventDefault(); void confirmPendingPaste(); }} onKeyDown={event => { if (event.key === "Escape" && !busy) setPendingPaste(null); }}>
-            <header><div><h2 id="paste-confirm-title">Confirmar envio do conteúdo colado</h2><p>Confira antes de enviar para {pendingPaste.chatName}.</p></div><button type="button" onClick={() => setPendingPaste(null)} disabled={busy} aria-label="Fechar"><X size={20}/></button></header>
-            {pendingPaste.kind === "text" ? <div className="paste-preview-text">{pendingPaste.text}</div> : <><ul className="paste-preview-files">{pendingPaste.files.map((file, index) => <PasteFilePreview key={`${file.name}-${index}`} file={file} index={index}/>)}</ul>{pendingPaste.omittedFiles > 0 && <p className="paste-omitted">Mais {pendingPaste.omittedFiles} arquivo(s) não serão enviados. O limite é 10 por vez.</p>}</>}
-            <footer><button type="button" autoFocus onClick={() => setPendingPaste(null)} disabled={busy}>Cancelar</button><button type="submit" disabled={busy || (pendingPaste.kind === "text" && !draft.trim())}><Send size={16}/>Confirmar envio</button></footer>
-          </form>
-        </div>
-      )}
-      {forwardTarget && (
-        <div className="wa-backdrop forward-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !forwardBusy) setForwardTarget(null); }}>
-          <form className="forward-modal" role="dialog" aria-modal="true" aria-labelledby="forward-title" onSubmit={event => { event.preventDefault(); void sendForward(); }}>
-            <header><div><h2 id="forward-title">Encaminhar mensagem</h2><p>Escolha até 10 contatos para receber a mensagem original.</p></div><button type="button" onClick={() => setForwardTarget(null)} disabled={forwardBusy} aria-label="Fechar"><X size={20}/></button></header>
-            <div className="forward-preview"><Forward size={17}/><span>{forwardTarget.message.body || ({ image: "Foto", video: "Vídeo", audio: "Áudio", voice: "Áudio", document: "Arquivo" } as Record<string, string>)[forwardTarget.message.type] || "Mensagem"}</span></div>
-            <label className="forward-search"><Search size={17}/><input autoFocus aria-label="Buscar contato para encaminhar" value={forwardSearch} onChange={event => setForwardSearch(event.target.value)} placeholder="Buscar contato ou número"/></label>
-            {forwardToIds.length > 0 && <div className="forward-selected">{forwardToIds.map(id => <button key={id} type="button" disabled={forwardBusy} onClick={() => toggleForwardRecipient(id)}>{contactRows.find(contact => contact.id === id)?.name || id}<X size={13}/></button>)}</div>}
-            <div className="forward-contact-list" role="group" aria-label="Contatos de destino">
-              {forwardCandidates.slice(0,80).map(contact => <label key={contact.id} className="forward-contact"><input type="checkbox" disabled={forwardBusy} checked={forwardToIds.includes(contact.id)} onChange={() => toggleForwardRecipient(contact.id)}/><span className="forward-contact-avatar">{contact.name.charAt(0).toUpperCase()}</span><span className="forward-contact-name"><b>{contact.name}</b><small>{contact.phone || contact.id.replace(/@.*/, "")}</small></span></label>)}
-              {!forwardCandidates.length && <p className="forward-empty">Nenhum contato encontrado.</p>}
-              {forwardCandidates.length > 80 && <p className="forward-more">Mostrando os primeiros 80 contatos. Refine a busca para encontrar outros.</p>}
-            </div>
-            {forwardError && <p className="forward-error" role="alert">{forwardError}</p>}
-            <footer><button type="button" onClick={() => setForwardTarget(null)} disabled={forwardBusy}>Cancelar</button><button type="submit" disabled={forwardBusy || !forwardToIds.length}><Forward size={17}/>{forwardBusy ? "Encaminhando…" : `Encaminhar para ${forwardToIds.length}`}</button></footer>
-          </form>
-        </div>
-      )}
-      {newChatOpen && (
-        <div className="wa-backdrop">
-          <form className="wa-modal new-contact-modal" role="dialog" aria-modal="true" aria-labelledby="new-contact-title" onSubmit={(event) => { event.preventDefault(); void startChat(); }}>
-            <header>
-              <h2 id="new-contact-title">Adicionar novo contato</h2>
-              <button type="button" onClick={() => setNewChatOpen(false)} aria-label="Fechar">
-                <X />
-              </button>
-            </header>
-            <div className="new-contact-fields">
-              <p>Por favor adicione o nome e número de WhatsApp do contato que você deseja criar.</p>
-              <input autoFocus aria-label="Primeiro nome" autoComplete="given-name" maxLength={80} value={contactFirstName} onChange={(event) => setContactFirstName(event.target.value)} placeholder="Primeiro nome" />
-              <input aria-label="Segundo nome" autoComplete="family-name" maxLength={80} value={contactLastName} onChange={(event) => setContactLastName(event.target.value)} placeholder="Segundo nome" />
-              <div className="new-contact-phone"><select aria-label="Código do país" value={contactCountryCode} onChange={(event) => setContactCountryCode(event.target.value)}><option value="55">🇧🇷 +55</option><option value="1">🇺🇸 +1</option><option value="351">🇵🇹 +351</option><option value="34">🇪🇸 +34</option><option value="54">🇦🇷 +54</option></select><input aria-label="Número do WhatsApp com DDD" type="tel" inputMode="tel" autoComplete="tel-national" maxLength={20} value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="DDD + número" /></div>
-              {contactFormError && <p className="new-contact-error" role="alert">{contactFormError}</p>}
-            </div>
-            <button
-              type="submit"
-              className="wa-primary"
-              disabled={savingContact}
-            >
-              {savingContact ? "Criando…" : "Criar contato"}
-            </button>
-          </form>
-        </div>
-      )}
+      {pendingPaste && <PasteConfirmationDialog
+        pending={pendingPaste}
+        draft={draft}
+        busy={busy}
+        onCancel={() => setPendingPaste(null)}
+        onConfirm={() => { void confirmPendingPaste(); }}
+      />}
+      {forwardTarget && <ForwardMessageDialog
+        message={forwardTarget.message}
+        busy={forwardBusy}
+        search={forwardSearch}
+        onSearch={setForwardSearch}
+        selectedIds={forwardToIds}
+        contacts={contactRows}
+        candidates={forwardCandidates}
+        error={forwardError}
+        onToggle={toggleForwardRecipient}
+        onCancel={() => setForwardTarget(null)}
+        onSend={() => { void sendForward(); }}
+      />}
+      {newChatOpen && <NewContactDialog
+        firstName={contactFirstName}
+        onFirstName={setContactFirstName}
+        lastName={contactLastName}
+        onLastName={setContactLastName}
+        countryCode={contactCountryCode}
+        onCountryCode={setContactCountryCode}
+        phone={phone}
+        onPhone={setPhone}
+        error={contactFormError}
+        saving={savingContact}
+        onClose={() => setNewChatOpen(false)}
+        onSubmit={() => { void startChat(); }}
+      />}
       {(settingsOpen || operatorOpen) && operator && (
         <SettingsScreen
           token={operatorToken}

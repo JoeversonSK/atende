@@ -45,3 +45,14 @@ export async function startSessionAndReadQr(config: ApiConfig): Promise<string> 
   const data = await response.json() as { qrCode?: string; data?: string } | string;
   return typeof data === "string" ? data : String(data.qrCode || data.data || data);
 }
+
+export async function fetchSessionAccount(config: ApiConfig): Promise<{ name: string; phone: string } | null> {
+  const response = await request(config, "/sessions?limit=100");
+  if (!response.ok) return null;
+  const session = listFrom(await response.json()).find(
+    item => String(item.id || item.sessionId) === config.sessionId);
+  return session ? {
+    name: String(session.pushName || session.name || "WhatsApp"),
+    phone: String(session.phone || ""),
+  } : null;
+}
