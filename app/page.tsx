@@ -20,6 +20,7 @@ import { availableContactTags, buildContactRows, findForwardCandidates } from ".
 import { buildSyncedChats, fetchChatSnapshot, fetchProfilePictures } from "./conversations/conversation-sync";
 import { deliverMedia, deliverText } from "./conversations/message-delivery";
 import { createFlowTemplate } from "./conversations/flow-variables";
+import { executeConversationFlow } from "./conversations/flow-execution";
 import { fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
 import { forwardMessageToContacts } from "./conversations/conversation-forwarding";
 import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
@@ -1308,226 +1309,73 @@ export default function Home() {
     const target = selected;
     const profile = overview.contacts.find(contact => contact.chatId === target.id)?.data;
     const fill = createFlowTemplate(operator.displayName, target, profile);
-    let assignedByFlow = false,
-      closedByFlow = false,
-      waitingForAnswer = false;
-    const assignToCurrent = async () => {
-      if (assignedByFlow) return;
-      const startResponse = await request(
-        config,
-        `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(target.id)}/start`,
-        { method: "POST" },
-      );
-      const started = (await startResponse.json()) as {
-        data: SupportOverview["contacts"][number]["data"];
-        assignment: Assignment;
-        message?: string;
-      };
-      if (!startResponse.ok) throw new Error(errorMessage(started));
-      assignedByFlow = true;
-      setAssignments((current) => ({
-        ...current,
-        [target.id]: started.assignment,
-      }));
-      setOverview((current) => ({
-        ...current,
-        contacts: [
-          ...current.contacts.filter((contact) => contact.chatId !== target.id),
-          { chatId: target.id, data: started.data },
-        ],
-      }));
-      if (selectedRef.current?.id === target.id) {
-        setAssignment(started.assignment);
-        profileDirtyRef.current = false;
-        setProfileReload((value) => value + 1);
-      }
-    };
-    const closeFromFlow = async () => {
-      if (closedByFlow) return;
-      const response = await request(
-        config,
-        `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(target.id)}/close`,
-        { method: "POST" },
-      );
-      const result = await response.json() as { data: SupportOverview["contacts"][number]["data"] };
-      if (!response.ok) throw new Error(errorMessage(result));
-      closedByFlow = true;
-      refreshGeneration.current++;
-      setAssignments((current) => {
+    const updateClosedProfile = (
+      data: SupportOverview["contacts"][number]["data"],
+      evaluation: boolean,
+    ) => {
+      if (!evaluation) refreshGeneration.current++;
+      setAssignments(current => {
         const next = { ...current };
         delete next[target.id];
         return next;
       });
-      setOverview((current) => ({
+      setOverview(current => ({
         ...current,
         contacts: [
-          ...current.contacts.filter((contact) => contact.chatId !== target.id),
-          { chatId: target.id, data: result.data },
+          ...current.contacts.filter(contact => contact.chatId !== target.id),
+          { chatId: target.id, data },
         ],
       }));
       if (selectedRef.current?.id === target.id) {
         setAssignment(null);
         profileDirtyRef.current = false;
-        setProfileReload((value) => value + 1);
+        setProfileReload(value => value + 1);
       }
     };
     setBusy(true);
     setFlowMenuOpen(false);
-    setNotice(`Enviando o fluxo “${flow.name}”…`);
+    setNotice("Enviando o fluxo “" + flow.name + "”…");
     try {
-      if (flow.kind === "evaluation") {
-        const evaluationResponse = await request(
-          config,
-          `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(target.id)}/evaluation`,
-          { method: "POST" },
-        );
-        const closed = (await evaluationResponse.json()) as {
-          data: SupportOverview["contacts"][number]["data"];
-          message?: string;
-        };
-        if (!evaluationResponse.ok) throw new Error(errorMessage(closed));
-        setAssignments((current) => {
-          const next = { ...current };
-          delete next[target.id];
-          return next;
-        });
-        setOverview((current) => ({
-          ...current,
-          contacts: [
-            ...current.contacts.filter(
-              (contact) => contact.chatId !== target.id,
-            ),
-            { chatId: target.id, data: closed.data },
-          ],
-        }));
-        if (selectedRef.current?.id === target.id) {
-          setAssignment(null);
-          profileDirtyRef.current = false;
-          setProfileReload((value) => value + 1);
-        }
+      const result = await executeConversationFlow({
+        config, flow, chatId: target.id, operatorName: operator.displayName, fill,
+        onAssigned: started => {
+          setAssignments(current => ({ ...current, [target.id]: started.assignment }));
+          setOverview(current => ({
+            ...current,
+            contacts: [
+              ...current.contacts.filter(contact => contact.chatId !== target.id),
+              { chatId: target.id, data: started.data },
+            ],
+          }));
+          if (selectedRef.current?.id === target.id) {
+            setAssignment(started.assignment);
+            profileDirtyRef.current = false;
+            setProfileReload(value => value + 1);
+          }
+        },
+        onClosed: updateClosedProfile,
+      });
+      if (result.evaluation) {
         setNotice("Enquetes de avaliação enviadas e atendimento encerrado.");
         await refreshMessages(target, config, true);
         await refreshChats();
         return;
       }
-      if (flow.kind === "start") {
-        await assignToCurrent();
-      }
-      for (let stepIndex = 0; stepIndex < flow.steps.length; stepIndex += 1) {
-        const step = flow.steps[stepIndex];
-        const type = step.type || "message";
-        if (type === "delay") {
-          if ((step.delaySeconds || 0) > 0)
-            await new Promise((resolve) =>
-              setTimeout(resolve, (step.delaySeconds || 0) * 1000),
-            );
-          continue;
-        }
-        if ((step.delaySeconds || 0) > 0)
-          await new Promise((resolve) =>
-            setTimeout(resolve, (step.delaySeconds || 0) * 1000),
-          );
-        if (type === "action") {
-          if (step.action === "assign-current") await assignToCurrent();
-          else if (step.action === "close-ticket") await closeFromFlow();
-          continue;
-        }
-        let path = "send-text",
-          body: Record<string, unknown> = { chatId: target.id };
-        if (type === "message")
-          body.text = `*${operator.displayName}:*\n\n${fill(step.text)}`;
-        else if (type === "poll") {
-          path = "send-poll";
-          body = {
-            chatId: target.id,
-            name: fill(step.question),
-            options: (step.options || []).map(fill),
-            allowMultipleAnswers: false,
-          };
-        } else {
-          path = `send-${type}`;
-          const caption = fill(step.caption);
-          body = {
-            chatId: target.id,
-            base64: step.data,
-            mimetype: step.mimetype || "application/octet-stream",
-            filename: step.filename || "arquivo",
-            ...(caption
-              ? { caption: `*${operator.displayName}:*\n\n${caption}` }
-              : {}),
-          };
-        }
-        const response = await request(
-          config,
-          `/sessions/${encodeURIComponent(config.sessionId)}/messages/${path}`,
-          { method: "POST", body: JSON.stringify(body) },
-        );
-        const sendResult = (await response.json().catch(() => null)) as {
-          messageId?: string;
-          message?: string;
-        } | null;
-        if (!response.ok) throw new Error(errorMessage(sendResult));
-        if (type === "poll") {
-          const remaining = flow.steps.slice(stepIndex + 1).map((next) => {
-            if ((next.type || "message") === "message")
-              return {
-                ...next,
-                text: `*${operator.displayName}:*\n\n${fill(next.text)}`,
-              };
-            if (next.type === "poll")
-              return {
-                ...next,
-                question: fill(next.question),
-                options: (next.options || []).map(fill),
-              };
-            if (
-              ["image", "video", "audio", "document"].includes(next.type || "")
-            ) {
-              const caption = fill(next.caption);
-              return {
-                ...next,
-                caption: caption
-                  ? `*${operator.displayName}:*\n\n${caption}`
-                  : "",
-              };
-            }
-            return next;
-          });
-          const continuation = await request(
-            config,
-            `/operator-auth/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(target.id)}/flow-continuation`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                steps: remaining,
-                expectedOptions: (step.options || []).map(fill),
-                pollMessageId: sendResult?.messageId,
-              }),
-            },
-          );
-          if (!continuation.ok)
-            throw new Error(
-              errorMessage(await continuation.json().catch(() => null)),
-            );
-          waitingForAnswer = true;
-          break;
-        }
-      }
       setNotice(
-        waitingForAnswer
+        result.waitingForAnswer
           ? "Opções enviadas. Aguardando a resposta do cliente."
-          : closedByFlow
-            ? `Fluxo “${flow.name}” enviado e atendimento encerrado.`
-            : assignedByFlow
-              ? `Fluxo enviado e atendimento atribuído a ${operator.displayName}.`
-              : `Fluxo “${flow.name}” enviado.`,
+          : result.closedByFlow
+            ? "Fluxo “" + flow.name + "” enviado e atendimento encerrado."
+            : result.assignedByFlow
+              ? "Fluxo enviado e atendimento atribuído a " + operator.displayName + "."
+              : "Fluxo “" + flow.name + "” enviado.",
       );
       await refreshMessages(target, config, true);
       await refreshChats();
     } catch (error) {
       setNotice(
         error instanceof Error
-          ? `O fluxo foi interrompido: ${error.message}`
+          ? "O fluxo foi interrompido: " + error.message
           : "Não foi possível enviar o fluxo.",
       );
     } finally {
