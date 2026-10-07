@@ -4,12 +4,14 @@ import { useRef, useState } from "react";
 import { FileUp, X } from "lucide-react";
 
 type ImportContact = { firstName: string; lastName: string; phone: string; tags: string[] };
-type CellValue = string | number | null | undefined | { text?: string; result?: unknown; richText?: { text: string }[] };
+type CellValue = string | number | boolean | Date | null | undefined | { text?: string; result?: unknown; richText?: { text: string }[] };
 
 const asText = (value: CellValue): string => {
   if (value == null) return "";
   if (typeof value === "number") return Number.isSafeInteger(value) ? value.toFixed(0) : String(value);
   if (typeof value === "string") return value.trim();
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toLocaleDateString("pt-BR");
   if (typeof value.text === "string") return value.text.trim();
   if (value.richText) return value.richText.map(part => part.text).join("").trim();
   if (value.result !== undefined) return asText(value.result as CellValue);
@@ -77,7 +79,7 @@ function parseCsv(content: string) {
   return rows;
 }
 
-async function readContactFile(file: File) {
+export async function readContactFile(file: File) {
   if (file.size > 10 * 1024 * 1024) throw new Error("Escolha um arquivo de até 10 MB.");
   const suffix = file.name.split(".").pop()?.toLowerCase();
   if (suffix === "csv") {
@@ -88,16 +90,13 @@ async function readContactFile(file: File) {
     return parseContactTable(parseCsv(content));
   }
   if (suffix !== "xlsx") throw new Error("Use um arquivo .xlsx ou .csv. Para .xls, salve uma cópia em .xlsx primeiro.");
-  const ExcelJS = await import("exceljs");
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
-  const worksheet = workbook.worksheets[0];
-  if (!worksheet) throw new Error("A planilha não possui abas.");
-  const rows: CellValue[][] = [];
-  worksheet.eachRow((row, number) => {
-    rows[number - 1] = Array.from({ length: row.cellCount }, (_, index) => row.getCell(index + 1).value as CellValue);
-  });
-  return parseContactTable(rows);
+  const { readSheet } = await import("read-excel-file/browser");
+  const rows = await readSheet(file);
+  if (!rows.length) throw new Error("A planilha não possui abas com dados.");
+  return parseContactTable(rows.map(row => row.map(value =>
+    value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+      ? value : value instanceof Date ? value : String(value),
+  )));
 }
 
 export function ContactImport({ baseUrl, sessionId, token, onComplete, onClose }: {

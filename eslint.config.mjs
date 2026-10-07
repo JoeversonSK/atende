@@ -23,6 +23,18 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "off",
     },
   },
+  {
+    // WhatsApp avatars/media, local paste previews and QR codes have dynamic
+    // blob/data/external URLs; Next's image optimizer is not used by this UI.
+    files: [
+      "app/account-panels.tsx",
+      "app/contacts-panel.tsx",
+      "app/conversations/components/contact-avatar.tsx",
+      "app/conversations/components/message-content.tsx",
+      "app/conversations/components/paste-file-preview.tsx",
+    ],
+    rules: { "@next/next/no-img-element": "off" },
+  },
 ]);
 
 export default eslintConfig;

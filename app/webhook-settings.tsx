@@ -15,7 +15,7 @@ export function WebhookSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const path="/admin/notification-webhooks";
   const [items,setItems]=useState<Hook[]>([]),[editing,setEditing]=useState<Hook|null>(null),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[feedback,setFeedback]=useState("");
   const load=useCallback(async()=>{setLoading(true);try{const response=await operatorRequest(baseUrl,token,path);const data=await response.json() as Hook[];if(!response.ok)throw new Error(errorMessage(data));setItems(Array.isArray(data)?data:[]);}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível carregar os webhooks.");}finally{setLoading(false);}},[baseUrl,token]);
-  useEffect(()=>{void load();},[load]);
+  useEffect(()=>{let active=true;queueMicrotask(()=>{if(active)void load();});return()=>{active=false;};},[load]);
   function change(patch:Partial<Hook>){setEditing(current=>current?{...current,...patch}:current);}
   function toggleField(field:string){if(!editing)return;change({fields:editing.fields.includes(field)?editing.fields.filter(item=>item!==field):[...editing.fields,field]});}
   async function save(event:FormEvent){event.preventDefault();if(!editing)return;setSaving(true);setFeedback("");try{const response=await operatorRequest(baseUrl,token,editing.id?`${path}/${editing.id}`:path,{method:editing.id?"PUT":"POST",body:JSON.stringify(editing)});const data:unknown=await response.json();if(!response.ok)throw new Error(errorMessage(data));setEditing(null);setFeedback(editing.id?"Webhook atualizado.":"Webhook criado.");await load();}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving(false);}}

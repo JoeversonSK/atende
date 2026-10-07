@@ -55,7 +55,11 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
     } catch (error) { setFeedback(error instanceof Error ? error.message : "Não foi possível carregar as automações."); }
     finally { setLoading(false); }
   }, [endpoint, token]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => { if (active) void load(); });
+    return () => { active = false; };
+  }, [load]);
   function change(patch: Partial<Rule>) { setEditing(current => current ? { ...current, ...patch } : current); setPreview(null); }
   function selectMode(mode: Rule["mode"]) {
     change(mode === "monthlyCall" ? { mode, spreadsheetId: monthlySpreadsheetUrl, range: "MES_ANTERIOR!A1:M1001", detailsRange: "Clientes!A1:F1001",

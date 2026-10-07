@@ -38,7 +38,7 @@ O projeto usa uma versão personalizada do [OpenWA](https://github.com/rmyndhari
 
 | Serviço | Função | Exposição padrão |
 | --- | --- | --- |
-| `web` | Interface do Atende e gateway interno | Porta `3000` |
+| `web` | Interface do Atende e gateway interno (imagem final sem dependências exclusivas de desenvolvimento) | Porta `3000` |
 | `openwa` | Conexão e envio de mensagens pelo WhatsApp | Somente `127.0.0.1:2785` |
 | `postgres` | Contas, contatos, mensagens e atendimentos | Rede interna do Docker |
 | `redis` | Eventos e estado em tempo real | Rede interna do Docker |

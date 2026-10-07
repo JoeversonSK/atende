@@ -3268,6 +3268,8 @@ body .operations-board::backdrop {
 body .board-view-controls {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
   flex: none;
 }
 body .operations-board .board-view-controls button {

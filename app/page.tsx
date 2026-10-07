@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { LoginScreen, SettingsScreen } from "./account-panels";
-import { errorMessage, operatorJson, operatorRequest, request, type ApiConfig } from "./atende-api";
+import { errorMessage, operatorJson, operatorRequest, type ApiConfig } from "./atende-api";
 import { authenticateOperator, logoutOperator, updateOperatorName } from "./operator-account";
 import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } from "./operator-activity";
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
@@ -25,11 +25,11 @@ import { executeConversationFlow } from "./conversations/flow-execution";
 import { appendOptimisticText, confirmOptimisticText, discardOptimisticText,
   fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
 import { forwardMessageToContacts } from "./conversations/conversation-forwarding";
-import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
+import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator } from "./conversations/workspace-storage";
 import { useNotificationSettings } from "./conversations/use-notification-settings";
 import { useConversationEvents } from "./conversations/use-conversation-events";
 import { useVoiceRecorder } from "./conversations/use-voice-recorder";
-import { createSessionRecord, fetchSessionAccount, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr } from "./conversations/session-connection";
+import { createSessionRecord, resolveSessionId, restoreSessionIfNeeded, startSessionAndReadQr } from "./conversations/session-connection";
 import { assignConversation, closeTicket, listAssignments, readAssignment, removeAssignment, type Assignment } from "./conversations/ticket-actions";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
@@ -57,7 +57,6 @@ import {
 
 type Config = ApiConfig;
 type TeamAlert = { id: string; room: string; senderName: string; body: string; mentioned: boolean };
-type Account = { name: string; phone: string };
 type Operator = OperatorIdentity;
 export type { NotificationPreferences } from "./conversations/workspace-storage";
 
@@ -119,10 +118,6 @@ export default function Home() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [savingAssignment, setSavingAssignment] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [account, setAccount] = useState<Account>({
-    name: "WhatsApp",
-    phone: "",
-  });
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "unread" | "mine">("all");
   const [tagFilter, setTagFilter] = useState("");
@@ -137,10 +132,16 @@ export default function Home() {
   const [quickReplyDismissed, setQuickReplyDismissed] = useState(false);
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const quickReplyQuery = /^\/[a-z0-9_-]*$/i.test(draft) ? draft.slice(1).toLowerCase() : null;
+  const hasQuickReplyQuery = quickReplyQuery !== null;
   const quickReplyMatches = quickReplyQuery === null ? [] : quickReplies.filter(reply => reply.shortcut.startsWith(quickReplyQuery));
-  const quickReplyOpen = quickReplyQuery !== null && !quickReplyDismissed;
+  const quickReplyOpen = hasQuickReplyQuery && !quickReplyDismissed;
+  function updateDraft(value: SetStateAction<string>) {
+    setDraft(value);
+    setQuickReplyIndex(0);
+    setQuickReplyDismissed(false);
+  }
   function insertQuickReply(reply: QuickReply) {
-    setDraft(reply.text); setPastedTextPending(false); setQuickReplyDismissed(true);
+    updateDraft(reply.text); setPastedTextPending(false); setQuickReplyDismissed(true);
     requestAnimationFrame(() => { composerInputRef.current?.focus(); composerInputRef.current?.setSelectionRange(reply.text.length, reply.text.length); });
   }
   const [busy, setBusy] = useState(false);
@@ -216,10 +217,13 @@ export default function Home() {
   }, [filterMenuOpen]);
 
   useEffect(() => {
-    setActivityMenuOpen(false);
-    setFlowMenuOpen(false);
-    setEmojiOpen(false);
-    setFilterMenuOpen(false);
+    const frame = window.requestAnimationFrame(() => {
+      setActivityMenuOpen(false);
+      setFlowMenuOpen(false);
+      setEmojiOpen(false);
+      setFilterMenuOpen(false);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [settingsOpen, operatorOpen, newChatOpen, dashboardOpen, contactsOpen, teamChatOpen, setActivityMenuOpen]);
 
   useEffect(() => {
@@ -248,15 +252,16 @@ export default function Home() {
     }
   }, [config.baseUrl, operatorToken]);
   useEffect(() => {
-    if (!operatorToken || quickReplyQuery === null) return;
+    if (!operatorToken || !hasQuickReplyQuery) return;
     const abort = new AbortController();
     operatorJson<QuickReply[]>(config.baseUrl, operatorToken, "/quick-replies", { signal: abort.signal })
       .then(setQuickReplies).catch(error => { if (!abort.signal.aborted) setNotice(error.message); });
     return () => abort.abort();
-  }, [config.baseUrl, operatorToken, quickReplyQuery !== null]);
-  useEffect(() => { setQuickReplyIndex(0); setQuickReplyDismissed(false); }, [draft]);
+  }, [config.baseUrl, operatorToken, hasQuickReplyQuery]);
   useEffect(() => {
-    void loadFlows();
+    let active = true;
+    queueMicrotask(() => { if (active) void loadFlows(); });
+    return () => { active = false; };
   }, [loadFlows]);
   const showMessageAlert = useCallback(
     (alert: { id: string; chatId: string; name: string; body: string }) => {
@@ -274,7 +279,7 @@ export default function Home() {
         8000,
       );
     },
-    [],
+    [setMessageAlerts],
   );
 
   const socketRef = useConversationEvents({
@@ -340,8 +345,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!contactsOpen) {
-      setContactsReady(false);
-      return;
+      const frame = window.requestAnimationFrame(() => setContactsReady(false));
+      return () => window.cancelAnimationFrame(frame);
     }
     // Give the browser a paint with the loading view before mounting thousands of contact rows.
     let secondFrame = 0;
@@ -444,7 +449,7 @@ export default function Home() {
     return task;
   }, [config, loadChats]);
 
-  async function markRead(chatId: string, active = config) {
+  const markRead = useCallback(async (chatId: string, active = config) => {
     if (pendingReads.current.has(chatId)) return;
     lastReadAttempt.current.set(chatId, Date.now());
     pendingReads.current.add(chatId);
@@ -469,7 +474,7 @@ export default function Home() {
       );
       void refreshChatsRef.current(active).catch(() => undefined);
     }
-  }
+  }, [config]);
 
   useEffect(() => {
     const acknowledge = () => {
@@ -493,7 +498,7 @@ export default function Home() {
       window.removeEventListener("focus", acknowledge);
       document.removeEventListener("visibilitychange", acknowledge);
     };
-  }, [chats, selected?.id, dashboardOpen, teamChatOpen, settingsOpen, operatorOpen]);
+  }, [chats, selected?.id, dashboardOpen, teamChatOpen, settingsOpen, operatorOpen, markRead]);
 
   const refreshMessages = useCallback(
     async (chat: Chat, active = config, loadLiveHistory = false) => {
@@ -525,43 +530,39 @@ export default function Home() {
     },
     [config],
   );
-  const refreshAccount = useCallback(
-    async (active = config) => {
-      if (!active.apiKey || !active.sessionId) return;
-      const account = await fetchSessionAccount(active);
-      if (account) setAccount(account);
-    },
-    [config],
-  );
-
   useEffect(() => {
-    const saved = loadConfig();
-    setDetailsOpen(window.innerWidth > 1250);
-    const savedOperator = loadOperator();
-    setAuthLoaded(true);
-    setConfig(saved);
-    if (savedOperator) {
-      setOperatorToken(savedOperator.token);
-      operatorRequest(saved.baseUrl, savedOperator.token, "/me")
-        .then(async (response) => {
-          if (!response.ok) {
-            persistOperator(null);
-            setOperatorToken("");
-            return;
-          }
-          const user = (await response.json()) as Operator;
-          setOperator(user);
-          setOperatorName(user.displayName);
-        })
-        .catch(() =>
-          setOperatorError(
-            "Não foi possível acessar o servidor. Tente entrar novamente.",
-          ),
-        );
-    } else setOperatorOpen(true);
-    if (saved.apiKey) setSettingsOpen(!saved.sessionId);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      const saved = loadConfig();
+      setDetailsOpen(window.innerWidth > 1250);
+      const savedOperator = loadOperator();
+      setAuthLoaded(true);
+      setConfig(saved);
+      if (savedOperator) {
+        setOperatorToken(savedOperator.token);
+        operatorRequest(saved.baseUrl, savedOperator.token, "/me")
+          .then(async (response) => {
+            if (!active) return;
+            if (!response.ok) {
+              persistOperator(null);
+              setOperatorToken("");
+              return;
+            }
+            const user = (await response.json()) as Operator;
+            if (active) {
+              setOperator(user);
+              setOperatorName(user.displayName);
+            }
+          })
+          .catch(() => {
+            if (active) setOperatorError("Não foi possível acessar o servidor. Tente entrar novamente.");
+          });
+      } else setOperatorOpen(true);
+      if (saved.apiKey) setSettingsOpen(!saved.sessionId);
+    });
     return () => {
-      socketRef.current?.disconnect();
+      active = false;
     };
   }, []);
   useEffect(() => {
@@ -613,9 +614,13 @@ export default function Home() {
     if (!operatorToken) return;
     if (!config.apiKey || !config.sessionId) return;
     const active = config;
-    refreshChats(active).catch(() => undefined);
-    refreshAccount(active).catch(() => undefined);
-  }, [config.apiKey, config.baseUrl, config.sessionId, operatorToken]);
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      refreshChats(active).catch(() => undefined);
+    });
+    return () => { current = false; };
+  }, [config, operatorToken, refreshChats]);
   useEffect(() => {
     const chatChanged = scrolledChatRef.current !== (selected?.id || "");
     if (chatChanged) {
@@ -647,7 +652,6 @@ export default function Home() {
       );
       if (sessionId) {
         await refreshChats(next);
-        await refreshAccount(next);
       }
       setNotice("Conexão salva com sucesso.");
     } catch (error) {
@@ -983,7 +987,7 @@ export default function Home() {
     );
     historyCacheRef.current.set(target.id, pendingList);
     if (selectedRef.current?.id === target.id) setMessages(pendingList);
-    setDraft("");
+    updateDraft("");
     setPastedTextPending(false);
     setReplyingTo(null);
     setEmojiOpen(false);
@@ -1003,7 +1007,7 @@ export default function Home() {
       historyCacheRef.current.set(target.id, withoutFailed);
       if (selectedRef.current?.id === target.id) {
         setMessages(withoutFailed);
-        setDraft((current) => current || originalText);
+        updateDraft((current) => current || originalText);
         if (replyTarget) setReplyingTo((current) => current || replyingTo);
       }
       setNotice(
@@ -1500,7 +1504,6 @@ export default function Home() {
             chats={chats}
             owners={assignments}
             overview={overview}
-            onClose={() => setDashboardOpen(false)}
             onOpen={(id) => {
               const chat = chats.find((c) => c.id === id);
               if (chat) {
@@ -1658,7 +1661,7 @@ export default function Home() {
                 busy={busy}
                 sendFlow={flow => { void sendFlow(flow); }}
                 emojiMenuRef={emojiMenuRef}
-                setDraft={setDraft}
+                setDraft={updateDraft}
                 recording={recording}
                 recordingPaused={recordingPaused}
                 discardRecording={discardRecording}

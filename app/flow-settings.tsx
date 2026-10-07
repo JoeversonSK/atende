@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { errorMessage, operatorRequest } from "./atende-api";
 import {
   ArrowDown, ArrowUp, AudioLines, CheckCircle2, CircleAlert, Clock3, FileText, GitBranch,
@@ -62,10 +62,9 @@ function newBlock(type:ConversationFlowStep["type"]):ConversationFlowStep{
 
 export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const [flows,setFlows]=useState<ConversationFlow[]>([]),[selected,setSelected]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(""),[feedback,setFeedback]=useState(""),[dragged,setDragged]=useState<number|null>(null);
-  const api=async<T=unknown>(path:string,init?:RequestInit):Promise<T>=>{const response=await operatorRequest(baseUrl,token,path,init);const data=await response.json().catch(()=>null);if(!response.ok)throw new Error(errorMessage(data));return data as T;};
-  const load=()=>{setLoading(true);api<ConversationFlow[]>("/flows").then(items=>setFlows(items.map(normalizeFlow))).catch(error=>setFeedback(error.message)).finally(()=>setLoading(false));};
-  useEffect(()=>{load();},[baseUrl,token]);
-  useEffect(()=>{if(selected>=flows.length)setSelected(Math.max(0,flows.length-1));},[flows.length,selected]);
+  const api=useCallback(async<T=unknown>(path:string,init?:RequestInit):Promise<T>=>{const response=await operatorRequest(baseUrl,token,path,init);const data=await response.json().catch(()=>null);if(!response.ok)throw new Error(errorMessage(data));return data as T;},[baseUrl,token]);
+  const load=useCallback(()=>{setLoading(true);api<ConversationFlow[]>("/flows").then(items=>{setFlows(items.map(normalizeFlow));setSelected(current=>Math.min(current,Math.max(0,items.length-1)));}).catch(error=>setFeedback(error.message)).finally(()=>setLoading(false));},[api]);
+  useEffect(()=>{let active=true;queueMicrotask(()=>{if(active)load();});return()=>{active=false;};},[load]);
   useEffect(()=>{if(!feedback)return;const timer=window.setTimeout(()=>setFeedback(current=>current===feedback?"":current),5000);return()=>window.clearTimeout(timer);},[feedback]);
   const flow=flows[selected];
   const patchFlow=(patch:Partial<ConversationFlow>)=>setFlows(current=>current.map((item,index)=>index===selected?{...item,...patch}:item));
@@ -75,7 +74,7 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
   const moveBlock=(from:number,to:number)=>{if(to<0||to>=flow.steps.length||from===to)return;const steps=[...flow.steps], [item]=steps.splice(from,1);steps.splice(to,0,item);patchFlow({steps});};
   const addFlow=()=>{setFlows(current=>[...current,blankFlow()]);setSelected(flows.length);setEditingDetails(true);};
   async function save(){if(!flow)return;const validation=validateFlow(flow);if(validation){setFeedback(validation);return;}setSaving(flow.id||"new");setFeedback("");try{const path=flow.id?`/admin/flows/${flow.id}`:"/admin/flows";const payload={name:flow.name,description:flow.description||"",active:flow.active,kind:flow.kind,steps:flow.steps,pollOptions:flow.kind==="evaluation"?defaultPollOptions:[]};const result=await api<Partial<ConversationFlow>&{flow?:ConversationFlow;data?:ConversationFlow}>(path,{method:flow.id?"PUT":"POST",body:JSON.stringify(payload)});const returnedFlow=result?.flow||(result?.data&&!Array.isArray(result.data)?result.data:result);const saved=normalizeFlow({...flow,...(returnedFlow&&typeof returnedFlow==="object"&&!Array.isArray(returnedFlow)?returnedFlow:{}),id:returnedFlow?.id||flow.id,name:typeof returnedFlow?.name==="string"&&returnedFlow.name.trim()?returnedFlow.name:flow.name});setFlows(current=>current.map((item,index)=>index===selected?saved:item));setFeedback(`Fluxo “${saved.name||flow.name}” salvo com sucesso.`);}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível salvar.");}finally{setSaving("");}}
-  async function remove(){if(!flow)return;if(!flow.id){setFlows(current=>current.filter((_,i)=>i!==selected));return;}if(!window.confirm(`Excluir o fluxo “${flow.name}”?`))return;setSaving(flow.id);try{await api(`/admin/flows/${flow.id}`,{method:"DELETE"});setFlows(current=>current.filter(item=>item.id!==flow.id));setFeedback("Fluxo excluído.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível excluir.");}finally{setSaving("");}}
+  async function remove(){if(!flow)return;if(!flow.id){setFlows(current=>current.filter((_,i)=>i!==selected));setSelected(current=>Math.min(current,Math.max(0,flows.length-2)));return;}if(!window.confirm(`Excluir o fluxo “${flow.name}”?`))return;setSaving(flow.id);try{await api(`/admin/flows/${flow.id}`,{method:"DELETE"});setFlows(current=>current.filter(item=>item.id!==flow.id));setSelected(current=>Math.min(current,Math.max(0,flows.length-2)));setFeedback("Fluxo excluído.");}catch(error){setFeedback(error instanceof Error?error.message:"Não foi possível excluir.");}finally{setSaving("");}}
   async function selectFile(index:number,file?:File){if(!file)return;if(file.size>8*1024*1024){setFeedback("O arquivo do fluxo pode ter no máximo 8 MB.");return;}const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]||"");reader.onerror=()=>reject(new Error("Não foi possível ler o arquivo."));reader.readAsDataURL(file);});patchStep(index,{data,mimetype:file.type||"application/octet-stream",filename:file.name});}
   const [editingDetails,setEditingDetails]=useState(false);
 

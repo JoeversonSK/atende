@@ -38,7 +38,11 @@ export function SystemWebhookSettings({ baseUrl, token }: { baseUrl: string; tok
       setEvents(Array.isArray(catalog.events) ? catalog.events : []);
     } catch (error) { setFeedback(error instanceof Error ? error.message : "Não foi possível carregar os webhooks."); }
   }, [baseUrl, token]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => { if (active) void load(); });
+    return () => { active = false; };
+  }, [load]);
   const change = (patch: Partial<Draft>) => setDraft(current => current ? { ...current, ...patch } : null);
   async function save(event: FormEvent) {
     event.preventDefault();

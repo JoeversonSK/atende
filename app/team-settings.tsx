@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { errorMessage, operatorRequest } from "./atende-api";
 
 type Member = { id:string; username:string; displayName:string; role:string; active:boolean; canSend:boolean; canAssign:boolean; dashboardVisible:boolean };
@@ -23,13 +23,13 @@ export function TeamSettings({ baseUrl, token }: {baseUrl:string;token:string}) 
   const [newPassword,setNewPassword]=useState("");
   const [newPasswordConfirmation,setNewPasswordConfirmation]=useState("");
   const [creating,setCreating]=useState(false);
-  async function api<T>(path:string,body?:unknown):Promise<T> {
+  const api=useCallback(async <T,>(path:string,body?:unknown):Promise<T> => {
     const response=await operatorRequest(baseUrl,token,`/admin${path}`,{method:body===undefined?"GET":"PUT",...(body===undefined?{}:{body:JSON.stringify(body)})});
     const data:unknown=await response.json();
     if(!response.ok) throw new Error(errorMessage(data));
     return data as T;
-  }
-  useEffect(()=>{let live=true; setLoading(true); api<{users:Member[];unassignedUserIds?:string[]}>("").then(data=>{if(live){setUsers(data.users);setRecipients(data.unassignedUserIds||[]);}}).catch(e=>{if(live)setError(e.message);}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};},[baseUrl,token]);
+  },[baseUrl,token]);
+  useEffect(()=>{let live=true;queueMicrotask(()=>{if(!live)return;setLoading(true);void api<{users:Member[];unassignedUserIds?:string[]}>("").then(data=>{if(live){setUsers(data.users);setRecipients(data.unassignedUserIds||[]);}}).catch(e=>{if(live)setError(e.message);}).finally(()=>{if(live)setLoading(false);});});return()=>{live=false;};},[api]);
   async function createUser(event:FormEvent<HTMLFormElement>){
     event.preventDefault();setError("");setFeedback("");
     if(newPassword!==newPasswordConfirmation){setError("As senhas precisam ser iguais.");return;}

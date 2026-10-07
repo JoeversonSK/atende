@@ -1,29 +1,31 @@
 "use client";
-import {useEffect,useState} from "react";
+import {useCallback,useEffect,useRef,useState} from "react";
 import {Plus,Trash2} from "lucide-react";
 import {errorMessage} from "./atende-api";
 type Data={name:string;phone:string;email:string;company:string;document:string;address:string;status:string;serviceType?:string;priority?:string;notes:{id:string;text:string;author:string;createdAt:string}[];events:{id:string;title:string;date:string}[];tags:string[];sequences:string[];campaigns:string[];custom:{id:string;label:string;value:string}[]};
 type ProfileResult={data:Data;revision:number};
 const empty:Data={name:"",phone:"",email:"",company:"",document:"",address:"",status:"open",serviceType:"remote",priority:"normal",notes:[],events:[],tags:[],sequences:[],campaigns:[],custom:[]};
 export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactName,contactPhone="",canEdit,dirtyRef,onSaved}:{baseUrl:string;apiKey:string;token:string;sessionId:string;chatId:string;contactName:string;contactPhone?:string;canEdit:boolean;dirtyRef:{current:boolean};onSaved?:(data:Data)=>void}){
+  const onSavedRef=useRef(onSaved);
+  useEffect(()=>{onSavedRef.current=onSaved;},[onSaved]);
   const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[savingPriority,setSavingPriority]=useState(false),[dirty,setDirty]=useState(false),[autoSaveBlocked,setAutoSaveBlocked]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const [note,setNote]=useState(""),[fieldName,setFieldName]=useState(""),[fieldValue,setFieldValue]=useState("");
   const [drafts,setDrafts]=useState({tags:"",sequences:"",campaigns:""});
   const [availableTags,setAvailableTags]=useState<string[]>([]),[tagChoice,setTagChoice]=useState("");
   useEffect(()=>{dirtyRef.current=dirty;return()=>{dirtyRef.current=false;};},[dirty,dirtyRef]);
   const endpoint=`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(chatId)}`;
-  async function fetchProfile(signal?:AbortSignal){
+  const fetchProfile=useCallback(async(signal?:AbortSignal)=>{
     const response=await fetch(endpoint,{signal,headers:{"X-Atende-Token":token}});
     const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));
     if(!result.data.phone){try{const lookup=await fetch(`${baseUrl.replace(/\/$/,"")}/api/sessions/${encodeURIComponent(sessionId)}/contacts/${encodeURIComponent(chatId)}/phone`,{signal:signal?AbortSignal.any([signal,AbortSignal.timeout(6000)]):AbortSignal.timeout(6000),headers:{"X-API-Key":apiKey,"X-Atende-Token":token}});if(lookup.ok){const resolved=await lookup.json() as {phone?:string};if(typeof resolved.phone==="string"&&/^\d{7,15}$/.test(resolved.phone))result.data.phone=resolved.phone;}}catch{/* Keep manual entry available when WhatsApp is disconnected. */}}
     return result;
-  }
-  function apply(result:ProfileResult){
+  },[endpoint,baseUrl,sessionId,chatId,token,apiKey]);
+  const apply=useCallback((result:ProfileResult)=>{
     const cleanName=/[\p{L}\p{N}]/u.test(result.data.name||"")?result.data.name:"";
     const fallback=/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")||contactName==="Contato sem nome"?"":contactName;
     setData({...empty,...result.data,name:cleanName||(result.revision===0?fallback:""),...(result.revision===0?{phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
-  }
-  useEffect(()=>{const abort=new AbortController();fetchProfile(abort.signal).then(apply).catch(e=>{if(e.name!=="AbortError")setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setLoading(false);});return()=>abort.abort();},[endpoint,token]);
+  },[contactName,contactPhone]);
+  useEffect(()=>{const abort=new AbortController();fetchProfile(abort.signal).then(apply).catch(e=>{if(e.name!=="AbortError")setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setLoading(false);});return()=>abort.abort();},[fetchProfile,apply]);
   useEffect(()=>{const abort=new AbortController();fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/catalog/tags`,{signal:abort.signal,headers:{"X-Atende-Token":token}}).then(async response=>response.ok?response.json():[]).then(tags=>{if(!abort.signal.aborted)setAvailableTags(Array.isArray(tags)?tags:[]);}).catch(()=>undefined);return()=>abort.abort();},[baseUrl,sessionId,token]);
   useEffect(()=>{if(!dirty)return;const leave=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue="";};window.addEventListener("beforeunload",leave);return()=>window.removeEventListener("beforeunload",leave);},[dirty]);
   function change(patch:Partial<Data>){setData(current=>({...current,...patch}));setDirty(true);setAutoSaveBlocked(false);setError("");setNotice("");}
@@ -39,13 +41,13 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
       }catch{/* The next refresh retries without discarding edits. */}
     },8000);
     return()=>{window.clearInterval(timer);abort.abort();};
-  },[endpoint,token,revision,dirty,saving,loading]);
-  async function save(){
+  },[endpoint,token,revision,dirty,saving,loading,dirtyRef,apply]);
+  const save=useCallback(async()=>{
     if(!dirty||saving)return;setSaving(true);setAutoSaveBlocked(false);setError("");setNotice("Salvando automaticamente…");
-    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));apply(result);onSaved?.(result.data);setNotice("Informações salvas para a equipe.");}
+    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));apply(result);onSavedRef.current?.(result.data);setNotice("Informações salvas para a equipe.");}
     catch(e){setAutoSaveBlocked(true);setError(e instanceof Error?e.message:"Erro ao salvar.");setNotice("");}finally{setSaving(false);}
-  }
-  useEffect(()=>{if(!canEdit||!dirty||saving||savingPriority||loading||autoSaveBlocked)return;const timer=window.setTimeout(()=>void save(),650);return()=>window.clearTimeout(timer);},[canEdit,dirty,saving,savingPriority,loading,autoSaveBlocked,data,revision,endpoint,token]);
+  },[dirty,saving,revision,data,endpoint,token,apply]);
+  useEffect(()=>{if(!canEdit||!dirty||saving||savingPriority||loading||autoSaveBlocked)return;const timer=window.setTimeout(()=>void save(),650);return()=>window.clearTimeout(timer);},[canEdit,dirty,saving,savingPriority,loading,autoSaveBlocked,save]);
   async function reload(){if(dirty&&!window.confirm("Descartar as alterações não salvas e recarregar o perfil?"))return;setLoading(true);setError("");try{apply(await fetchProfile());}catch(e){setError(e instanceof Error?e.message:"Erro ao carregar.");}finally{setLoading(false);}}
   async function savePriority(priority:string){
     const previous=data.priority||"normal";setData(current=>({...current,priority}));setSavingPriority(true);setError("");setNotice("Salvando prioridade…");

@@ -32,10 +32,11 @@ export function useConversationEvents({
 }) {
   const socketRef = useRef<Socket | null>(null);
   const notifiedIds = useRef(new Set<string>());
+  const { baseUrl, apiKey, sessionId } = config;
 
   useEffect(() => {
-    if (!operatorToken || !config.apiKey || !config.sessionId) return;
-    const active = config;
+    if (!operatorToken || !apiKey || !sessionId) return;
+    const active: ApiConfig = { baseUrl, apiKey, sessionId };
     let eventRefreshTimer = 0;
     let hasConnected = false;
     const scheduleEventRefresh = () => {
@@ -150,7 +151,7 @@ export function useConversationEvents({
       socket.disconnect();
       if (socketRef.current === socket) socketRef.current = null;
     };
-  }, [config.apiKey, config.baseUrl, config.sessionId, operatorToken, chatsRef,
+  }, [apiKey, baseUrl, sessionId, operatorToken, chatsRef,
     selectedRef, operatorRef, refreshChatsRef, refreshMessagesRef,
     notificationsRef, notificationPreferencesRef, playNotificationSound,
     showMessageAlert, setQr, setStatus, setNotice]);

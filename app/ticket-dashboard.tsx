@@ -1,12 +1,12 @@
 "use client";
 import {useEffect,useMemo,useRef,useState} from "react";
-import {Maximize2,Minimize2} from "lucide-react";
+import {Maximize2,Minimize2,Search} from "lucide-react";
 import {clockDuration,elapsed,type SupportOverview} from "./dashboard-model";
 export {emptyOverview,type SupportOverview} from "./dashboard-model";
 
 type Owner={assigneeId?:string;assigneeName:string;updatedAt?:string};
-type Props={chats:{id:string;name:string}[];owners:Record<string,Owner>;overview:SupportOverview;onOpen:(id:string)=>void;onClose:()=>void;warning?:string};
-export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:Props){
+type Props={chats:{id:string;name:string}[];owners:Record<string,Owner>;overview:SupportOverview;onOpen:(id:string)=>void;warning?:string};
+export function TicketDashboard({chats,owners,overview,onOpen,warning}:Props){
  const [now,setNow]=useState(() => Date.now()),[search,setSearch]=useState("");
  const boardRef=useRef<HTMLElement>(null);
  const [fullscreen,setFullscreen]=useState(false);
@@ -47,10 +47,9 @@ export function TicketDashboard({chats,owners,overview,onOpen,onClose,warning}:P
  const firstName=(name:string)=>name.trim().split(/[\s-]+/)[0]||name;
  const matches=(name:string)=>name.toLocaleLowerCase().includes(search.toLocaleLowerCase());
  const time=new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(now)).split(":");
- const date=new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date(now));
  const activityLabel=(a:{status:string;note:string;until:string|null})=>a.status==="break"?`Pausa · ${clockDuration(Math.max(0,Math.ceil((Date.parse(a.until||"")-now)/1000)))}`:a.status==="meeting"?"Em reunião":a.status==="away"?"Ausente":a.status==="onsite"?`Em cliente · ${a.note}`:a.status==="custom"?a.note:"Disponível";
  return <section ref={boardRef} className="ticket-dashboard operations-board" aria-label="Dashboard dos chamados">
-  <div className="board-view-controls"><button type="button" onClick={()=>void toggleFullscreen()} aria-label={fullscreen?"Sair da tela cheia":"Exibir dashboard em tela cheia"} title={fullscreen?"Sair da tela cheia (Esc)":"Exibir dashboard em tela cheia"}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}<span>{fullscreen?"Sair da tela cheia":"Tela cheia"}</span></button></div>
+  <div className="board-view-controls"><label className="board-search"><Search size={16}/><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Buscar cliente ou atendente" aria-label="Buscar cliente ou atendente"/></label><button type="button" onClick={()=>void toggleFullscreen()} aria-label={fullscreen?"Sair da tela cheia":"Exibir dashboard em tela cheia"} title={fullscreen?"Sair da tela cheia (Esc)":"Exibir dashboard em tela cheia"}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}<span>{fullscreen?"Sair da tela cheia":"Tela cheia"}</span></button></div>
   {fullscreenError&&<p className="board-fullscreen-error" role="alert">{fullscreenError}</p>}
   {warning&&<p className="sync-warning" role="status">{warning}</p>}
   <div className="board-grid">

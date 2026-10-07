@@ -28,7 +28,7 @@ assert.ok(!html.includes('board-footnote'));
 const timestamp=Date.now()/1000;
 const queueHtml=renderToStaticMarkup(React.createElement(TicketDashboard,{
  chats:[{id:'waiting@c.us',name:'Incoming awaiting reply'},{id:'empty@c.us',name:'No messages'},{id:'outgoing@c.us',name:'Only outgoing'},{id:'answered@c.us',name:'Already answered'},{id:'read@c.us',name:'Read but unanswered'},{id:'assigned@c.us',name:'Assigned incoming'},{id:'closed@c.us',name:'Closed incoming'},{id:'group@g.us',name:'Group incoming'}],
- owners:{},overview:{agents:[],contacts:[{chatId:'closed@c.us',data:{status:'closed'}}],activity:[
+ owners:{},overview:{agents:[{id:'agent',displayName:'Assigned analyst'}],contacts:[{chatId:'closed@c.us',data:{status:'closed'}}],activity:[
   {chatId:'waiting@c.us',incoming:String(timestamp-1000),outgoing:null,queueSince:String(timestamp-1000)},
   {chatId:'outgoing@c.us',incoming:null,outgoing:String(timestamp-300),queueSince:null},
   {chatId:'answered@c.us',incoming:String(timestamp-500),outgoing:String(timestamp-100),queueSince:null},

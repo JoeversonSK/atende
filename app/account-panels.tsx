@@ -48,7 +48,7 @@ export function LoginScreen({ baseUrl, registering, setRegistering, username, se
       .then(data=>{if(live){setRegistrationOpen(data.registrationOpen===true);if(!data.registrationOpen)setRegistering(false);}})
       .catch(()=>{if(live){setRegistrationOpen(false);setRegistering(false);}});
     return()=>{live=false;};
-  },[baseUrl]);
+  },[baseUrl,setRegistering]);
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (registering && password !== confirm) { setValidation("As senhas precisam ser iguais."); return; }

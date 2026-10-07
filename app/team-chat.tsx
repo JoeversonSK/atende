@@ -31,8 +31,12 @@ export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const roomRef = useRef(room);
-  roomRef.current = room;
-  useEffect(() => { setRoom(initialRoom); }, [initialRoom]);
+  useEffect(() => { roomRef.current = room; }, [room]);
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => { if (active) setRoom(initialRoom); });
+    return () => { active = false; };
+  }, [initialRoom]);
   const chooseRoom = (next: string) => { setRoom(next); onRoomChange?.(next); };
   const root = `${baseUrl.replace(/\/$/, "")}/api/operator-auth/team-chat`;
   const mentionQuery = room === "group" ? draft.match(/(?:^|\s)@([a-z0-9._-]*)$/i)?.[1].toLowerCase() : undefined;
@@ -61,10 +65,6 @@ export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }
   useEffect(() => {
     let cancelled = false;
     let firstLoad = true;
-    setMessages([]);
-    setLoading(true);
-    setHasOlder(false);
-    setError("");
     const refresh = async () => {
       try {
         const nearBottom = !scrollRef.current || scrollRef.current.scrollHeight - scrollRef.current.clientHeight - scrollRef.current.scrollTop < 100;
@@ -82,7 +82,14 @@ export function TeamChat({ baseUrl, token, initialRoom = "group", onRoomChange }
         if (!cancelled) { setError(cause instanceof Error ? cause.message : "Falha ao carregar mensagens."); setLoading(false); }
       }
     };
-    void refresh();
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setMessages([]);
+      setLoading(true);
+      setHasOlder(false);
+      setError("");
+      void refresh();
+    });
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 4000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [api, refreshRooms, room]);
