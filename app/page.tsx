@@ -21,8 +21,9 @@ import { buildSyncedChats, fetchChatSnapshot, fetchProfilePictures } from "./con
 import { deliverMedia, deliverText } from "./conversations/message-delivery";
 import { createFlowTemplate } from "./conversations/flow-variables";
 import { fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
-import { defaultNotificationPreferences, emptyConfig, loadConfig, loadNotificationPreferences, loadOperator,
-  notificationStorageKey, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
+import { forwardMessageToContacts } from "./conversations/conversation-forwarding";
+import { emptyConfig, loadConfig, loadOperator, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
+import { useNotificationSettings } from "./conversations/use-notification-settings";
 import type { ConversationFlow } from "./flow-settings";
 import type { QuickReply } from "./quick-replies";
 import {
@@ -80,7 +81,6 @@ type Assignment = {
 };
 type Operator = OperatorIdentity;
 export type { NotificationPreferences } from "./conversations/workspace-storage";
-type CustomNotificationSound = { filename: string; mimetype: string; base64: string };
 
 export default function Home() {
   const [overview, setOverview] = useState<SupportOverview>(emptyOverview);
@@ -174,10 +174,12 @@ export default function Home() {
   const [messageAlerts, setMessageAlerts] = useState<
     { id: string; chatId: string; name: string; body: string }[]
   >([]);
-  const notificationsRef = useRef(false);
-  const notificationPreferencesRef = useRef<NotificationPreferences>(
-    defaultNotificationPreferences,
-  );
+  const {
+    notificationsRef, notificationPreferencesRef, notificationsEnabled,
+    notificationPreferences, customSound, customSoundBusy, playNotificationSound,
+    updateNotificationPreferences, uploadNotificationSound, removeNotificationSound,
+    enableNotifications, testNotification,
+  } = useNotificationSettings({ operatorId: operator?.id, operatorToken, baseUrl: config.baseUrl, setNotice });
   const notifiedIds = useRef(new Set<string>());
   const [emojiOpen, setEmojiOpen] = useState(false);
   const emojiToggleRef = useRef<HTMLButtonElement>(null);
@@ -188,9 +190,6 @@ export default function Home() {
   const flowMenuRef = useRef<HTMLDivElement>(null);
   const [recording, setRecording] = useState(false);
   const [recordingPaused, setRecordingPaused] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [notificationPreferences, setNotificationPreferences] =
-    useState<NotificationPreferences>(defaultNotificationPreferences);
   const [qr, setQr] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [contactFirstName, setContactFirstName] = useState("");
@@ -209,11 +208,6 @@ export default function Home() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const discardRecordingRef = useRef(false);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const customSoundRef = useRef<CustomNotificationSound | null>(null);
-  const activeCustomAudioRef = useRef<HTMLAudioElement | null>(null);
-  const [customSound, setCustomSound] = useState<CustomNotificationSound | null>(null);
-  const [customSoundBusy, setCustomSoundBusy] = useState(false);
   const chatsRef = useRef<Chat[]>([]);
   const selectedRef = useRef<Chat | null>(null);
   const refreshChatsRef = useRef<(active?: Config) => Promise<void>>(
@@ -264,176 +258,6 @@ export default function Home() {
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [activityMenuOpen, flowMenuOpen, emojiOpen, setActivityMenuOpen, activityControlRef]);
 
-  function playNotificationSound() {
-    try {
-      const context = audioContextRef.current;
-      const preferences = notificationPreferencesRef.current;
-      if (!preferences.sound || preferences.volume <= 0) return;
-      if (preferences.soundType === "custom" && customSoundRef.current) {
-        activeCustomAudioRef.current?.pause();
-        const sound = customSoundRef.current;
-        const audio = new Audio(`data:${sound.mimetype};base64,${sound.base64}`);
-        audio.volume = preferences.volume / 100;
-        activeCustomAudioRef.current = audio;
-        audio.onended = () => { if (activeCustomAudioRef.current === audio) activeCustomAudioRef.current = null; };
-        void audio.play().catch(() => undefined);
-        return;
-      }
-      if (!context) return;
-      const patterns = {
-        classic: [[880, 0, 0.14]],
-        soft: [
-          [660, 0, 0.12],
-          [784, 0.14, 0.13],
-        ],
-        bell: [
-          [1046, 0, 0.16],
-          [1318, 0.18, 0.2],
-        ],
-        urgent: [
-          [880, 0, 0.12],
-          [880, 0.18, 0.12],
-          [1175, 0.36, 0.24],
-        ],
-      } as Record<Exclude<NotificationPreferences["soundType"], "custom">, number[][]>;
-      for (const [frequency, offset, duration] of patterns[
-        preferences.soundType === "custom" ? "classic" : preferences.soundType
-      ]) {
-        const oscillator = context.createOscillator(),
-          gain = context.createGain(),
-          start = context.currentTime + offset;
-        oscillator.frequency.setValueAtTime(frequency, start);
-        gain.gain.setValueAtTime(
-          Math.max(0.001, (preferences.volume / 100) * 0.12),
-          start,
-        );
-        gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start(start);
-        oscillator.stop(start + duration);
-      }
-    } catch {
-      /* Sound is optional when a browser blocks audio playback. */
-    }
-  }
-  function updateNotificationPreferences(
-    patch: Partial<NotificationPreferences>,
-  ) {
-    const next = { ...notificationPreferencesRef.current, ...patch };
-    notificationPreferencesRef.current = next;
-    notificationsRef.current = next.enabled;
-    setNotificationPreferences(next);
-    setNotificationsEnabled(next.enabled);
-    if (operator?.id) localStorage.setItem(`${notificationStorageKey}:${operator.id}`, JSON.stringify(next));
-  }
-  async function uploadNotificationSound(file: File) {
-    if (!operatorToken || customSoundBusy) return;
-    if (!file.size || file.size > 2 * 1024 * 1024) { setNotice("Escolha um áudio de até 2 MB."); return; }
-    setCustomSoundBusy(true);
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
-        reader.readAsDataURL(file);
-      });
-      const result = await operatorJson<CustomNotificationSound>(config.baseUrl, operatorToken, "/me/notification-sound", {
-        method: "PUT", body: JSON.stringify({ filename: file.name, mimetype: file.type, base64 }),
-      });
-      customSoundRef.current = result;
-      setCustomSound(result);
-      updateNotificationPreferences({ sound: true, soundType: "custom" });
-      setNotice("Áudio personalizado salvo para sua conta.");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Não foi possível salvar o áudio."); }
-    finally { setCustomSoundBusy(false); }
-  }
-  async function removeNotificationSound() {
-    if (!operatorToken || customSoundBusy) return;
-    setCustomSoundBusy(true);
-    try {
-      await operatorJson<{ success: boolean }>(config.baseUrl, operatorToken, "/me/notification-sound", { method: "DELETE" });
-      activeCustomAudioRef.current?.pause();
-      customSoundRef.current = null;
-      setCustomSound(null);
-      if (notificationPreferencesRef.current.soundType === "custom") updateNotificationPreferences({ soundType: "classic" });
-      setNotice("Áudio personalizado removido da sua conta.");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Não foi possível remover o áudio."); }
-    finally { setCustomSoundBusy(false); }
-  }
-  async function enableNotifications() {
-    try {
-      if (!audioContextRef.current)
-        audioContextRef.current = new AudioContext();
-      await audioContextRef.current.resume();
-      updateNotificationPreferences({ enabled: true });
-      let permission: NotificationPermission = "default";
-      if (window.isSecureContext && "Notification" in window)
-        permission =
-          Notification.permission === "default"
-            ? await Notification.requestPermission()
-            : Notification.permission;
-      playNotificationSound();
-      setNotice(
-        permission === "granted"
-          ? "Som e notificações ativados neste computador."
-          : "Som e avisos no canto da tela ativados. Mantenha o sistema aberto. Notificações fora da página exigem HTTPS e permissão do navegador.",
-      );
-    } catch {
-      setNotice(
-        "Não foi possível ativar o som. Clique novamente em Notificações.",
-      );
-    }
-  }
-  async function testNotification() {
-    try {
-      if (!audioContextRef.current)
-        audioContextRef.current = new AudioContext();
-      await audioContextRef.current.resume();
-      playNotificationSound();
-      if (
-        window.isSecureContext &&
-        notificationPreferencesRef.current.desktop &&
-        "Notification" in window
-      ) {
-        const permission =
-          Notification.permission === "default"
-            ? await Notification.requestPermission()
-            : Notification.permission;
-        if (permission === "granted")
-          new Notification("Teste de notificação", {
-            body: "Cada nova mensagem terá um aviso separado.",
-            tag: `atende-test-${Date.now()}`,
-          });
-      }
-      setNotice("Teste de notificação executado.");
-    } catch {
-      setNotice(
-        "O navegador bloqueou o teste. Revise a permissão de notificações.",
-      );
-    }
-  }
-  useEffect(() => {
-    if (!operator?.id || !operatorToken) { activeCustomAudioRef.current?.pause(); customSoundRef.current = null; setCustomSound(null); return; }
-    activeCustomAudioRef.current?.pause();
-    customSoundRef.current = null;
-    setCustomSound(null);
-    const saved = loadNotificationPreferences(operator.id);
-    notificationPreferencesRef.current = saved;
-    notificationsRef.current = saved.enabled;
-    setNotificationPreferences(saved);
-    setNotificationsEnabled(saved.enabled);
-    const abort = new AbortController();
-    operatorJson<CustomNotificationSound | null>(config.baseUrl, operatorToken, "/me/notification-sound", { signal: abort.signal })
-      .then(sound => {
-        customSoundRef.current = sound;
-        setCustomSound(sound);
-        if (!sound && saved.soundType === "custom") updateNotificationPreferences({ soundType: "classic" });
-        if (sound && !localStorage.getItem(`${notificationStorageKey}:${operator.id}`)) updateNotificationPreferences({ soundType: "custom" });
-      })
-      .catch(() => { if (!abort.signal.aborted) setNotice("Não foi possível carregar o áudio personalizado."); });
-    return () => abort.abort();
-  }, [operator?.id, operatorToken, config.baseUrl]);
   const loadFlows = useCallback(async () => {
     if (!operatorToken) return;
     try {
@@ -2053,25 +1877,16 @@ export default function Home() {
     setForwardError("");
   }
   async function sendForward() {
-    if (!forwardTarget?.message.waMessageId || !forwardToIds.length || forwardBusy) return;
+    const messageId = forwardTarget?.message.waMessageId;
+    if (!forwardTarget || !messageId || !forwardToIds.length || forwardBusy) return;
     const target = forwardTarget;
     const recipients = [...forwardToIds];
     setForwardBusy(true);
     setForwardError("");
-    let delivered = 0;
-    const failed: { id: string; name: string; reason: string }[] = [];
-    for (const toChatId of recipients) {
-      try {
-        const response = await request(config, `/sessions/${encodeURIComponent(config.sessionId)}/messages/forward`, {
-          method: "POST",
-          body: JSON.stringify({ fromChatId: target.chatId, toChatId, messageId: target.message.waMessageId }),
-        });
-        if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
-        delivered++;
-      } catch (error) {
-        failed.push({ id: toChatId, name: contactRows.find(contact => contact.id === toChatId)?.name || toChatId, reason: error instanceof Error ? error.message : "Falha ao encaminhar" });
-      }
-    }
+    const { delivered, failed } = await forwardMessageToContacts(
+      config, target.chatId, messageId, recipients,
+      toChatId => contactRows.find(contact => contact.id === toChatId)?.name || toChatId,
+    );
     if (delivered) void refreshChats().catch(() => undefined);
     if (failed.length) {
       setForwardToIds(failed.map(item => item.id));
