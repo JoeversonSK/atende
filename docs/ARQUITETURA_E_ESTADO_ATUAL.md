@@ -33,7 +33,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | Assunto | Arquivo/pasta |
 | --- | --- |
 | Instalação local e portas | `README.md`, `docker-compose.yml`, `.env.example` |
-| Interface, navegação, sessão, conversas e envio | `app/page.tsx`, `app/conversations/components/`, `app/conversations/workspace-storage.ts` |
+| Interface, navegação, sessão, conversas e envio | `app/page.tsx`, `app/conversations/`, `openwa/src/modules/message/` |
 | Tela de login e Ajustes | `app/account-panels.tsx` |
 | Módulos da API | `openwa/src/app.module.ts` |
 | Autenticação e dados da equipe | `openwa/src/modules/operator-auth/operator-auth.service.ts` |
@@ -58,9 +58,12 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 
 | Arquivo | Responsabilidade |
 | --- | --- |
-| `page.tsx` | Controlador principal: estados, conexão, lista e seleção de chats, envio, gravação, resposta, encaminhamento, notificações e composição das telas. Ainda concentra regras de orquestração; localize a função com `rg` antes de editar. |
+| `page.tsx` | Controlador principal: estados, conexão, seleção de chats, reconciliação do histórico com a tela, envio, gravação, resposta, encaminhamento, notificações e composição das telas. Ainda concentra regras de orquestração; localize a função com `rg` antes de editar. |
 | `conversations/components/` | Componentes visuais da caixa de entrada: barra lateral e filtros, histórico de mensagens e mídia, compositor, perfil, avatar e prévia de arquivos colados. Recebem estado e ações do controlador em `page.tsx`. |
 | `conversations/contact-list.ts` | Montagem pura do diretório a partir de chats e perfis, reconciliação conservadora de LID com perfil importado, etiquetas disponíveis e busca de destinatários para encaminhamento. Testes em `scripts/test-contact-list.mjs`. |
+| `conversations/conversation-sync.ts` | Busca paginada dos chats, modo com WhatsApp indisponível, fotos de perfil e montagem da lista com leitura otimista. Testes em `scripts/test-conversation-sync.mjs`. |
+| `conversations/conversation-history.ts` | Busca do histórico local/ao vivo, fallback e reconciliação dos registros; preserva mensagens otimistas durante a atualização. Testes no mesmo arquivo de sincronização. |
+| `conversations/message-delivery.ts`, `flow-variables.ts` | Transporte de texto e mídia (inclusive áudio de voz) e substituição dos campos automáticos dos fluxos. A autorização, o estado visual e a sequência dos fluxos permanecem em `page.tsx`. Testes em `scripts/test-message-delivery.mjs`. |
 | `conversations/workspace-storage.ts` | Tipos, valores iniciais e persistência local da conexão, sessão do operador e preferências de notificação. Não é armazenamento de histórico de conversas. |
 | `atende-api.ts` | Cliente HTTP compartilhado: origem `/api`, cabeçalhos do Atende, leitura do token e tratamento uniforme de erros; `operatorRequest` preserva a resposta HTTP e `operatorJson<T>` tipa a resposta JSON. |
 | `conversation-model.ts` | Tipos e transformações puras de conversas/mensagens, incluindo identificação de mensagens, prévias de mídia e reconciliação. |
@@ -78,7 +81,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | `message-reconciliation.ts` | Reconciliação de mensagens no cliente. |
 | `connection-origin.ts` | Converte endereço local antigo da API para a origem atual do navegador. |
 
-A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. Para mudanças visuais na conversa, comece por `conversations/components/`; para comportamento de envio, seleção e eventos, comece por `page.tsx`. A tela principal usa `atende-api.ts` para todas as requisições HTTP; `request()` acrescenta `X-API-Key` e `X-Atende-Token`, enquanto `operatorRequest`/`operatorJson<T>` são usados também pelas telas de equipe, fluxos, mensagens rápidas, expediente e webhooks. Outros módulos de contatos e automações ainda têm chamadas específicas próprias. `workspace-polling.ts` conserva as frequências de equipe (4 s), validação do acesso (15 s) e reconciliação visível (15 s, condicionada ao intervalo desde a última atualização), mas as agenda por um só temporizador sem sobreposição por tarefa.
+A navegação principal não usa páginas independentes para cada recurso: `app/page.tsx` mantém estados como `contactsOpen`, `teamChatOpen`, `dashboardOpen` e `settingsOpen`; `SettingsScreen` em `account-panels.tsx` alterna suas abas. Para mudanças visuais na conversa, comece por `conversations/components/`; para busca e composição dos dados, consulte `conversation-sync.ts` e `conversation-history.ts`; para a preparação do envio, consulte `message-delivery.ts` e `flow-variables.ts`; para seleção, estados e eventos, comece por `page.tsx`. A tela principal usa `atende-api.ts` para todas as requisições HTTP; `request()` acrescenta `X-API-Key` e `X-Atende-Token`, enquanto `operatorRequest`/`operatorJson<T>` são usados também pelas telas de equipe, fluxos, mensagens rápidas, expediente e webhooks. Outros módulos de contatos e automações ainda têm chamadas específicas próprias. `workspace-polling.ts` conserva as frequências de equipe (4 s), validação do acesso (15 s) e reconciliação visível (15 s, condicionada ao intervalo desde a última atualização), mas as agenda por um só temporizador sem sobreposição por tarefa.
 
 ### API e WhatsApp (`openwa/`)
 
@@ -97,7 +100,7 @@ A navegação principal não usa páginas independentes para cada recurso: `app/
 | Recurso | Interface | API/serviço |
 | --- | --- | --- |
 | Login, perfil, permissões, disponibilidade e atendimento externo | `page.tsx`, `account-panels.tsx`, `team-settings.tsx` | `operator-auth.controller.ts` + `operator-auth.service.ts` |
-| Conversas WhatsApp, texto, áudio, arquivos, resposta e encaminhamento | `page.tsx` | `modules/message/`, `modules/session/`, `engine/` |
+| Conversas WhatsApp, texto, áudio, arquivos, resposta e encaminhamento | `page.tsx`, `conversations/` | `modules/message/`, `modules/session/`, `engine/` |
 | Contatos, etiquetas, campos personalizados e importação | `contacts-*`, `contact-profile.tsx` | `contact-profile.controller.ts`, `contact-import.controller.ts` |
 | Fila, responsáveis, conclusão e métricas | `ticket-dashboard.tsx`, `dashboard-model.ts` | `contact-profile.controller.ts` e atribuições em `modules/session/` |
 | Chat da equipe | `team-chat.tsx` | `team-chat.controller.ts` |

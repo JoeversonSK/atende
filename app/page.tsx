@@ -8,7 +8,7 @@ import { OperatorActivityControl, useOperatorActivity, type OperatorIdentity } f
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
-import { eventId, listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId, toChat, toMessage,
+import { eventId, listFrom, mergeMessages, messageDateTime, messageIdentityIds, serializedMessageId,
   type Chat, type Message, type MessageWithTimestamp } from "./conversation-model";
 import { ContactAvatar } from "./conversations/components/contact-avatar";
 import { ConversationSidebar } from "./conversations/components/conversation-sidebar";
@@ -17,6 +17,10 @@ import { ConversationThread } from "./conversations/components/conversation-thre
 import { MessageComposer } from "./conversations/components/message-composer";
 import { PasteFilePreview } from "./conversations/components/paste-file-preview";
 import { availableContactTags, buildContactRows, findForwardCandidates } from "./conversations/contact-list";
+import { buildSyncedChats, fetchChatSnapshot, fetchProfilePictures } from "./conversations/conversation-sync";
+import { deliverMedia, deliverText } from "./conversations/message-delivery";
+import { createFlowTemplate } from "./conversations/flow-variables";
+import { fetchMessageRecords, fetchRecentMediaRecords, reconcileMessageRecords } from "./conversations/conversation-history";
 import { defaultNotificationPreferences, emptyConfig, loadConfig, loadNotificationPreferences, loadOperator,
   notificationStorageKey, persistConfig, persistOperator, type NotificationPreferences } from "./conversations/workspace-storage";
 import type { ConversationFlow } from "./flow-settings";
@@ -549,39 +553,9 @@ export default function Home() {
       if (!active.apiKey || !active.sessionId) return;
       const generation = ++refreshGeneration.current;
       const readSnapshot = new Map(readVersions.current);
-      const [metaResponse, response] = await Promise.all([
-        request(
-          active,
-          `/operator-auth/contacts/${encodeURIComponent(active.sessionId)}`,
-        ),
-        request(
-          active,
-          `/sessions/${encodeURIComponent(active.sessionId)}/chats?limit=1000`,
-        ).catch(() => null),
-      ]);
-      if (!metaResponse.ok)
-        throw new Error("Não foi possível atualizar os perfis dos contatos.");
-      const meta = (await metaResponse.json()) as SupportOverview;
-      const live = !!response?.ok;
-      let data: Record<string, unknown>[] = live
-        ? listFrom(await response!.json())
-        : meta.activity.map((a) => ({
-            id: a.chatId,
-            name: a.name || "Contato sem nome",
-            timestamp: Math.max(Number(a.incoming), Number(a.outgoing)),
-            lastMessage: "Histórico salvo",
-          }));
-      while (live && data.length > 0 && data.length % 1000 === 0) {
-        const page = await request(
-          active,
-          `/sessions/${encodeURIComponent(active.sessionId)}/chats?limit=1000&offset=${data.length}`,
-        );
-        if (!page.ok)
-          throw new Error("Não foi possível carregar todas as conversas.");
-        const batch = listFrom(await page.json());
-        data = [...data, ...batch];
-        if (batch.length < 1000) break;
-      }
+      const { overview: meta, records: fetchedRecords, live } =
+        await fetchChatSnapshot(active);
+      let data = fetchedRecords;
       if (generation !== refreshGeneration.current) return;
       setSyncWarning(
         live
@@ -598,58 +572,22 @@ export default function Home() {
           unreadCount: c.unread,
         }));
       setOverview(meta);
-      const profilesByChat = new Map(meta.contacts.map((profile) => [profile.chatId, profile.data]));
-      let next = listFrom(data)
-        .filter(
-          (chat) =>
-            chat.isGroup !== true &&
-            !/@(g\.us|broadcast|newsletter)$/.test(String(chat.id || "")),
-        )
-        .map((value) => {
-          const chat = toChat(value),
-            profile = profilesByChat.get(chat.id);
-          return {
-            ...chat,
-            name: profile?.name || chat.name,
-            phone:
-              profile?.phone ||
-              String(
-                value.phone ||
-                  (/@(c\.us|s\.whatsapp\.net)$/.test(chat.id)
-                    ? chat.id.split("@")[0]
-                    : ""),
-              ),
-            avatar: profilePicturesRef.current.get(chat.id) || undefined,
-            unread:
-              pendingReads.current.has(chat.id) ||
-              readSnapshot.get(chat.id) !== readVersions.current.get(chat.id)
-                ? 0
-                : chat.unread,
-          };
-        });
+      const syncOptions = () => ({
+        records: data,
+        overview: meta,
+        pictures: profilePicturesRef.current,
+        readSnapshot,
+        readVersions: readVersions.current,
+        pendingReads: pendingReads.current,
+      });
+      let next = buildSyncedChats(syncOptions());
       if (live) {
-        const missing = next
-          .filter((chat) => !profilePicturesRef.current.has(chat.id))
-          .slice(0, 50);
-        if (missing.length) {
-          const picturesResponse = await request(
-            active,
-            `/sessions/${encodeURIComponent(active.sessionId)}/contacts/profile-pictures?ids=${encodeURIComponent(missing.map((chat) => chat.id).join(","))}`,
-          ).catch(() => null);
-          if (picturesResponse?.ok) {
-            const result = (await picturesResponse.json()) as {
-              pictures?: Record<string, string | null>;
-            };
-            for (const chat of missing)
-              profilePicturesRef.current.set(
-                chat.id,
-                result.pictures?.[chat.id] || null,
-              );
-            next = next.map((chat) => ({
-              ...chat,
-              avatar: profilePicturesRef.current.get(chat.id) || undefined,
-            }));
-          }
+        const missing = next.filter(chat => !profilePicturesRef.current.has(chat.id)).slice(0, 50);
+        const pictures = await fetchProfilePictures(active, missing.map(chat => chat.id));
+        if (pictures) {
+          for (const chat of missing)
+            profilePicturesRef.current.set(chat.id, pictures[chat.id] || null);
+          next = buildSyncedChats(syncOptions());
         }
       }
       setChats(next);
@@ -769,71 +707,33 @@ export default function Home() {
   const refreshMessages = useCallback(
     async (chat: Chat, active = config, loadLiveHistory = false) => {
       if (!active.apiKey || !active.sessionId || !chat.id) return;
-      const localPath = `/sessions/${encodeURIComponent(active.sessionId)}/messages?chatId=${encodeURIComponent(chat.id)}&limit=100&inlineMedia=true`;
-      const historyPath = `/sessions/${encodeURIComponent(active.sessionId)}/messages/${encodeURIComponent(chat.id)}/history?limit=2000&deep=true`;
-      const response = await request(
-        active,
-        loadLiveHistory ? historyPath : localPath,
-      );
-      if (!response.ok && loadLiveHistory) {
-        const fallback = await request(active, localPath);
-        if (!fallback.ok)
-          throw new Error(
-            errorMessage(await fallback.json().catch(() => null)),
-          );
-        const data = await fallback.json();
-        const fallbackMessages = mergeMessages(
-          listFrom(data, "messages")
-            .filter((value) => value.status !== "pending" && value.status !== "failed")
-            .map((value) => toMessage(value, "database"))
-            .filter((message) => message.body),
-        );
-        historyCacheRef.current.set(chat.id, fallbackMessages);
-        if (selectedRef.current?.id === chat.id) setMessages(fallbackMessages);
-        setNotice(
-          "O histórico ao vivo não respondeu; exibindo as mensagens já salvas.",
-        );
+      const fetched = await fetchMessageRecords(active, chat.id, loadLiveHistory);
+      if (fetched.fallback) {
+        const saved = reconcileMessageRecords([], fetched.records, "database");
+        historyCacheRef.current.set(chat.id, saved);
+        if (selectedRef.current?.id === chat.id) setMessages(saved);
+        setNotice("O histórico ao vivo não respondeu; exibindo as mensagens já salvas.");
         return;
       }
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
-      const data = await response.json();
       const applyRecords = (
         records: Record<string, unknown>[],
         source: "database" | "history",
         replace = false,
       ) => {
-        const incoming = records
-          .filter((value) => source !== "database" || (value.status !== "pending" && value.status !== "failed"))
-          .map((value, index) => ({ ...toMessage(value, source), ...(source === "history" && replace ? { historyOrder: index } : {}) }))
-          .filter((message) => message.body);
-        const combined = replace
-          ? [...(historyCacheRef.current.get(chat.id) || []).filter(message => message.source === "optimistic"), ...incoming]
-          : [...(historyCacheRef.current.get(chat.id) || []), ...incoming];
-        const next = mergeMessages(combined);
+        const next = reconcileMessageRecords(
+          historyCacheRef.current.get(chat.id) || [], records, source, replace,
+        );
         historyCacheRef.current.set(chat.id, next);
         if (selectedRef.current?.id === chat.id) setMessages(next);
       };
-      applyRecords(
-        listFrom(data, loadLiveHistory ? undefined : "messages"),
-        loadLiveHistory ? "history" : "database",
-        loadLiveHistory,
-      );
-      if (loadLiveHistory) {
-        request(
-          active,
-          `/sessions/${encodeURIComponent(active.sessionId)}/messages/${encodeURIComponent(chat.id)}/history?limit=100&includeMedia=true`,
-        )
-          .then(async (mediaResponse) => {
-            if (mediaResponse.ok)
-              applyRecords(listFrom(await mediaResponse.json()), "history");
-          })
+      applyRecords(fetched.records, fetched.source, loadLiveHistory);
+      if (loadLiveHistory)
+        void fetchRecentMediaRecords(active, chat.id)
+          .then(records => { if (records) applyRecords(records, "history"); })
           .catch(() => undefined);
-      }
     },
     [config],
   );
-
   const refreshAccount = useCallback(
     async (active = config) => {
       if (!active.apiKey || !active.sessionId) return;
@@ -1606,20 +1506,7 @@ export default function Home() {
     setReplyingTo(null);
     setEmojiOpen(false);
     try {
-      const response = await request(
-        config,
-        `/sessions/${encodeURIComponent(config.sessionId)}/messages/send-text`,
-        {
-          method: "POST",
-          body: JSON.stringify({ chatId: target.id, text: signedText, ...(replyTarget ? { quotedMessageId: replyTarget } : {}) }),
-        },
-      );
-      const result = (await response.json().catch(() => null)) as {
-        messageId?: unknown;
-        timestamp?: number;
-        message?: string;
-      } | null;
-      if (!response.ok) throw new Error(errorMessage(result));
+      const result = await deliverText(config, target.id, signedText, replyTarget);
       const confirmedId = serializedMessageId(result?.messageId);
       const confirmedTimestamp =
         Number(result?.timestamp) > 0
@@ -1679,68 +1566,8 @@ export default function Home() {
       return;
     }
     const target = selected;
-    const profile = overview.contacts.find((contact) => contact.chatId === target.id)?.data as
-      | (SupportOverview["contacts"][number]["data"] & {
-          name?: string;
-          email?: string;
-          company?: string;
-          document?: string;
-          address?: string;
-          tags?: string[];
-          serviceType?: string;
-          priority?: string;
-          custom?: { label?: string; value?: string }[];
-        })
-      | undefined;
-    const now = new Date();
-    const hour = Number(
-      new Intl.DateTimeFormat("pt-BR", {
-        timeZone: "America/Sao_Paulo",
-        hour: "2-digit",
-        hourCycle: "h23",
-      }).format(now),
-    );
-    const greeting = hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
-    const dateParts = new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "America/Sao_Paulo",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    }).format(now);
-    const timeParts = new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "America/Sao_Paulo",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(now);
-    const customFields = (profile?.custom || [])
-      .filter((field) => field.label?.trim() && field.value?.trim())
-      .map((field) => `${field.label}: ${field.value}`)
-      .join("; ");
-    const variables: Record<string, string> = {
-      "{{atendente}}": operator.displayName,
-      "{{cliente}}": target.name || "cliente",
-      "{{nome}}": profile?.name || target.name || "cliente",
-      "{{saudacao}}": greeting,
-      "{{telefone}}": target.phone || profile?.phone || "",
-      "{{email}}": profile?.email || "",
-      "{{empresa}}": profile?.company || "",
-      "{{documento}}": profile?.document || "",
-      "{{cpf_cnpj}}": profile?.document || "",
-      "{{endereco}}": profile?.address || "",
-      "{{etiquetas}}": profile?.tags?.join(", ") || "",
-      "{{status}}": profile?.status || "",
-      "{{tipo_atendimento}}": profile?.serviceType || "",
-      "{{prioridade}}": profile?.priority || "",
-      "{{campos_personalizados}}": customFields,
-      "{{data}}": dateParts,
-      "{{hora}}": timeParts,
-    };
-    const fill = (value = "") => {
-      let result = value;
-      for (const [field, replacement] of Object.entries(variables))
-        result = result.split(field).join(replacement);
-      return result;
-    };
+    const profile = overview.contacts.find(contact => contact.chatId === target.id)?.data;
+    const fill = createFlowTemplate(operator.displayName, target, profile);
     let assignedByFlow = false,
       closedByFlow = false,
       waitingForAnswer = false;
@@ -1975,79 +1802,7 @@ export default function Home() {
     }
     setBusy(true);
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () =>
-          resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = () =>
-          reject(new Error("Não foi possível ler o arquivo."));
-        reader.readAsDataURL(file);
-      });
-      const mime = file.type || "application/octet-stream";
-      let outgoingBase64 = base64;
-      let outgoingMime = mime;
-      const endpoint =
-        voiceNote || mime.startsWith("audio/")
-          ? "send-audio"
-          : mime.startsWith("image/")
-            ? "send-image"
-            : mime.startsWith("video/")
-              ? "send-video"
-              : "send-document";
-      const extension =
-        (
-          {
-            "image/png": "png",
-            "image/jpeg": "jpg",
-            "image/webp": "webp",
-            "application/pdf": "pdf",
-            "application/msword": "doc",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-              "docx",
-          } as Record<string, string>
-        )[mime] || "bin";
-      let outgoingFilename = file.name || `arquivo-colado.${extension}`;
-      let ptt = false;
-
-      if (voiceNote) {
-        const conversion = await request(
-          config,
-          `/sessions/${encodeURIComponent(config.sessionId)}/media/convert/voice`,
-          {
-            method: "POST",
-            body: JSON.stringify({ base64 }),
-          },
-        );
-        const converted = (await conversion.json().catch(() => null)) as {
-          base64?: string;
-          mimetype?: string;
-        } | null;
-        if (!conversion.ok) throw new Error(errorMessage(converted));
-        if (!converted?.base64)
-          throw new Error("Não foi possível preparar o áudio para envio.");
-
-        outgoingBase64 = converted.base64;
-        outgoingMime = converted.mimetype || "audio/ogg; codecs=opus";
-        outgoingFilename = "mensagem-de-voz.ogg";
-        ptt = true;
-      }
-
-      const response = await request(
-        config,
-        `/sessions/${encodeURIComponent(config.sessionId)}/messages/${endpoint}`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            chatId: target.id,
-            base64: outgoingBase64,
-            mimetype: outgoingMime,
-            filename: outgoingFilename,
-            ...(endpoint === "send-audio" ? { ptt } : {}),
-          }),
-        },
-      );
-      if (!response.ok)
-        throw new Error(errorMessage(await response.json().catch(() => null)));
+      await deliverMedia(config, target.id, file, voiceNote);
       await refreshMessages(target, config, true);
       await refreshChats();
       return true;
