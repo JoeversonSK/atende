@@ -47,6 +47,7 @@ next-env.d.ts
 /.codex/
 /.codex-video-review/
 /outputs/
+/output/
 /work/
 *.tsbuildinfo
 
