@@ -21,7 +21,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 ### Estado funcional em 06/10/2026
 
 - **Atendimento:** caixa compartilhada, histórico de texto e mídia, resposta vinculada a uma mensagem, encaminhamento de mensagens a contatos, atribuição e conclusão de conversas, chat interno e notificações. Arquivos colados na conversa passam por prévia e confirmação antes do envio.
-- **Contatos e equipe:** cadastro/importação de contatos, notas, etiquetas e campos personalizados; filtro de várias etiquetas com opção de exigir todas ou aceitar qualquer uma; contas, permissões e destinatários de notificações. A equipe pode informar indisponibilidade e registrar início/fim de atendimento externo.
+- **Contatos e equipe:** cadastro/importação de contatos, notas, etiquetas, campos personalizados e vários CNPJs por contato; filtro de várias etiquetas com opção de exigir todas ou aceitar qualquer uma; contas, permissões e destinatários de notificações. A equipe pode informar indisponibilidade e registrar início/fim de atendimento externo.
 - **Dashboard:** fila, atendimentos em andamento e concluídos, tempos, atividade dos atendentes e modo de tela cheia. Consulte o guia de atendimentos para as regras de contagem; não infira métricas apenas pela aparência da tela.
 - **Configurações:** expediente e resposta fora de horário, mensagens rápidas, fluxos de conversa, preferências de notificação e áudio personalizado por usuário, integração com Google Sheets privado e webhooks genéricos.
 - **Implantação:** quatro serviços no Compose da raiz (`web`, `openwa`, `postgres`, `redis`). O painel do OpenWA ainda é compilado na imagem da API, mesmo que a interface operacional seja o Atende. A separação dele foi avaliada como possibilidade de otimização, mas não foi implementada.
@@ -84,7 +84,7 @@ O `docker-compose.yml` da **raiz** é o ambiente Atende usado aqui. Existe outro
 | `operator-account.ts` | Requisições de login, atualização do nome do operador e saída; estado visual e armazenamento local permanecem em `page.tsx`. Testes em `scripts/test-contact-creation-and-account.mjs`. |
 | `workspace-polling.ts` | Agenda única para atualização da equipe, validade do acesso e reconciliação de conversas. Impede consultas sobrepostas da mesma tarefa e cancela o ciclo ao trocar de sessão. |
 | `account-panels.tsx` | Login, navegação e conteúdo de Ajustes; horário de funcionamento, perfil e notificações. |
-| `contacts-panel.tsx`, `contact-editor.tsx`, `contact-import.tsx`, `contact-profile.tsx` | Diretório, criação/edição, importação e perfil detalhado do contato. O `.xlsx` é lido sob demanda por `read-excel-file/browser`; `scripts/test-contact-import.mjs` exercita a primeira aba com dados sintéticos. |
+| `contacts-panel.tsx`, `contact-editor.tsx`, `contact-import.tsx`, `contact-cnpj-import.tsx`, `contact-profile.tsx` | Diretório, criação/edição, importação e perfil detalhado do contato. O `.xlsx` é lido sob demanda por `read-excel-file/browser`; `scripts/test-contact-import.mjs` exercita os formatos com dados sintéticos. A importação específica de CNPJs atualiza apenas perfis existentes. |
 | `ticket-dashboard.tsx`, `dashboard-model.ts` | Dashboard, filtros e transformação dos dados operacionais. |
 | `team-chat.tsx`, `team-chat.css` | Chat interno, sala geral e conversas individuais. |
 | `team-settings.tsx` | Contas da equipe, permissões e destinatários de avisos sem responsável. |
@@ -119,7 +119,7 @@ O disparo manual de um fluxo começa em `conversation-actions.ts` (permissão, d
 | --- | --- | --- |
 | Login, perfil, permissões, disponibilidade e atendimento externo | `page.tsx`, `account-panels.tsx`, `team-settings.tsx` | `operator-auth.controller.ts` + `operator-auth.service.ts` |
 | Conversas WhatsApp, texto, áudio, arquivos, resposta e encaminhamento | `page.tsx`, `conversations/` | `modules/message/`, `modules/session/`, `engine/` |
-| Contatos, etiquetas, campos personalizados e importação | `contacts-*`, `contact-profile.tsx` | `contact-profile.controller.ts`, `contact-import.controller.ts` |
+| Contatos, etiquetas, campos personalizados, CNPJs e importação | `contacts-*`, `contact-profile.tsx` | `contact-profile.controller.ts`, `contact-import.controller.ts`, `contact-cnpj-import.controller.ts` |
 | Fila, responsáveis, conclusão e métricas | `ticket-dashboard.tsx`, `dashboard-model.ts` | `contact-profile.controller.ts` e atribuições em `modules/session/` |
 | Chat da equipe | `team-chat.tsx` | `team-chat.controller.ts` |
 | Atividade e atendimento externo | `operator-activity.tsx` | `operator-auth.controller.ts`/`operator-auth.service.ts` |

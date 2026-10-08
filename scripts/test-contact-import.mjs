@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { strToU8, zipSync } from "fflate";
 import { readContactFile } from "../app/contact-import.tsx";
+import { parseCnpjTable } from "../app/contact-cnpj-import.tsx";
 
 const header = ["Primeiro nome", "Sobrenome", "Telefone", "Etiquetas"];
 const values = ["Ana", "Silva", "11999998888", "Clipp, Apolo"];
@@ -47,4 +48,26 @@ test("importa a primeira aba XLSX com nomes, telefone e etiquetas", async () => 
   assert.deepEqual(result.contacts, [{
     firstName: "Ana", lastName: "Silva", phone: "5511999998888", tags: ["Clipp", "Apolo"],
   }]);
+});
+
+test("lê planilha sem cabeçalho com vários CNPJs por telefone e identifica repetições", () => {
+  const result = parseCnpjTable([
+    ["Contato A", "Empresa A", "+55 11 99999-1111", "12.345.678/0001-90", "98.765.432/0001-10"],
+    ["Contato B", "Empresa B", "+55 11 99999-2222", "12.345.678/0001-90"],
+  ]);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.sourceRows, 2);
+  assert.equal(result.multiCnpjContacts, 1);
+  assert.equal(result.duplicateCnpjs, 1);
+  assert.deepEqual(result.contacts[0], { row: 1, phone: "5511999991111",
+    cnpjs: ["12345678000190", "98765432000110"] });
+});
+
+test("recusa CNPJ incompleto e aceita colunas com cabeçalho", () => {
+  const result = parseCnpjTable([
+    ["Telefone", "CNPJ", "CNPJ 2"],
+    ["11999991111", "12.345.678/0001-90", "incompleto"],
+  ]);
+  assert.equal(result.contacts.length, 1);
+  assert.equal(result.errors.length, 1);
 });

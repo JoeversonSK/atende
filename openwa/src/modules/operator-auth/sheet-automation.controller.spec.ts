@@ -181,6 +181,19 @@ describe('Arquivos mensais', () => {
     expect(service.monthlyMessage(draft, prepared.calls[0].names, prepared.calls[0].cnpjs))
       .toBe('Olá, acesso remoto de *CLAUDIO PIRES DE OLIVEIRA* e *RAYELE PEREIRA SILVA*?');
   });
+  it('lê CNPJs separados e bloqueia envio parcial quando outro contato tem o mesmo CNPJ', async () => {
+    const db = { query: jest.fn().mockResolvedValue([
+      { chatId: '558899999999@c.us', data: { document: '', cnpjs: ['48102421000150', '45499311000185'], custom: [] } },
+      { chatId: '558888888888@c.us', data: { document: '', cnpjs: ['45499311000185'], custom: [] } },
+    ]) };
+    const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
+    const prepared = await service.prepareMonthlyCalls(draft,
+      { ...control, rows: control.rows.slice(0, 2), rowNumbers: [2, 3] }, details, 'sessao');
+    expect(prepared.ambiguous).toBe(1);
+    expect(prepared.blockedContacts.has('558899999999@c.us')).toBe(true);
+    expect(prepared.blockedContacts.has('558888888888@c.us')).toBe(true);
+    expect(prepared.calls).toHaveLength(1);
+  });
   it('impede mensagem parcial se uma das empresas do contato não existe em Clientes', async () => {
     const db = { query: jest.fn().mockResolvedValue([
       { chatId: '558899999999@c.us', data: { document: '48.102.421/0001-50, 45.499.311/0001-85', custom: [] } },

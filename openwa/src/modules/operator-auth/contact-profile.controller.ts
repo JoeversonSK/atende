@@ -22,6 +22,7 @@ import { WebhookService } from '../webhook/webhook.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine, PollVoteEvent } from '../../engine/interfaces/whatsapp-engine.interface';
 import { ConversationFlowStep } from './operator-auth.service';
+import { normalizeCnpjList } from './contact-cnpj';
 
 const ratingOptions = [1, 2, 3, 4, 5].map(value => '⭐'.repeat(value));
 const completedServiceTag = 'Lançar atendimento';
@@ -36,6 +37,7 @@ export type ContactData = {
   email: string;
   company: string;
   document: string;
+  cnpjs?: string[];
   address: string;
   status: string;
   closedAt?: number;
@@ -55,6 +57,7 @@ export const emptyContact = (): ContactData => ({
   email: '',
   company: '',
   document: '',
+  cnpjs: [],
   address: '',
   status: 'open',
   serviceType: 'remote',
@@ -762,6 +765,7 @@ export class ContactProfileService implements OnModuleInit {
       email: text(d.email),
       company: text(d.company),
       document: text(d.document, 50),
+      cnpjs: normalizeCnpjList(d.cnpjs ?? []),
       address: text(d.address, 1000),
       status: text(d.status, 20),
       serviceType: 'remote',
@@ -796,6 +800,7 @@ export class ContactProfileService implements OnModuleInit {
         throw new ConflictException(
           'Outra pessoa atualizou este perfil. Recarregue antes de salvar para não sobrescrever as alterações.',
         );
+      if (d.cnpjs === undefined) cleaned.cnpjs = normalizeCnpjList(current?.data?.cnpjs ?? []);
       if (
         requestedOwnCompletionTag &&
         this.isCompletedServiceOwner({ assignee_id: user.id, assignee_name: user.displayName })

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search, UserRound, UserPlus, MessageCircle, FileUp, Pencil, Trash2, Merge } from "lucide-react";
 import { ContactImport } from "./contact-import";
+import { ContactCnpjImport } from "./contact-cnpj-import";
 import { ContactEditor } from "./contact-editor";
 
 type Contact = { id: string; name: string; phone?: string; avatar?: string; tags?: string[] };
@@ -27,6 +28,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
   const [tagMode, setTagMode] = useState<"all" | "any">("all");
   const [tagSearch, setTagSearch] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [cnpjImportOpen, setCnpjImportOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [deleting, setDeleting] = useState("");
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
@@ -98,6 +100,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
       <div className="contact-header-actions">
         {canCreate && <button className="contact-reconcile-trigger" onClick={() => void reconcile()} disabled={reconciling} title="Associe importações às conversas antigas quando houver correspondência única de nome"><Merge size={18}/>{reconciling ? "Unificando…" : "Unificar duplicados"}</button>}
         <button className="contact-import-trigger" onClick={() => setImportOpen(true)} disabled={!canCreate}><FileUp size={18}/>Importar planilha</button>
+        <button className="contact-import-trigger" onClick={() => setCnpjImportOpen(true)} disabled={!canCreate}><FileUp size={18}/>Atualizar CNPJs</button>
         <button className="solid-button" onClick={onCreate} disabled={!canCreate}><UserPlus size={18}/>Criar contato</button>
       </div>
     </header>
@@ -147,6 +150,7 @@ export function ContactsPanel({ contacts, onCreate, onOpen, canCreate, baseUrl, 
       </div>
     </div>
     {importOpen && <ContactImport baseUrl={baseUrl} sessionId={sessionId} token={token} onComplete={onImported} onClose={() => setImportOpen(false)}/>}
+    {cnpjImportOpen && <ContactCnpjImport baseUrl={baseUrl} sessionId={sessionId} token={token} onComplete={onImported} onClose={() => setCnpjImportOpen(false)}/>}
     {editing && <ContactEditor contact={editing} baseUrl={baseUrl} apiKey={apiKey} token={token} sessionId={sessionId} onClose={() => setEditing(null)} onSaved={() => { void onImported().catch(() => undefined); }}/>}
   </section>;
 }

@@ -387,7 +387,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const contactByCnpj = new Map<string, string[]>();
     for (const profile of profiles) {
       if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
-      const values = [profile.data?.document, ...(Array.isArray(profile.data?.custom) ? profile.data.custom
+      const values = [profile.data?.document, ...(Array.isArray(profile.data?.cnpjs) ? profile.data.cnpjs : []), ...(Array.isArray(profile.data?.custom) ? profile.data.custom
         .filter(item => /^cnpj(?:\s*\d+)?$/i.test(item.label?.trim() || '')).map(item => item.value) : [])];
       for (const cnpj of new Set(values.map(normalizeCnpj).filter(value => value.length === 14)))
         contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
@@ -495,7 +495,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const contactByCnpj = new Map<string, string[]>();
     for (const profile of profiles) {
       if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
-      const sources = [profile.data?.document, ...(Array.isArray(profile.data?.custom) ? profile.data.custom
+      const sources = [profile.data?.document, ...(Array.isArray(profile.data?.cnpjs) ? profile.data.cnpjs : []), ...(Array.isArray(profile.data?.custom) ? profile.data.custom
         .filter(item => /^cnpj(?:\s*\d+)?$/i.test(item.label?.trim() || '')).map(item => item.value) : [])];
       for (const cnpj of new Set(sources.flatMap(extractCnpjs)))
         contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
@@ -523,7 +523,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       if (status === monthlyCalledValue(rule.calledValue, rule.callRound) && matches.length === 1)
         alreadyCalledContacts.add(matches[0]);
       if (hasX) {
-        if (matches.length === 1) blockedContacts.add(matches[0]);
+        for (const match of matches) blockedContacts.add(match);
         if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason: 'Empresa bloqueada pelo marcador X; não chamar' });
         return;
       }
@@ -537,7 +537,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       const issue = (reason: string, duplicate = false) => {
         if (duplicate) ambiguous++; else missing++;
         if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason });
-        if (matches.length === 1) blockedContacts.add(matches[0]);
+        for (const match of matches) blockedContacts.add(match);
       };
       if (cnpj.length !== 14) { issue('CNPJ ausente ou inválido'); return; }
       if (cnpjCounts.get(cnpj) !== 1 || matches.length > 1) { issue('CNPJ duplicado no controle ou em contatos', true); return; }
