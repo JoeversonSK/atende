@@ -119,7 +119,7 @@ export function ContactCnpjImport({ baseUrl, sessionId, token, onComplete, onClo
         {parsed.errors.length > 0 && <><p role="alert">Corrija {parsed.errors.length} linha(s) antes de continuar.</p><ul className="contact-import-errors">{parsed.errors.slice(0, 10).map(message => <li key={message}>{message}</li>)}</ul></>}
       </>}
       {preview && !result && <><p><b>{preview.matched}</b> contatos encontrados; {preview.missing} telefones não encontrados; {preview.ambiguous} telefones ambíguos.</p>
-        {preview.duplicateCnpjs > 0 && <p role="status">{preview.duplicateCnpjs} CNPJs aparecem em telefones diferentes. Eles serão importados, mas a automação mensal não enviará mensagens para esses CNPJs até você remover as repetições.</p>}
+        {preview.duplicateCnpjs > 0 && <p role="status">{preview.duplicateCnpjs} CNPJs aparecem em telefones diferentes. Eles serão mantidos, e a automação mensal enviará uma mensagem para cada contato apto antes de marcar a linha como chamada.</p>}
         {preview.issues.length > 0 && <ul className="contact-import-errors">{preview.issues.slice(0, 10).map((issue,index) => <li key={`${issue.row}-${index}`}>Linha {issue.row}: {issue.phone} — {issue.reason}</li>)}</ul>}
         <button type="button" className="solid-button" disabled={busy || !preview.matched} onClick={() => void apply()}>{busy ? "Atualizando…" : `Atualizar CNPJs de ${preview.matched} contatos`}</button>
       </>}

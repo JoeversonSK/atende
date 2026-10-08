@@ -520,8 +520,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       const companyName = normalizeCompanyName(row[rule.controlNameColumn]);
       const detail = normalizeCompanyName(row['Detalhe do chamado']);
       const hasX = companyName.split(' ').includes('X') || detail.split(' ').includes('X');
-      if (status === monthlyCalledValue(rule.calledValue, rule.callRound) && matches.length === 1)
-        alreadyCalledContacts.add(matches[0]);
+      if (status === monthlyCalledValue(rule.calledValue, rule.callRound))
+        for (const match of matches) alreadyCalledContacts.add(match);
       if (hasX) {
         for (const match of matches) blockedContacts.add(match);
         if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason: 'Empresa bloqueada pelo marcador X; não chamar' });
@@ -530,24 +530,25 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       if (row['SPED'] || row['Vendas']) { alreadyCalled++; return; }
       if (monthlyCallStage(status, rule.calledValue) !== rule.callRound) {
         alreadyCalled++;
-        if (matches.length === 1 && status !== monthlyCalledValue(rule.calledValue, rule.callRound)) blockedContacts.add(matches[0]);
+        if (status !== monthlyCalledValue(rule.calledValue, rule.callRound))
+          for (const match of matches) blockedContacts.add(match);
         return;
       }
-      if (matches.length === 1) eligibleContactIds.add(matches[0]);
+      for (const match of matches) eligibleContactIds.add(match);
       const issue = (reason: string, duplicate = false) => {
         if (duplicate) ambiguous++; else missing++;
         if (issues.length < 50) issues.push({ row: control.rowNumbers[index], cnpj: row[rule.controlCnpjColumn], reason });
         for (const match of matches) blockedContacts.add(match);
       };
       if (cnpj.length !== 14) { issue('CNPJ ausente ou inválido'); return; }
-      if (cnpjCounts.get(cnpj) !== 1 || matches.length > 1) { issue('CNPJ duplicado no controle ou em contatos', true); return; }
+      if (cnpjCounts.get(cnpj) !== 1) { issue('CNPJ duplicado na aba mensal', true); return; }
       if (!matches.length) { issue('Contato não encontrado pelo CNPJ'); return; }
       if (!companyName) { issue('Nome da empresa vazio'); return; }
       const legalNames = legalByName.get(companyName);
       if (!legalNames?.size) { issue('Nome da empresa não encontrado na aba Clientes'); return; }
       if (legalNames.size !== 1) { issue('Nome corresponde a razões sociais diferentes em Clientes', true); return; }
-      const chatId = matches[0];
-      grouped.set(chatId, [...(grouped.get(chatId) || []), { cnpj, rowNumber: control.rowNumbers[index], legalName: [...legalNames][0] }]);
+      for (const chatId of matches)
+        grouped.set(chatId, [...(grouped.get(chatId) || []), { cnpj, rowNumber: control.rowNumbers[index], legalName: [...legalNames][0] }]);
     });
     const calls: { chatId: string; cnpjs: string[]; names: string[]; rows: MonthlyRow[] }[] = [];
     for (const [chatId, rows] of grouped) {
@@ -557,6 +558,19 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       }
       const names = [...new Map(rows.map(item => [normalizeCompanyName(item.legalName), item.legalName])).values()];
       calls.push({ chatId, cnpjs: rows.map(item => item.cnpj), names, rows });
+    }
+    // Uma linha compartilhada não pode ser marcada se algum dos destinatários estiver bloqueado.
+    // Propaga esse bloqueio para evitar enviar apenas parte dos contatos da mesma empresa.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const recipients = new Map<number, string[]>();
+      for (const call of calls) for (const row of call.rows)
+        recipients.set(row.rowNumber, [...(recipients.get(row.rowNumber) || []), call.chatId]);
+      for (const chatIds of recipients.values()) {
+        if (!chatIds.some(chatId => blockedContacts.has(chatId))) continue;
+        for (const chatId of chatIds) if (!blockedContacts.has(chatId)) { blockedContacts.add(chatId); changed = true; }
+      }
     }
     return { calls, issues, missing, ambiguous, alreadyCalled, alreadyCalledContacts, eligibleContactIds, blockedContacts };
   }
@@ -579,46 +593,72 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       await this.db.query(`UPDATE openwa.sheet_automation_rows SET status='sent',error=NULL
         WHERE automation_id=$1 AND phone=$2 AND status='sent_pending_sheet'`, [id, keyFor(chatId)]);
     let sent = 0, marked = 0, failed = 0, skipped = 0, pending = 0;
+    let attempted = 0;
+    const statusByChat = new Map<string, string>();
     for (const call of prepared.calls) {
       if (this.paused.has(id)) { pending++; break; }
       const key = keyFor(call.chatId);
       const [previous] = await this.db.query('SELECT status,fingerprint FROM openwa.sheet_automation_rows WHERE automation_id=$1 AND phone=$2', [id, key]);
-      if (previous?.status === 'sent_pending_sheet') {
-        let markFailed = false;
-        for (const item of call.rows) {
-          try { await this.writeCalled(resolvedRule, control, item.rowNumber, item.cnpj, expectedValue, nextValue); marked++; }
-          catch (error) { markFailed = true; failed++; await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
-            [id, key, error instanceof Error ? error.message.slice(0, 500) : 'Falha ao atualizar Chamado']); }
-        }
-        if (!markFailed) await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, key, 'sent']);
-        continue;
-      }
+      if (previous?.status) statusByChat.set(call.chatId, previous.status);
+      if (previous?.status === 'sent_pending_sheet') continue;
       if (previous || prepared.alreadyCalledContacts.has(call.chatId) || prepared.blockedContacts.has(call.chatId)) { skipped++; continue; }
-      if (sent >= 1) { pending++; continue; }
+      if (attempted >= 1) { pending++; continue; }
       const text = this.monthlyMessage(rule, call.names, call.cnpjs, monthSheet);
       if (!await this.reserveSend(id, rule.sendPace)) { pending++; break; }
       const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
         (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
         [id, key, createHash('sha256').update(JSON.stringify(call.cnpjs)).digest('hex')]);
       if (!claimed.length) { skipped++; continue; }
+      attempted++;
       try { await this.modules.get(MessageService, { strict: false }).sendText(sessionId, { chatId: call.chatId, text }); }
       catch (error) {
         failed++;
         await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=$4 WHERE automation_id=$1 AND phone=$2',
           [id, key, 'send_failed', error instanceof Error ? error.message.slice(0, 500) : 'Falha ao enviar']);
+        statusByChat.set(call.chatId, 'send_failed');
         continue;
       }
       sent++;
       await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
         [id, key, 'sent_pending_sheet']);
-      let markFailed = false;
-      for (const item of call.rows) {
-        try { await this.writeCalled(resolvedRule, control, item.rowNumber, item.cnpj, expectedValue, nextValue); marked++; }
-        catch (error) { markFailed = true; failed++; await this.db.query('UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2',
-          [id, key, error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado']); }
-      }
-      if (!markFailed) await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2', [id, key, 'sent']);
+      statusByChat.set(call.chatId, 'sent_pending_sheet');
     }
+    const rowRecipients = new Map<number, { cnpj: string; chatIds: Set<string> }>();
+    for (const call of prepared.calls) for (const item of call.rows) {
+      const row = rowRecipients.get(item.rowNumber) || { cnpj: item.cnpj, chatIds: new Set<string>() };
+      row.chatIds.add(call.chatId);
+      rowRecipients.set(item.rowNumber, row);
+    }
+    // Só marca a componente inteira de empresas/contatos quando todas as mensagens
+    // foram enviadas; marcar uma linha isolada faria os demais contatos perderem a etapa.
+    const unready = new Set(prepared.calls.filter(call =>
+      !['sent', 'sent_pending_sheet'].includes(statusByChat.get(call.chatId) || '')).map(call => call.chatId));
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const row of rowRecipients.values()) {
+        if (![...row.chatIds].some(chatId => unready.has(chatId))) continue;
+        for (const chatId of row.chatIds) if (!unready.has(chatId)) { unready.add(chatId); expanded = true; }
+      }
+    }
+    const markedRows = new Set<number>();
+    for (const [rowNumber, row] of rowRecipients) {
+      if ([...row.chatIds].some(chatId => unready.has(chatId))) continue;
+      try {
+        await this.writeCalled(resolvedRule, control, rowNumber, row.cnpj, expectedValue, nextValue);
+        markedRows.add(rowNumber);
+        marked++;
+      } catch (error) {
+        failed++;
+        for (const chatId of row.chatIds) await this.db.query(
+          'UPDATE openwa.sheet_automation_rows SET error=$3 WHERE automation_id=$1 AND phone=$2 AND status=$4',
+          [id, keyFor(chatId), error instanceof Error ? error.message.slice(0, 500) : 'Mensagem enviada; falha ao atualizar Chamado', 'sent_pending_sheet']);
+      }
+    }
+    for (const call of prepared.calls) if (statusByChat.get(call.chatId) === 'sent_pending_sheet' &&
+      call.rows.every(item => markedRows.has(item.rowNumber)))
+      await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
+        [id, keyFor(call.chatId), 'sent']);
     await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
       [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
     if (!pending) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);

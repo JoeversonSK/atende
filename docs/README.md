@@ -6,7 +6,7 @@ Este é o índice dos guias do **Atende**. O [README da raiz](../README.md) é a
 | --- | --- |
 | [Arquitetura e estado atual](ARQUITETURA_E_ESTADO_ATUAL.md) | Mapa da interface, componentes e módulos extraídos de `page.tsx`; conta do operador, conexão WhatsApp, sincronização, eventos em tempo real, envio de mídia, encaminhamento, fluxos, notificações, migrações, webhooks, dados, dependências e verificação. É o ponto de partida para desenvolvimento. |
 | [Atendimentos, painel e contatos](ATENDIMENTOS.md) | Regras operacionais de fila, responsável, conclusão, tempos, busca no dashboard, importação de contatos, CNPJs vinculados e etiquetas. |
-| [Automações](AUTOMACOES.md) | Google Sheets privado, mapeamento manual, chamadas mensais, prevenção de duplicidade e operação. |
+| [Automações](AUTOMACOES.md) | Google Sheets privado, mapeamento manual, chamadas mensais, CNPJs compartilhados entre contatos e operação. |
 | [Recuperação de acesso](RECUPERAR-ACESSO.md) | Procedimento local de redefinição de senha e cuidados com o código. |
 | [Migração do volume de mídia](MIGRACAO_VOLUME_MIDIA.md) | Atualização de instalação existente sem ocultar anexos antigos. Não é necessária em instalação nova. |
 

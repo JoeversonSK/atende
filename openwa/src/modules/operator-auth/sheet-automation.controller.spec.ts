@@ -181,7 +181,7 @@ describe('Arquivos mensais', () => {
     expect(service.monthlyMessage(draft, prepared.calls[0].names, prepared.calls[0].cnpjs))
       .toBe('Olá, acesso remoto de *CLAUDIO PIRES DE OLIVEIRA* e *RAYELE PEREIRA SILVA*?');
   });
-  it('lê CNPJs separados e bloqueia envio parcial quando outro contato tem o mesmo CNPJ', async () => {
+  it('lê CNPJs separados e prepara uma mensagem para cada contato que compartilha o CNPJ', async () => {
     const db = { query: jest.fn().mockResolvedValue([
       { chatId: '558899999999@c.us', data: { document: '', cnpjs: ['48102421000150', '45499311000185'], custom: [] } },
       { chatId: '558888888888@c.us', data: { document: '', cnpjs: ['45499311000185'], custom: [] } },
@@ -189,10 +189,70 @@ describe('Arquivos mensais', () => {
     const service = new SheetAutomationService(db as never, {} as never, {} as never, {} as never) as any;
     const prepared = await service.prepareMonthlyCalls(draft,
       { ...control, rows: control.rows.slice(0, 2), rowNumbers: [2, 3] }, details, 'sessao');
-    expect(prepared.ambiguous).toBe(1);
-    expect(prepared.blockedContacts.has('558899999999@c.us')).toBe(true);
-    expect(prepared.blockedContacts.has('558888888888@c.us')).toBe(true);
-    expect(prepared.calls).toHaveLength(1);
+    expect(prepared.ambiguous).toBe(0);
+    expect(prepared.blockedContacts.size).toBe(0);
+    expect(prepared.calls).toHaveLength(2);
+    expect(prepared.calls.find((call: { chatId: string }) => call.chatId === '558899999999@c.us').cnpjs)
+      .toEqual(['48102421000150', '45499311000185']);
+    expect(prepared.calls.find((call: { chatId: string }) => call.chatId === '558888888888@c.us').cnpjs)
+      .toEqual(['45499311000185']);
+  });
+  it('envia aos dois contatos em ciclos distintos e só marca as linhas compartilhadas após ambos receberem', async () => {
+    const statuses = new Map<string, string>();
+    const query = jest.fn(async (sql: string, params: string[]) => {
+      if (sql.includes('SELECT status,fingerprint')) return statuses.has(params[1]) ? [{ status: statuses.get(params[1]) }] : [];
+      if (sql.includes('INSERT INTO openwa.sheet_automation_rows')) return [{ phone: params[1] }];
+      if (sql.includes('UPDATE openwa.sheet_automation_rows SET status=$3')) statuses.set(params[1], params[2]);
+      if (sql.includes('next_send_at=NOW()+')) return [{ id: 'regra' }];
+      return [];
+    });
+    const sendText = jest.fn().mockResolvedValue({});
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [
+      { chatId: 'contato-a', cnpjs: ['48102421000150', '45499311000185'], names: ['EMPRESA A', 'EMPRESA B'],
+        rows: [{ cnpj: '48102421000150', rowNumber: 2 }, { cnpj: '45499311000185', rowNumber: 3 }] },
+      { chatId: 'contato-b', cnpjs: ['45499311000185'], names: ['EMPRESA B'],
+        rows: [{ cnpj: '45499311000185', rowNumber: 3 }] },
+    ], missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(),
+    eligibleContactIds: new Set(['contato-a', 'contato-b']), blockedContacts: new Set() });
+    const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    const first = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(first).toMatchObject({ sent: 1, marked: 0, pending: 1 });
+    expect(write).not.toHaveBeenCalled();
+    const second = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(second).toMatchObject({ sent: 1, marked: 2, pending: 0 });
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect([...statuses.values()]).toEqual(['sent', 'sent']);
+  });
+  it('não marca a empresa compartilhada se um dos envios falhar', async () => {
+    const statuses = new Map<string, string>();
+    const query = jest.fn(async (sql: string, params: string[]) => {
+      if (sql.includes('SELECT status,fingerprint')) return statuses.has(params[1]) ? [{ status: statuses.get(params[1]) }] : [];
+      if (sql.includes('INSERT INTO openwa.sheet_automation_rows')) return [{ phone: params[1] }];
+      if (sql.includes('UPDATE openwa.sheet_automation_rows SET status=$3')) statuses.set(params[1], params[2]);
+      if (sql.includes('next_send_at=NOW()+')) return [{ id: 'regra' }];
+      return [];
+    });
+    const sendText = jest.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('Sem conexão'));
+    const service = new SheetAutomationService({ query } as never, {} as never, {} as never,
+      { get: () => ({ sendText }) } as never) as any;
+    jest.spyOn(service, 'fetchSheet').mockResolvedValue(details);
+    jest.spyOn(service, 'prepareMonthlyCalls').mockResolvedValue({ calls: [
+      { chatId: 'contato-a', cnpjs: ['48102421000150'], names: ['EMPRESA A'], rows: [{ cnpj: '48102421000150', rowNumber: 2 }] },
+      { chatId: 'contato-b', cnpjs: ['48102421000150'], names: ['EMPRESA A'], rows: [{ cnpj: '48102421000150', rowNumber: 2 }] },
+    ], missing: 0, ambiguous: 0, alreadyCalled: 0, alreadyCalledContacts: new Set(),
+    eligibleContactIds: new Set(['contato-a', 'contato-b']), blockedContacts: new Set() });
+    const write = jest.spyOn(service, 'writeCalled').mockResolvedValue(undefined);
+    await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    const second = await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(second).toMatchObject({ sent: 0, marked: 0, failed: 1 });
+    expect(write).not.toHaveBeenCalled();
+    await service.executeMonthlyCalls('sessao', 'regra', draft, control);
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect([...statuses.values()]).toEqual(['sent_pending_sheet', 'send_failed']);
   });
   it('impede mensagem parcial se uma das empresas do contato não existe em Clientes', async () => {
     const db = { query: jest.fn().mockResolvedValue([
