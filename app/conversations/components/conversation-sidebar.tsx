@@ -2,17 +2,16 @@
 
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { ArrowLeft, Check, ChevronRight, Filter, MessageCircle, Search, UserRound, X } from "lucide-react";
-import type { Chat } from "../../conversation-model";
+import { isGroupChat, type Chat, type ConversationFilter } from "../../conversation-model";
 import { ContactAvatar } from "./contact-avatar";
 
-type FilterValue = "all" | "unread" | "mine";
 type Assignment = { assigneeName: string; assigneeId?: string; updatedAt?: string };
 
 export type ConversationSidebarProps = {
   search: string;
   setSearch: Dispatch<SetStateAction<string>>;
-  filter: FilterValue;
-  setFilter: Dispatch<SetStateAction<FilterValue>>;
+  filter: ConversationFilter;
+  setFilter: Dispatch<SetStateAction<ConversationFilter>>;
   tagFilter: string;
   setTagFilter: Dispatch<SetStateAction<string>>;
   filterMenuOpen: boolean;
@@ -44,7 +43,8 @@ export function ConversationSidebar({
         <button className={tagFilter ? "active" : ""} onClick={() => {
           setFilterMenuOpen(open => !open);
           if (filterMenuOpen) setFilterMenuPage("main");
-        }} aria-label="Adicionar filtros" aria-expanded={filterMenuOpen}>
+        }} aria-label="Adicionar filtros" aria-expanded={filterMenuOpen} disabled={filter === "groups"}
+          title={filter === "groups" ? "Etiquetas disponíveis apenas para contatos" : undefined}>
           <Filter size={18} />{tagFilter && <i aria-hidden="true" />}
         </button>
         {filterMenuOpen && <section className="wa-filter-popover" aria-label="Filtros das conversas">
@@ -71,11 +71,11 @@ export function ConversationSidebar({
       </div>
     </div>
     <div className="wa-filters" aria-label="Filtrar conversas">
-      {([ ["all", "Todas"], ["unread", "Não lidas"], ["mine", "Minhas"] ] as const).map(([value, label]) =>
+      {([ ["all", "Todas"], ["unread", "Não lidas"], ["mine", "Minhas"], ["groups", "Grupos"] ] as const).map(([value, label]) =>
         <button key={value} aria-pressed={filter === value} className={filter === value ? "active" : ""}
-          onClick={() => setFilter(value)}>{label}
-          {value === "unread" && chats.some(chat => chat.unread > 0) &&
-            <span>{chats.filter(chat => chat.unread > 0).length}</span>}
+          onClick={() => { setFilter(value); if (value === "groups") { setTagFilter(""); setFilterMenuOpen(false); } }}>{label}
+          {value === "unread" && chats.some(chat => !isGroupChat(chat) && chat.unread > 0) &&
+            <span>{chats.filter(chat => !isGroupChat(chat) && chat.unread > 0).length}</span>}
         </button>)}
       {tagFilter && <button className="wa-applied-filter active" onClick={() => setTagFilter("")}
         title="Remover filtro de etiqueta">Etiqueta: {tagFilter}<X size={12} /></button>}
@@ -90,7 +90,7 @@ export function ConversationSidebar({
         <span className="wa-chat-copy">
           <span><b>{chat.name}</b><time className={chat.unread ? "unread-time" : ""}>{chat.time}</time></span>
           <span><i>{chat.last}</i>
-            {assignments[chat.id] && <span className="wa-owner-marker"
+            {!isGroupChat(chat) && assignments[chat.id] && <span className="wa-owner-marker"
               title={`Atribuído para ${assignments[chat.id].assigneeName}`}
               aria-label={`Atribuído para ${assignments[chat.id].assigneeName}`}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -99,8 +99,8 @@ export function ConversationSidebar({
             </span>}
             {chat.unread > 0 && <em>{chat.unread > 99 ? "99+" : chat.unread}</em>}
           </span>
-          <span className={`chat-owner-label ${assignments[chat.id] ? "assigned" : ""}`}>
-            <UserRound size={11} />{assignments[chat.id]?.assigneeName || "Sem responsável"}
+          <span className={`chat-owner-label ${!isGroupChat(chat) && assignments[chat.id] ? "assigned" : ""}`}>
+            <UserRound size={11} />{isGroupChat(chat) ? "Grupo do WhatsApp" : assignments[chat.id]?.assigneeName || "Sem responsável"}
           </span>
         </span>
       </button>) : <div className="wa-list-empty"><MessageCircle size={28} />

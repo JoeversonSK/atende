@@ -45,6 +45,35 @@ O projeto usa uma versão personalizada do [OpenWA](https://github.com/rmyndhari
 
 Os dados são armazenados em volumes Docker. Reiniciar ou atualizar os containers não apaga as conversas nem as contas.
 
+## Produção e ambiente de criação
+
+O `docker-compose.yml` existente é a **produção**: porta `3000` (e `443` quando há certificado), projeto Docker `atende` e volumes que guardam o atendimento real. Os atendentes continuam usando esse endereço. Não execute `docker compose up --build` nele para experimentar uma alteração: isso substituiria os containers em uso.
+
+O ambiente de **criação/testes** usa [`docker-compose.dev.yml`](docker-compose.dev.yml), projeto Docker `atende-dev`, porta local `3001` e volumes próprios para PostgreSQL, Redis, sessão e mídia. Nenhum dado ou segredo de produção é copiado. No servidor atual, produção é construída do checkout da branch `main` e criação do checkout separado da branch `develop`; os dois projetos Docker continuam independentes. Editar arquivos em `develop` não altera o código nem os containers de produção. Por padrão, a API OpenWA e os bancos ficam apenas em uma rede Docker interna, sem saída para WhatsApp, Google Sheets ou webhooks externos; somente a interface tem uma rede adicional para publicar sua porta local. A retomada automática de sessões também está desligada. Por isso, testes de envio real e integrações externas não funcionam nesse modo seguro.
+
+Para manter os checkouts separados neste computador, a pasta original permanece em `main` (produção) e uma pasta irmã `atende-desenvolvimento` é um Git worktree de `develop`. Execute comandos de criação **dentro de `atende-desenvolvimento`** e comandos de produção **dentro da pasta `main`**. Ambas as branches começam com a mesma versão promovida; mudanças futuras entram primeiro em `develop`, são validadas em `atende-dev` e só depois são integradas a `main` e publicadas com backup. Fazer `git push` não atualiza containers automaticamente: a compilação/implantação de cada ambiente continua explícita. O arquivo local `.env.dev` fica somente no checkout de desenvolvimento; nunca copie `.env` nem volumes da produção para ele.
+
+No computador onde está o Docker, inicie o ambiente de criação no PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+```
+
+Na primeira execução, o script cria `.env.dev` com **três segredos aleatórios exclusivos**, protegidos pelo `.gitignore`, compila e inicia os quatro serviços de desenvolvimento. Depois abra `http://localhost:3001` **no próprio computador** e crie uma conta de administrador de testes. A porta de testes está vinculada a `127.0.0.1`, então não aparece para os atendentes na rede. É possível parar e retomar sem apagar os dados:
+
+Em Linux/macOS, copie `.env.dev.example` para `.env.dev`, substitua os três valores por segredos fortes e diferentes dos da produção e execute `docker compose --env-file .env.dev -f docker-compose.dev.yml up -d --build`.
+
+```powershell
+docker compose --env-file .env.dev -f docker-compose.dev.yml stop
+powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+```
+
+Para acompanhar somente os testes: `docker compose --env-file .env.dev -f docker-compose.dev.yml ps`. Para conferir a produção: `docker compose ps`. **Nunca use `down -v`** em nenhum dos dois ambientes; a opção remove volumes e pode apagar histórico e sessão. A promoção de uma alteração testada para produção continua sendo uma operação explícita, com backup e janela combinada. Não conecte o número WhatsApp da produção ao ambiente de criação; quando forem necessários testes de integração externos, use um número e uma planilha exclusivos de teste e configure uma abertura de rede deliberada.
+
+### Conectar um número exclusivo de testes
+
+Depois da primeira subida, execute no PowerShell `powershell -ExecutionPolicy Bypass -File .\scripts\enable-dev-whatsapp.ps1`. Esse comando adiciona saída de rede **somente ao OpenWA de criação**, recompila/reinicia **somente** o projeto `atende-dev` e retoma a sessão de testes nas próximas execuções. Em `http://localhost:3001`, crie a sessão WhatsApp de teste e leia o QR Code com o **número exclusivo de testes**. Não copie arquivos de autenticação do WhatsApp nem reutilize o QR Code/número da produção. A ponte Google Sheets e os webhooks externos continuam sem credenciais por padrão; configure apenas destinos de teste, se necessário. Após mudanças de código, use o mesmo comando para validar a versão atual no ambiente conectado. Para voltar ao modo sem saída externa, rode `powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1`.
+
 ## Requisitos
 
 - Docker Desktop no Windows, macOS ou Linux
@@ -111,7 +140,7 @@ http://localhost:3000
 
 Os certificados HTTPS locais são opcionais e não vêm no clone. Sem eles, o painel inicia normalmente em HTTP na porta 3000. Para acesso seguro pela rede local (necessário para recursos do navegador como microfone e notificações), no Windows execute `powershell -ExecutionPolicy Bypass -File .\scripts\create-local-https.ps1` no computador-servidor e depois `docker compose up -d --build web`. Cada instalação deve gerar e confiar em sua própria autoridade local. Nunca copie certificados ou chaves privadas gerados para o repositório.
 
-Para a automação com Google Sheets privado, a instalação inicial funciona sem credenciais, mas a leitura da planilha e os envios ficam indisponíveis até configurar a ponte do Apps Script conforme o [guia de automações](docs/AUTOMACOES.md). O segredo fica apenas no `.env` local; não vem no clone.
+Para a automação com Google Sheets privado, a instalação inicial funciona sem credenciais, mas a leitura da planilha, os envios e a escrita por blocos de fluxo ficam indisponíveis até configurar a ponte do Apps Script conforme o [guia de automações](docs/AUTOMACOES.md). Em instalações existentes, atualize e reimplante `scripts/ponte-google-sheets.gs` para habilitar a escrita por fluxo. O segredo fica apenas no `.env` local; não vem no clone.
 
 ### 4. Faça o primeiro acesso
 
@@ -207,8 +236,10 @@ docs/                Guias do Atende; comece por docs/README.md
 openwa/              OpenWA personalizado para o Atende
 scripts/             Gateway local e verificações
 docker-compose.yml   Orquestração completa
+docker-compose.dev.yml   Ambiente de criação isolado
 Dockerfile           Imagem da interface
 .env.example         Modelo seguro de configuração
+.env.dev.example     Modelo seguro para configuração de testes
 AGENTS.md            Roteiro curto para agentes de desenvolvimento
 ```
 
@@ -225,7 +256,7 @@ Validação da compilação:
 
 ```bash
 npm run build
-docker compose build
+docker compose --env-file .env.dev -f docker-compose.dev.yml build web openwa
 ```
 
 Os testes de integração locais usam registros temporários e revertem as alterações ao terminar. Eles não devem ser executados contra uma instalação que você não administra.

@@ -2,7 +2,7 @@
 
 import type { ComponentProps, Dispatch, SetStateAction } from "react";
 import { ArrowLeft, CheckCheck, PanelRight, Paperclip, Reply, X } from "lucide-react";
-import type { Chat, Message } from "../../conversation-model";
+import { isGroupChat, type Chat, type Message } from "../../conversation-model";
 import type { Assignment } from "../ticket-actions";
 import { ContactAvatar } from "./contact-avatar";
 import { ConversationThread } from "./conversation-thread";
@@ -55,7 +55,7 @@ export function ConversationPane({ selected, assignment, connected, canFinish, c
       <header className="wa-conversation-header">
         <button className="wa-back" aria-label="Voltar às conversas" onClick={onClose}><ArrowLeft size={21} /></button>
         <ContactAvatar chat={selected} />
-        <div className="wa-contact-title"><b>{selected.name}</b><small>{assignment
+        <div className="wa-contact-title"><b>{selected.name}</b><small>{isGroupChat(selected) ? "Grupo do WhatsApp" : assignment
           ? `Em atendimento por ${assignment.assigneeName}`
           : connected ? "Sem atendente atribuído" : "aguardando conexão"}</small></div>
         <div className="wa-top-actions">

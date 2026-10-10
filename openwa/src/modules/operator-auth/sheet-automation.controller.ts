@@ -9,13 +9,14 @@ import { MessageService } from '../message/message.service';
 import { WebhookService } from '../webhook/webhook.service';
 import { OperatorAuthService } from './operator-auth.service';
 import { ContactImportService, normalizeImportPhone } from './contact-import.controller';
-import { ContactData, emptyContact } from './contact-profile.controller';
+import { ContactData, emptyContact, isMonthlyFilesTag } from './contact-profile.controller';
 
 type Mapping = { column: string; target: string };
 type SheetRule = {
   id: string; name: string; spreadsheetId: string; range: string; phoneColumn: string;
   mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean;
   intervalMinutes: number; lastRunAt?: string | null; lastError?: string | null;
+  completionStatus?: 'completed' | 'review' | null; completedAt?: string | null;
   sendPace: '1-5' | '5-10'; nextSendAt?: string | null;
   callRound: number;
   mode: 'contacts' | 'cnpjCall' | 'monthlyCall'; detailsRange: string; controlCnpjColumn: string;
@@ -85,6 +86,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       updated_at timestamptz NOT NULL DEFAULT NOW())`);
     await this.db.query("ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS send_pace varchar(8) NOT NULL DEFAULT '5-10'");
     await this.db.query('ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS next_send_at timestamptz');
+    await this.db.query('ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS completion_status varchar(20)');
+    await this.db.query('ALTER TABLE openwa.sheet_automations ADD COLUMN IF NOT EXISTS completed_at timestamptz');
     for (const [name, definition] of Object.entries({ mode: "varchar(20) NOT NULL DEFAULT 'contacts'", details_range: "varchar(160) NOT NULL DEFAULT ''",
       control_cnpj_column: "varchar(120) NOT NULL DEFAULT ''", details_cnpj_column: "varchar(120) NOT NULL DEFAULT ''",
       called_column: "varchar(120) NOT NULL DEFAULT ''", called_value: "varchar(120) NOT NULL DEFAULT ''",
@@ -99,12 +102,14 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       phone varchar(300) NOT NULL, fingerprint varchar(64) NOT NULL, status varchar(20) NOT NULL,
       error text, processed_at timestamptz NOT NULL DEFAULT NOW(), PRIMARY KEY(automation_id,phone))`);
     await this.db.query('ALTER TABLE openwa.sheet_automation_rows ALTER COLUMN phone TYPE varchar(300)');
+    await this.db.query('ALTER TABLE openwa.sheet_automation_rows ADD COLUMN IF NOT EXISTS target_cnpjs jsonb');
     this.timer = setInterval(() => void this.runDue().catch(() => undefined), 1_000);
     this.timer.unref?.();
   }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
   private async ensureCurrentMonth() {
-    await this.db.query(`UPDATE openwa.sheet_automations SET call_round=1,call_month=$1,last_run_at=NULL,updated_at=NOW()
+    await this.db.query(`UPDATE openwa.sheet_automations SET call_round=1,call_month=$1,last_run_at=NULL,
+      completion_status=NULL,completed_at=NULL,updated_at=NOW()
       WHERE mode='monthlyCall' AND call_month IS DISTINCT FROM $1`, [previousMonthSheet()]);
   }
 
@@ -149,18 +154,79 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       phone_column AS "phoneColumn",mappings,message_template AS "messageTemplate",
       send_message AS "sendMessage",active,interval_minutes AS "intervalMinutes",send_pace AS "sendPace",
       next_send_at AS "nextSendAt",call_round AS "callRound",
+      completion_status AS "completionStatus",completed_at AS "completedAt",
       mode,details_range AS "detailsRange",control_cnpj_column AS "controlCnpjColumn",
       details_cnpj_column AS "detailsCnpjColumn",called_column AS "calledColumn",called_value AS "calledValue",
       control_name_column AS "controlNameColumn",details_name_column AS "detailsNameColumn",legal_name_column AS "legalNameColumn",
       last_run_at AS "lastRunAt",last_error AS "lastError" FROM openwa.sheet_automations
       WHERE session_id=$1 ORDER BY created_at DESC`, [sessionId]);
-    const failures = rows.length ? await this.db.query(`SELECT r.automation_id AS "automationId",r.phone,
+    const sheetChecks = new Map<string, string>();
+    for (const rule of rows as SheetRule[]) if (rule.mode === 'monthlyCall') {
+      const checks = await this.reconcileMonthlyPending(sessionId, rule);
+      for (const [key, value] of checks) sheetChecks.set(`${rule.id}:${key}`, value);
+    }
+    const failures = rows.length ? await this.db.query(`SELECT r.automation_id AS "automationId",r.phone,r.status,
+      r.processed_at AS "processedAt",p.data->>'name' AS "contactName",p.data->>'phone' AS "contactPhone",
       COALESCE(r.error,CASE WHEN r.status='sending' THEN 'Execução interrompida; confira o WhatsApp antes de tentar novamente.'
         WHEN r.status='sent_pending_sheet' THEN 'Mensagem enviada; aguardando a marcação da planilha. Não reenvie manualmente.' END) AS error
       FROM openwa.sheet_automation_rows r JOIN openwa.sheet_automations a ON a.id=r.automation_id
+      LEFT JOIN openwa.contact_profiles p ON p.session_id=a.session_id AND p.chat_id=regexp_replace(r.phone,'^.*:','')
       WHERE a.session_id=$1 AND r.status IN ('send_failed','sending','sent_pending_sheet') ORDER BY r.processed_at DESC LIMIT 100`, [sessionId]) : [];
     return { serviceAccountEmail: this.credentials()?.client_email || null, connectionType: this.bridgeConfig() ? 'appsScript' : this.credentials() ? 'serviceAccount' : null,
-      rules: rows.map((rule: SheetRule) => ({ ...rule, failures: failures.filter((item: { automationId: string }) => item.automationId === rule.id) })) };
+      rules: rows.map((rule: SheetRule) => ({ ...rule, failures: failures.filter((item: { automationId: string }) => item.automationId === rule.id)
+        .map((item: { automationId: string; phone: string }) => ({ ...item, sheetCheck: sheetChecks.get(`${rule.id}:${item.phone}`) })) })) };
+  }
+  private async reconcileMonthlyPending(sessionId: string, rule: SheetRule): Promise<Map<string, string>> {
+    const month = previousMonthSheet();
+    const prefix = rule.callRound === 1 ? `${month}:` : `${month}:${rule.callRound}:`;
+    const pending = await this.db.query(`SELECT r.phone,r.target_cnpjs AS "targetCnpjs",p.data
+      FROM openwa.sheet_automation_rows r JOIN openwa.sheet_automations a ON a.id=r.automation_id
+      LEFT JOIN openwa.contact_profiles p ON p.session_id=a.session_id AND p.chat_id=regexp_replace(r.phone,'^.*:','')
+      WHERE r.automation_id=$1 AND a.session_id=$2 AND r.status='sent_pending_sheet' AND r.phone LIKE $3`,
+      [rule.id, sessionId, `${prefix}%`]) as { phone: string; targetCnpjs?: unknown; data?: ContactData }[];
+    const current = pending.filter(item => item.phone.startsWith(prefix) &&
+      /^\d+@(?:c\.us|s\.whatsapp\.net|lid)$/.test(item.phone.slice(prefix.length)));
+    const checks = new Map<string, string>();
+    if (!current.length) return checks;
+    let control: SheetRows;
+    try {
+      control = await this.fetchSheet({ spreadsheetId: rule.spreadsheetId, range: rule.range.replace(/^MES_ANTERIOR!/, `${month}!`) });
+      if (!control.headers.includes(rule.controlCnpjColumn) || !control.headers.includes(rule.calledColumn))
+        throw new BadRequestException('As colunas CNPJ ou Chamado não estão no cabeçalho da aba mensal.');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Não foi possível ler a planilha.';
+      for (const item of current) checks.set(item.phone, `Não foi possível conferir a planilha: ${reason}`);
+      return checks;
+    }
+    const rowsByCnpj = new Map<string, Record<string, string>[]>();
+    for (const row of control.rows) {
+      const cnpj = normalizeCnpj(row[rule.controlCnpjColumn]);
+      if (cnpj.length !== 14) continue;
+      rowsByCnpj.set(cnpj, [...(rowsByCnpj.get(cnpj) || []), row]);
+    }
+    const expected = monthlyCalledValue(rule.calledValue, rule.callRound);
+    for (const item of current) {
+      const data = item.data;
+      const sources = data ? [data.document, ...(Array.isArray(data.cnpjs) ? data.cnpjs : []),
+        ...(Array.isArray(data.custom) ? data.custom.filter(field => /^cnpj(?:\s*\d+)?$/i.test(field.label?.trim() || '')).map(field => field.value) : [])] : [];
+      const stored = Array.isArray(item.targetCnpjs) ? item.targetCnpjs.flatMap(extractCnpjs) : [];
+      const targets = [...new Set(stored.length ? stored : sources.flatMap(extractCnpjs))];
+      if (!targets.length) { checks.set(item.phone, 'CNPJs do envio não encontrados no perfil do contato.'); continue; }
+      let reason = '';
+      for (const cnpj of targets) {
+        const matches = rowsByCnpj.get(cnpj) || [];
+        if (matches.length !== 1) { reason = `CNPJ ${cnpj}: ${matches.length ? 'há mais de uma linha na aba mensal' : 'linha não encontrada na aba mensal'}.`; break; }
+        const row = matches[0];
+        const actual = row[rule.calledColumn];
+        const stage = monthlyCallStage(actual, rule.calledValue);
+        const marked = Boolean(row['SPED'] || row['Vendas']) || Boolean(actual) && (stage === 0 || stage > rule.callRound);
+        if (!marked) { reason = `CNPJ ${cnpj}: Chamado está “${actual || 'vazio'}”; ainda sem marcação desta chamada (valor automático: “${expected}”).`; break; }
+      }
+      if (reason) { checks.set(item.phone, reason); continue; }
+      await this.db.query(`UPDATE openwa.sheet_automation_rows SET status='sent',error=NULL
+        WHERE automation_id=$1 AND phone=$2 AND status='sent_pending_sheet'`, [rule.id, item.phone]);
+    }
+    return checks;
   }
   private normalize(input: unknown): Omit<SheetRule, 'id'> {
     const row = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -234,7 +300,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
           (existing.sheet_range && existing.sheet_range !== value.range) ||
           (existing.details_range && existing.details_range !== value.detailsRange)) {
         await this.db.query('DELETE FROM openwa.sheet_automation_rows WHERE automation_id=$1', [ruleId]);
-        await this.db.query('UPDATE openwa.sheet_automations SET call_round=1,last_run_at=NULL,next_send_at=NULL WHERE id=$1 AND session_id=$2', [ruleId, sessionId]);
+        await this.db.query(`UPDATE openwa.sheet_automations SET call_round=1,last_run_at=NULL,next_send_at=NULL,
+          completion_status=NULL,completed_at=NULL WHERE id=$1 AND session_id=$2`, [ruleId, sessionId]);
       }
     } else {
       await this.db.query(`INSERT INTO openwa.sheet_automations
@@ -261,7 +328,9 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       await this.preview(token, savedRule);
     }
     const rows = await this.db.query(`UPDATE openwa.sheet_automations SET active=$3,
-      last_run_at=CASE WHEN $3 THEN NULL ELSE last_run_at END,next_send_at=NULL,updated_at=NOW()
+      last_run_at=CASE WHEN $3 THEN NULL ELSE last_run_at END,next_send_at=NULL,
+      completion_status=CASE WHEN $3 THEN NULL ELSE completion_status END,
+      completed_at=CASE WHEN $3 THEN NULL ELSE completed_at END,updated_at=NOW()
       WHERE id=$1 AND session_id=$2 RETURNING id,active`, [id, sessionId, active]);
     if (!rows.length) throw new ConflictException('Automação não encontrada.');
     if (active) this.paused.delete(id); else this.paused.add(id);
@@ -285,7 +354,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     if (!progress) throw new ConflictException('Automação não encontrada.');
     if (Number(progress.eligible || 0) || Number(progress.pendingMarkings || 0))
       throw new ConflictException('Ainda há contatos aptos nesta etapa. Conclua a chamada atual antes de avançar.');
-    const rows = await this.db.query(`UPDATE openwa.sheet_automations SET call_round=call_round+1,last_run_at=NULL,updated_at=NOW()
+    const rows = await this.db.query(`UPDATE openwa.sheet_automations SET call_round=call_round+1,last_run_at=NULL,
+      completion_status=NULL,completed_at=NULL,updated_at=NOW()
       WHERE id=$1 AND session_id=$2 AND mode='monthlyCall' AND active=false AND call_round=$3 RETURNING call_round AS "callRound"`,
       [id, sessionId, rule.call_round]);
     if (!rows.length) throw new ConflictException('A etapa mudou. Atualize a página e tente novamente.');
@@ -336,6 +406,67 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       rowNumbers.push(index + 2);
     });
     return { headers, rows, rowNumbers };
+  }
+  async updateFlowRow(step: {spreadsheetId:string;sheetRange:string;lookupColumn:string;sheetMappings:{column:string;value:string}[]}, lookupValue: string) {
+    if (!this.bridgeConfig()) throw new ConflictException('Configure a ponte privada do Google Apps Script para atualizar planilhas por fluxo.');
+    const range = step.sheetRange.replace(/^MES_ANTERIOR!/, `${previousMonthSheet()}!`);
+    const sheet = await this.fetchSheet({spreadsheetId:step.spreadsheetId,range});
+    const keyIndex=sheet.headers.indexOf(step.lookupColumn);
+    if(keyIndex<0) throw new BadRequestException(`A coluna de busca “${step.lookupColumn}” não existe na planilha.`);
+    for(const mapping of step.sheetMappings)
+      if(!sheet.headers.includes(mapping.column)) throw new BadRequestException(`A coluna “${mapping.column}” não existe na planilha.`);
+    const same=(left:string,right:string)=>{
+      const a=normalizeCnpj(left),b=normalizeCnpj(right);
+      return a.length>=10&&b.length>=10?a===b:left.trim().toLocaleLowerCase('pt-BR')===right.trim().toLocaleLowerCase('pt-BR');
+    };
+    const matches=sheet.rows.map((row,index)=>({row,index})).filter(item=>same(item.row[step.lookupColumn],lookupValue));
+    if(matches.length!==1) throw new ConflictException(matches.length?'Mais de uma linha corresponde à busca; nenhuma célula foi alterada.':'Nenhuma linha corresponde à busca; nenhuma célula foi alterada.');
+    const {row,index}=matches[0];
+    const parts=range.match(/^([^!]+)!([A-Z]+)1:/);
+    if(!parts) throw new BadRequestException('O intervalo da planilha deve começar no cabeçalho da linha 1.');
+    const offset=[...parts[2]].reduce((value,letter)=>value*26+letter.charCodeAt(0)-64,0)-1;
+    const prefix=`${parts[1]}!`, rowNumber=sheet.rowNumbers[index];
+    const keyCell=`${prefix}${columnLetter(offset+keyIndex)}${rowNumber}`;
+    const changes=step.sheetMappings.map(mapping=>({
+      cell:`${prefix}${columnLetter(offset+sheet.headers.indexOf(mapping.column))}${rowNumber}`,
+      expectedValue:row[mapping.column],nextValue:mapping.value,
+    }));
+    await this.bridge({action:'update',spreadsheetId:step.spreadsheetId,keyCell,expectedKey:row[step.lookupColumn],changes});
+    return {success:true,updated:changes.length};
+  }
+  async completeMonthlyFiles(sessionId: string, cnpjs: string[], generatedBy: string) {
+    if (!this.bridgeConfig()) throw new ConflictException('Configure e reimplante a ponte privada do Google Apps Script para finalizar arquivos.');
+    const operatorName=String(generatedBy||'').trim().split(/\s+/)[0]||String(generatedBy||'').trim();
+    if (!operatorName) throw new BadRequestException('Não foi possível identificar quem gerou os arquivos.');
+    const selected=[...new Set(cnpjs.map(normalizeCnpj))];
+    if(!selected.length||selected.length>20||selected.some(cnpj=>cnpj.length!==14))
+      throw new BadRequestException('Selecione de 1 a 20 CNPJs válidos.');
+    const rules=await this.db.query("SELECT spreadsheet_id, sheet_range FROM openwa.sheet_automations WHERE session_id=$1 AND mode='monthlyCall'",[sessionId]);
+    if(rules.length!==1) throw new ConflictException('Configure uma única automação de Arquivos mensais antes de usar este bloco.');
+    const rule=rules[0],range=String(rule.sheet_range||'').replace(/^MES_ANTERIOR!/,`${previousMonthSheet()}!`);
+    const parts=range.match(/^([^!]+)!([A-Z]+)1:[A-Z]+\d{1,4}$/);
+    if(!parts) throw new BadRequestException('O intervalo da automação mensal deve ter cabeçalhos na linha 1.');
+    const sheet=await this.fetchSheet({spreadsheetId:String(rule.spreadsheet_id),range});
+    const header=(name:string)=>sheet.headers.findIndex(value=>value.trim().toLocaleLowerCase('pt-BR')===name.toLocaleLowerCase('pt-BR'));
+    const cnpjIndex=header('CNPJ'),spedIndex=header('SPED'),salesIndex=header('Vendas'),generatedIndex=header('Quem gerou');
+    if([cnpjIndex,spedIndex,salesIndex,generatedIndex].some(index=>index<0))
+      throw new BadRequestException('A aba mensal precisa ter as colunas CNPJ, SPED, Vendas e Quem gerou.');
+    const offset=[...parts[2]].reduce((value,letter)=>value*26+letter.charCodeAt(0)-64,0)-1;
+    const cell=(column:number,row:number)=>`${parts[1]}!${columnLetter(offset+column)}${row}`;
+    const keys:{cell:string;expected:string}[]=[],changes:{cell:string;expectedValue:string;nextValue:string}[]=[];
+    for(const cnpj of selected){
+      const matches=sheet.rows.map((row,index)=>({row,index})).filter(item=>normalizeCnpj(item.row.CNPJ)===cnpj);
+      if(matches.length!==1) throw new ConflictException(matches.length?`O CNPJ ${cnpj} aparece mais de uma vez na aba mensal; nenhuma célula foi alterada.`:`O CNPJ ${cnpj} não consta na aba mensal; nenhuma célula foi alterada.`);
+      const {row,index}=matches[0],rowNumber=sheet.rowNumbers[index];
+      keys.push({cell:cell(cnpjIndex,rowNumber),expected:row.CNPJ});
+      const sped=String(row[sheet.headers[spedIndex]]||'').trim(),sales=String(row[sheet.headers[salesIndex]]||'').trim(),generated=String(row[sheet.headers[generatedIndex]]||'').trim();
+      if(!sped) changes.push({cell:cell(spedIndex,rowNumber),expectedValue:'',nextValue:'Gerado'});
+      if(!sales) changes.push({cell:cell(salesIndex,rowNumber),expectedValue:'',nextValue:'Geradas'});
+      if(!generated) changes.push({cell:cell(generatedIndex,rowNumber),expectedValue:'',nextValue:operatorName});
+    }
+    if(changes.length)
+      await this.bridge({action:'updateMany',spreadsheetId:String(rule.spreadsheet_id),keys,changes});
+    return {success:true,matched:selected.length,updated:changes.length};
   }
   private async writeCalled(rule: SheetRule, sheet: SheetRows, rowNumber: number, expectedCnpj: string,
     expectedValue = '', nextValue = rule.calledValue) {
@@ -493,12 +624,15 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const profiles = await this.db.query(`SELECT chat_id AS "chatId",data FROM openwa.contact_profiles
       WHERE session_id=$1 AND COALESCE((data->>'directoryHidden')::boolean,false)=false`, [sessionId]) as { chatId: string; data: ContactData }[];
     const contactByCnpj = new Map<string, string[]>();
+    const untaggedCnpjs = new Set<string>();
     for (const profile of profiles) {
       if (!/@(?:c\.us|s\.whatsapp\.net|lid)$/.test(profile.chatId)) continue;
-      const sources = [profile.data?.document, ...(Array.isArray(profile.data?.cnpjs) ? profile.data.cnpjs : []), ...(Array.isArray(profile.data?.custom) ? profile.data.custom
-        .filter(item => /^cnpj(?:\s*\d+)?$/i.test(item.label?.trim() || '')).map(item => item.value) : [])];
-      for (const cnpj of new Set(sources.flatMap(extractCnpjs)))
-        contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
+      const linkedCnpjs = Array.isArray(profile.data?.cnpjs) ? profile.data.cnpjs : [];
+      const hasTag = Array.isArray(profile.data?.tags) && profile.data.tags.some(isMonthlyFilesTag);
+      for (const cnpj of new Set(linkedCnpjs.flatMap(extractCnpjs))) {
+        if (hasTag) contactByCnpj.set(cnpj, [...(contactByCnpj.get(cnpj) || []), profile.chatId]);
+        else untaggedCnpjs.add(cnpj);
+      }
     }
     const cnpjCounts = new Map<string, number>();
     for (const row of control.rows) {
@@ -511,7 +645,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
     const alreadyCalledContacts = new Set<string>();
     const eligibleContactIds = new Set<string>();
     const issues: { row: number; cnpj: string; reason: string }[] = [];
-    let missing = 0, ambiguous = 0, alreadyCalled = 0;
+    let missing = 0, ambiguous = 0, alreadyCalled = 0, excluded = 0;
     control.rows.forEach((row, index) => {
       if (!row[rule.controlNameColumn] && !row[rule.controlCnpjColumn]) return;
       const status = row[rule.calledColumn];
@@ -542,7 +676,10 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       };
       if (cnpj.length !== 14) { issue('CNPJ ausente ou inválido'); return; }
       if (cnpjCounts.get(cnpj) !== 1) { issue('CNPJ duplicado na aba mensal', true); return; }
-      if (!matches.length) { issue('Contato não encontrado pelo CNPJ'); return; }
+      if (!matches.length) {
+        if (untaggedCnpjs.has(cnpj)) { excluded++; return; }
+        issue('Contato não encontrado com CNPJ vinculado e etiqueta Arquivos Mensais'); return;
+      }
       if (!companyName) { issue('Nome da empresa vazio'); return; }
       const legalNames = legalByName.get(companyName);
       if (!legalNames?.size) { issue('Nome da empresa não encontrado na aba Clientes'); return; }
@@ -572,7 +709,7 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
         for (const chatId of chatIds) if (!blockedContacts.has(chatId)) { blockedContacts.add(chatId); changed = true; }
       }
     }
-    return { calls, issues, missing, ambiguous, alreadyCalled, alreadyCalledContacts, eligibleContactIds, blockedContacts };
+    return { calls, issues, missing, ambiguous, alreadyCalled, excluded, alreadyCalledContacts, eligibleContactIds, blockedContacts };
   }
   private monthlyMessage(rule: SheetRule, names: string[], cnpjs: string[], monthSheet = previousMonthSheet()) {
     const boldNames = names.map(name => `*${name.replace(/[\r\n*]/g, ' ').trim()}*`);
@@ -603,11 +740,17 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       if (previous?.status === 'sent_pending_sheet') continue;
       if (previous || prepared.alreadyCalledContacts.has(call.chatId) || prepared.blockedContacts.has(call.chatId)) { skipped++; continue; }
       if (attempted >= 1) { pending++; continue; }
+      const [currentProfile] = await this.db.query(
+        'SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2', [sessionId, call.chatId],
+      ) as { data: ContactData }[];
+      const currentCnpjs = new Set((Array.isArray(currentProfile?.data?.cnpjs) ? currentProfile.data.cnpjs : []).flatMap(extractCnpjs));
+      if (!Array.isArray(currentProfile?.data?.tags) || !currentProfile.data.tags.some(isMonthlyFilesTag) ||
+        !call.cnpjs.every(cnpj => currentCnpjs.has(cnpj))) { skipped++; pending++; continue; }
       const text = this.monthlyMessage(rule, call.names, call.cnpjs, monthSheet);
       if (!await this.reserveSend(id, rule.sendPace)) { pending++; break; }
       const claimed = await this.db.query(`INSERT INTO openwa.sheet_automation_rows
-        (automation_id,phone,fingerprint,status) VALUES ($1,$2,$3,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
-        [id, key, createHash('sha256').update(JSON.stringify(call.cnpjs)).digest('hex')]);
+        (automation_id,phone,fingerprint,target_cnpjs,status) VALUES ($1,$2,$3,$4::jsonb,'sending') ON CONFLICT DO NOTHING RETURNING phone`,
+        [id, key, createHash('sha256').update(JSON.stringify(call.cnpjs)).digest('hex'), JSON.stringify(call.cnpjs)]);
       if (!claimed.length) { skipped++; continue; }
       attempted++;
       try { await this.modules.get(MessageService, { strict: false }).sendText(sessionId, { chatId: call.chatId, text }); }
@@ -656,16 +799,32 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       }
     }
     for (const call of prepared.calls) if (statusByChat.get(call.chatId) === 'sent_pending_sheet' &&
-      call.rows.every(item => markedRows.has(item.rowNumber)))
+      call.rows.every(item => markedRows.has(item.rowNumber))) {
       await this.db.query('UPDATE openwa.sheet_automation_rows SET status=$3,error=NULL WHERE automation_id=$1 AND phone=$2',
         [id, keyFor(call.chatId), 'sent']);
-    await this.db.query('UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2 WHERE id=$1',
-      [id, failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null]);
-    if (!pending) await this.db.query('UPDATE openwa.sheet_automations SET next_send_at=NULL WHERE id=$1', [id]);
+      statusByChat.set(call.chatId, 'sent');
+    }
+    const prefix = rule.callRound === 1 ? `${monthSheet}:` : `${monthSheet}:${rule.callRound}:`;
+    const unresolvedRows = await this.db.query(`SELECT phone FROM openwa.sheet_automation_rows
+      WHERE automation_id=$1 AND phone LIKE $2 AND status IN ('sending','sent_pending_sheet','send_failed')`,
+      [id, `${prefix}%`]) as { phone: string }[];
+    const unresolved = unresolvedRows.filter(row => /^\d+@(?:c\.us|s\.whatsapp\.net|lid)$/.test(row.phone.slice(prefix.length))).length;
+    const needsReview = Boolean(failed || prepared.missing || prepared.ambiguous || unresolved);
+    const finished = pending === 0 && !this.paused.has(id);
+    const completionStatus = finished ? needsReview ? 'review' : 'completed' : null;
+    const reviewMessage = finished && needsReview
+      ? 'Etapa encerrada com itens para revisão. Mensagens já enviadas não serão repetidas.'
+      : failed ? `${failed} caso(s) exigem revisão. Mensagens já enviadas não serão repetidas.` : null;
+    await this.db.query(`UPDATE openwa.sheet_automations SET last_run_at=NOW(),last_error=$2,
+      active=CASE WHEN $3 THEN false ELSE active END,
+      completion_status=$4,completed_at=CASE WHEN $3 THEN NOW() ELSE NULL END,
+      next_send_at=CASE WHEN $3 THEN NULL ELSE next_send_at END,updated_at=NOW() WHERE id=$1`,
+      [id, reviewMessage, finished, completionStatus]);
     return { monthSheet, callRound: rule.callRound,
       total: control.rows.filter(row => row[rule.controlNameColumn] || row[rule.controlCnpjColumn]).length,
-      eligible: prepared.calls.length, missing: prepared.missing,
-      ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped };
+      eligible: prepared.calls.length, missing: prepared.missing, excluded: prepared.excluded,
+      ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, pending, sent, marked, failed, skipped,
+      finished, needsReview, unresolved };
   }
   async preview(token: string, input: unknown) {
     await this.auth.requireAdmin(token);
@@ -698,7 +857,8 @@ export class SheetAutomationService implements OnModuleInit, OnModuleDestroy {
       return { monthSheet, callRound: rule.callRound, headers: sheet.headers,
         total: sheet.rows.filter(row => row[rule.controlNameColumn] || row[rule.controlCnpjColumn]).length,
         eligible: eligibleCalls.length,
-        pendingMarkings, missing: prepared.missing, ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled, issues,
+        pendingMarkings, missing: prepared.missing, ambiguous: prepared.ambiguous, alreadyCalled: prepared.alreadyCalled,
+        excluded: prepared.excluded, issues,
         samples: eligibleCalls.slice(0, 5).map(call => ({ 'Contato': call.chatId, 'Razões sociais': call.names.join('; '),
           'CNPJs': call.cnpjs.join(', '), 'Linhas': call.rows.map(item => item.rowNumber).join(', ') })) };
     }

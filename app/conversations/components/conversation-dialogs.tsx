@@ -1,7 +1,7 @@
 "use client";
 
 import { Forward, Search, Send, X } from "lucide-react";
-import type { Message } from "../../conversation-model";
+import { messageDisplayText, type Message } from "../../conversation-model";
 import type { ContactRow } from "../contact-list";
 import { PasteFilePreview } from "./paste-file-preview";
 
@@ -33,6 +33,29 @@ export function PasteConfirmationDialog({
   </div>;
 }
 
+export function FlowCnpjSelectionDialog({
+  flowName, cnpjs, selected, busy, onToggle, onAll, onCancel, onConfirm,
+}: {
+  flowName: string;
+  cnpjs: string[];
+  selected: string[];
+  busy: boolean;
+  onToggle: (cnpj: string) => void;
+  onAll: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const format=(cnpj:string)=>cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,"$1.$2.$3/$4-$5");
+  return <div className="wa-backdrop paste-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onCancel();}}>
+    <form className="forward-modal flow-cnpj-modal" role="dialog" aria-modal="true" aria-labelledby="flow-cnpj-title"
+      onSubmit={event=>{event.preventDefault();onConfirm();}} onKeyDown={event=>{if(event.key==="Escape"&&!busy)onCancel();}}>
+      <header><div><h2 id="flow-cnpj-title">Escolher CNPJs finalizados</h2><p>O fluxo “{flowName}” marcará SPED como Gerado e Vendas como Geradas na aba mensal para os CNPJs selecionados.</p></div><button type="button" onClick={onCancel} disabled={busy} aria-label="Fechar"><X size={20}/></button></header>
+      <div className="flow-cnpj-options"><button type="button" onClick={onAll} disabled={busy}>Selecionar todos</button>{cnpjs.map(cnpj=><label key={cnpj}><input type="checkbox" checked={selected.includes(cnpj)} disabled={busy} onChange={()=>onToggle(cnpj)}/><span>{format(cnpj)}</span></label>)}</div>
+      <footer><button type="button" onClick={onCancel} disabled={busy}>Cancelar</button><button type="submit" disabled={busy||!selected.length}><Send size={16}/>{`Enviar e atualizar ${selected.length} ${selected.length===1?"CNPJ":"CNPJs"}`}</button></footer>
+    </form>
+  </div>;
+}
+
 export function ForwardMessageDialog({
   message, busy, search, onSearch, selectedIds, contacts, candidates, error,
   onToggle, onCancel, onSend,
@@ -56,7 +79,7 @@ export function ForwardMessageDialog({
     <form className="forward-modal" role="dialog" aria-modal="true" aria-labelledby="forward-title"
       onSubmit={event => { event.preventDefault(); onSend(); }}>
       <header><div><h2 id="forward-title">Encaminhar mensagem</h2><p>Escolha até 10 contatos para receber a mensagem original.</p></div><button type="button" onClick={onCancel} disabled={busy} aria-label="Fechar"><X size={20}/></button></header>
-      <div className="forward-preview"><Forward size={17}/><span>{message.body || mediaName || "Mensagem"}</span></div>
+      <div className="forward-preview"><Forward size={17}/><span>{messageDisplayText(message) || mediaName || "Mensagem"}</span></div>
       <label className="forward-search"><Search size={17}/><input autoFocus aria-label="Buscar contato para encaminhar" value={search} onChange={event => onSearch(event.target.value)} placeholder="Buscar contato ou número"/></label>
       {selectedIds.length > 0 && <div className="forward-selected">{selectedIds.map(id => <button key={id} type="button" disabled={busy} onClick={() => onToggle(id)}>{contacts.find(contact => contact.id === id)?.name || id}<X size={13}/></button>)}</div>}
       <div className="forward-contact-list" role="group" aria-label="Contatos de destino">

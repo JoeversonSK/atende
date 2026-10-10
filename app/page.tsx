@@ -8,17 +8,19 @@ import { useOperatorActivity, type OperatorIdentity } from "./operator-activity"
 import { useWorkspacePolling, type TeamAlertFeed } from "./workspace-polling";
 import { ContactsPanel } from "./contacts-panel";
 import { TeamChat } from "./team-chat";
-import { type Chat, type Message, type MessageWithTimestamp } from "./conversation-model";
+import { isGroupChat, type Chat, type ConversationFilter, type Message, type MessageContactCard, type MessageWithTimestamp } from "./conversation-model";
 import { ConversationSidebar } from "./conversations/components/conversation-sidebar";
 import { WorkspaceRail, WorkspaceTopbar, type WorkspaceSection } from "./conversations/components/workspace-chrome";
 import { WorkspaceAlerts, type TeamAlert } from "./conversations/components/workspace-alerts";
 import { ConversationPane } from "./conversations/components/conversation-pane";
 import { ConversationProfile } from "./conversations/components/conversation-profile";
-import { ForwardMessageDialog, NewContactDialog, PasteConfirmationDialog, type PendingPaste } from "./conversations/components/conversation-dialogs";
-import { availableContactTags, buildContactRows } from "./conversations/contact-list";
+import { FlowCnpjSelectionDialog, ForwardMessageDialog, NewContactDialog, PasteConfirmationDialog, type PendingPaste } from "./conversations/components/conversation-dialogs";
+import { availableContactTags, buildContactRows, findChatForSharedContact } from "./conversations/contact-list";
 import { useContactCreation } from "./conversations/use-contact-creation";
 import { useConversationActions } from "./conversations/conversation-actions";
+import { linkedFlowCnpjs } from "./conversations/flow-variables";
 import { useConversationSync } from "./conversations/use-conversation-sync";
+import { filterVisibleChats } from "./conversations/conversation-sync";
 import { useMessageForwarding } from "./conversations/use-message-forwarding";
 import { emptyConfig, loadConfig, loadOperator, persistOperator } from "./conversations/workspace-storage";
 import { useNotificationSettings } from "./conversations/use-notification-settings";
@@ -93,7 +95,7 @@ export default function Home() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread" | "mine">("all");
+  const [filter, setFilter] = useState<ConversationFilter>("all");
   const [tagFilter, setTagFilter] = useState("");
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [filterMenuPage, setFilterMenuPage] = useState<"main" | "tags">("main");
@@ -138,6 +140,7 @@ export default function Home() {
   const emojiMenuRef = useRef<HTMLDivElement>(null);
   const [flows, setFlows] = useState<ConversationFlow[]>([]);
   const [flowMenuOpen, setFlowMenuOpen] = useState(false);
+  const [pendingFlow, setPendingFlow] = useState<{flow:ConversationFlow;chatId:string;cnpjs:string[];selectedCnpjs:string[]}|null>(null);
   const flowToggleRef = useRef<HTMLButtonElement>(null);
   const flowMenuRef = useRef<HTMLDivElement>(null);
   const { recording, recordingPaused, startRecording,
@@ -424,7 +427,7 @@ export default function Home() {
         item.id === chat.id ? { ...item, unread: 0 } : item,
       ),
     );
-    void ticketActions.loadAssignment(chat);
+    if (!isGroupChat(chat)) void ticketActions.loadAssignment(chat);
     const cached = historyCacheRef.current.get(chat.id);
     if (cached) {
       setMessages(cached);
@@ -444,6 +447,17 @@ export default function Home() {
     } finally {
       setLoadingMessages(false);
     }
+  }
+  function openSharedContact(card: MessageContactCard) {
+    const chat = findChatForSharedContact(chats, contactRows, card);
+    if (!chat) {
+      setNotice(`Não encontrei uma conversa existente para ${card.name}.`);
+      return;
+    }
+    setDashboardOpen(false);
+    setContactsOpen(false);
+    setTeamChatOpen(false);
+    void chooseChat(chat);
   }
   const closeConversation = useCallback(() => {
     if (
@@ -473,6 +487,7 @@ export default function Home() {
         teamChatOpen ||
         contactsOpen ||
         pendingPaste ||
+        pendingFlow ||
         filterMenuOpen
       )
         return;
@@ -503,6 +518,7 @@ export default function Home() {
     activityMenuOpen,
     setActivityMenuOpen,
     pendingPaste,
+    pendingFlow,
     filterMenuOpen,
     flowMenuOpen,
     emojiOpen,
@@ -563,6 +579,25 @@ export default function Home() {
     setFlowMenuOpen, setAssignments, setOverview, setAssignment, setProfileReload,
     refreshMessages, refreshChats,
   });
+  async function chooseFlow(flow: ConversationFlow) {
+    if(!flow.steps.some(step=>step.type==="monthly-complete")) { void actions.sendFlow(flow); return; }
+    if(!selected)return;
+    if(!operatorToken||!operator){setOperatorOpen(true);return;}
+    if(operator.role!=="admin"&&operator.canSend===false){setNotice("Sua conta não tem permissão para enviar fluxos.");return;}
+    const chatId=selected.id;
+    try {
+      const response=await operatorRequest(config.baseUrl,operatorToken,
+        `/contacts/${encodeURIComponent(config.sessionId)}/${encodeURIComponent(chatId)}`);
+      if(!response.ok)throw new Error("Não foi possível consultar os CNPJs deste contato.");
+      const profile=(await response.json() as {data:SupportOverview["contacts"][number]["data"]}).data;
+      const cnpjs=linkedFlowCnpjs(profile);
+      if(!cnpjs.length){setNotice("Este contato não possui CNPJ vinculado. Cadastre o CNPJ antes de finalizar os arquivos.");return;}
+      if(selectedRef.current?.id!==chatId){setNotice("A conversa mudou. Selecione o fluxo novamente.");return;}
+      if(cnpjs.length===1){void actions.sendFlow(flow,cnpjs);return;}
+      setFlowMenuOpen(false);
+      setPendingFlow({flow,chatId,cnpjs,selectedCnpjs:cnpjs});
+    } catch(error) {setNotice(error instanceof Error?error.message:"Não foi possível consultar os CNPJs do contato.");}
+  }
   useEffect(() => {
     const paste = (event: ClipboardEvent) => {
       if (
@@ -574,7 +609,8 @@ export default function Home() {
         teamChatOpen ||
         contactsOpen ||
         forwardTarget ||
-        pendingPaste
+        pendingPaste ||
+        pendingFlow
       )
         return;
       const itemFiles = Array.from(event.clipboardData?.items || [])
@@ -602,6 +638,7 @@ export default function Home() {
     contactsOpen,
     forwardTarget,
     pendingPaste,
+    pendingFlow,
     config,
     operator,
   ]);
@@ -614,19 +651,10 @@ export default function Home() {
     [contactRows],
   );
   const shownChats = useMemo(
-    () =>
-      chats.filter(
-        (chat) =>
-          (filter === "all" ||
-            (filter === "unread" && chat.unread > 0) ||
-            (filter === "mine" &&
-              assignments[chat.id]?.assigneeId === operator?.id)) &&
-          (!tagFilter || tagsByChat.get(chat.id)?.includes(tagFilter)) &&
-          (chat.name.toLowerCase().includes(search.toLowerCase()) ||
-            chat.id.includes(search)),
-      ),
+    () => filterVisibleChats(chats, filter, search, tagFilter, tagsByChat, assignments, operator?.id),
     [chats, filter, tagFilter, tagsByChat, search, assignments, operator?.id],
   );
+  const individualChats = useMemo(() => chats.filter(chat => !isGroupChat(chat)), [chats]);
   const connected = status === "connected" || status === "ready";
 
   async function logout() {
@@ -771,7 +799,7 @@ export default function Home() {
           selected={selected}
           assignment={assignment}
           connected={connected}
-          canFinish={operator.role === "admin" || operator.canAssign === true}
+          canFinish={Boolean(selected && !isGroupChat(selected) && (operator.role === "admin" || operator.canAssign === true))}
           closing={Boolean(selected && ticketActions.closingTickets.has(selected.id))}
           closed={Boolean(selected && overview.contacts.some(contact => contact.chatId === selected.id && contact.data.status === "closed"))}
           detailsOpen={detailsOpen}
@@ -788,20 +816,22 @@ export default function Home() {
               requestAnimationFrame(() => composerInputRef.current?.focus());
             },
             onForward: forwarding.open,
+            onOpenContact: openSharedContact,
           }}
           replyingTo={replyingTo}
           onCancelReply={() => setReplyingTo(null)}
           composer={{
+            allowFlows: !selected || !isGroupChat(selected),
             flowToggleRef, flowMenuOpen, setFlowMenuOpen, loadFlows, setEmojiOpen,
             emojiToggleRef, emojiOpen, fileInputRef, sendFiles: files => { void actions.sendFiles(files); },
-            flowMenuRef, flows, busy, sendFlow: flow => { void actions.sendFlow(flow); },
+            flowMenuRef, flows, busy, sendFlow: flow => { void chooseFlow(flow); },
             emojiMenuRef, setDraft: updateDraft, recording, recordingPaused,
             discardRecording, pauseOrResumeRecording, sendRecording,
             quickReplyOpen, quickReplyMatches, quickReplyIndex, quickReplies, insertQuickReply,
             composerInputRef, draft, setPastedTextPending, setQuickReplyDismissed,
             setQuickReplyIndex, sendMessage: actions.sendMessage, startRecording,
           }}
-          welcome={{ chats, assignments, operatorId: operator.id, onContacts: () => setContactsOpen(true) }}
+          welcome={{ chats: individualChats, assignments, operatorId: operator.id, onContacts: () => setContactsOpen(true) }}
         />
         {selected && <ConversationProfile
           selected={selected}
@@ -855,6 +885,21 @@ export default function Home() {
         busy={busy}
         onCancel={() => setPendingPaste(null)}
         onConfirm={() => { void actions.confirmPendingPaste(); }}
+      />}
+      {pendingFlow && <FlowCnpjSelectionDialog
+        flowName={pendingFlow.flow.name}
+        cnpjs={pendingFlow.cnpjs}
+        selected={pendingFlow.selectedCnpjs}
+        busy={busy}
+        onToggle={cnpj=>setPendingFlow(current=>current?{...current,selectedCnpjs:current.selectedCnpjs.includes(cnpj)?current.selectedCnpjs.filter(item=>item!==cnpj):[...current.selectedCnpjs,cnpj]}:current)}
+        onAll={()=>setPendingFlow(current=>current?{...current,selectedCnpjs:current.cnpjs}:current)}
+        onCancel={()=>setPendingFlow(null)}
+        onConfirm={()=>{
+          if(!selected||selected.id!==pendingFlow.chatId){setPendingFlow(null);setNotice("A conversa mudou. Selecione o fluxo novamente.");return;}
+          const {flow,selectedCnpjs}=pendingFlow;
+          setPendingFlow(null);
+          void actions.sendFlow(flow,selectedCnpjs);
+        }}
       />}
       {forwardTarget && <ForwardMessageDialog
         message={forwardTarget.message}

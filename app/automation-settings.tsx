@@ -1,10 +1,12 @@
 "use client";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, CheckCircle2, CircleAlert, Eye, LoaderCircle, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { RobotAutomationSettings } from "./robot-automation-settings";
 
 type Mapping = { column: string; target: string };
-type Rule = { id?: string; name: string; spreadsheetId: string; range: string; phoneColumn: string; mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean; intervalMinutes: number; sendPace: "1-5" | "5-10"; nextSendAt?: string | null; callRound: number; mode: "contacts" | "cnpjCall" | "monthlyCall"; detailsRange: string; controlCnpjColumn: string; detailsCnpjColumn: string; calledColumn: string; calledValue: string; controlNameColumn: string; detailsNameColumn: string; legalNameColumn: string; lastRunAt?: string | null; lastError?: string | null; failures?: { phone: string; error: string }[] };
-type Preview = { headers: string[]; samples: Record<string, string>[]; total: number; eligible?: number; missing?: number; ambiguous?: number; alreadyCalled?: number; pendingMarkings?: number; monthSheet?: string; issues?: { row: number; cnpj: string; reason: string }[] };
+type AutomationFailure = { phone: string; status: "send_failed" | "sending" | "sent_pending_sheet"; error: string; contactName?: string | null; contactPhone?: string | null; processedAt?: string; sheetCheck?: string };
+type Rule = { id?: string; name: string; spreadsheetId: string; range: string; phoneColumn: string; mappings: Mapping[]; messageTemplate: string; sendMessage: boolean; active: boolean; intervalMinutes: number; sendPace: "1-5" | "5-10"; nextSendAt?: string | null; callRound: number; mode: "contacts" | "cnpjCall" | "monthlyCall"; detailsRange: string; controlCnpjColumn: string; detailsCnpjColumn: string; calledColumn: string; calledValue: string; controlNameColumn: string; detailsNameColumn: string; legalNameColumn: string; lastRunAt?: string | null; lastError?: string | null; completionStatus?: "completed" | "review" | null; completedAt?: string | null; failures?: AutomationFailure[] };
+type Preview = { headers: string[]; samples: Record<string, string>[]; total: number; eligible?: number; missing?: number; ambiguous?: number; alreadyCalled?: number; excluded?: number; pendingMarkings?: number; monthSheet?: string; issues?: { row: number; cnpj: string; reason: string }[] };
 type ApiError = { message?: string | string[] };
 const apiError = (data: ApiError, fallback: string) => Array.isArray(data.message) ? data.message.join(" ") : data.message || fallback;
 const blank = (): Rule => ({ name: "", spreadsheetId: "", range: "A1:Z201", phoneColumn: "Telefone", mappings: [], messageTemplate: "", sendMessage: false, active: false, intervalMinutes: 60, sendPace: "5-10", callRound: 1, mode: "contacts", detailsRange: "", controlCnpjColumn: "CNPJ", detailsCnpjColumn: "CNPJ", calledColumn: "Chamado", calledValue: "Nós chamamos", controlNameColumn: "EMPRESA", detailsNameColumn: "Cliente", legalNameColumn: "Razão Social planilha Clientes Compufour" });
@@ -14,6 +16,18 @@ const targets = [["firstName", "Primeiro nome"], ["lastName", "Sobrenome"], ["na
 const spreadsheetIdFrom = (value: string) => value.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)?.[1] || value.trim();
 const spreadsheetLink = (value: string) => `https://docs.google.com/spreadsheets/d/${spreadsheetIdFrom(value)}/edit`;
 const monthSheet = () => { const now = new Date(); const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "numeric" }).formatToParts(now); const year = Number(parts.find(part => part.type === "year")?.value); const month = Number(parts.find(part => part.type === "month")?.value); const names = ["Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]; return `${names[(month + 10) % 12]}${month === 1 ? year - 1 : year}`; };
+const failureContact = (rule: Rule, item: AutomationFailure) => {
+  if (rule.mode === "cnpjCall") return `CNPJ ${item.phone}`;
+  const suffix = item.phone.split(":").at(-1) || item.phone;
+  const number = item.contactPhone || suffix.replace(/@.*$/, "");
+  return `${item.contactName?.trim() || "Contato sem nome"}${number ? ` · ${number}` : ""}`;
+};
+const failureStage = (rule: Rule, item: AutomationFailure) => {
+  if (rule.mode !== "monthlyCall") return "";
+  const parts = item.phone.split(":");
+  const round = parts.length === 3 ? Number(parts[1]) : 1;
+  return `${parts[0]} · ${round}ª chamada`;
+};
 
 function ManualMappingEditor({ editing, preview, change }: { editing: Rule; preview: Preview | null; change: (patch: Partial<Rule>) => void }) {
   const update = (index: number, patch: Partial<Mapping>) => change({ mappings: editing.mappings.map((item, i) => i === index ? { ...item, ...patch } : item) });
@@ -32,7 +46,7 @@ function ManualMappingEditor({ editing, preview, change }: { editing: Rule; prev
   </section>;
 }
 
-export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token: string }) {
+function SheetAutomationSettings({ baseUrl, token }: { baseUrl: string; token: string }) {
   const endpoint = `${baseUrl.replace(/\/$/, "")}/api/operator-auth/automations/sheets`;
   const [rules, setRules] = useState<Rule[]>([]);
   const [serviceEmail, setServiceEmail] = useState<string | null>(null);
@@ -42,24 +56,42 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const seenCompletions = useRef<Map<string, string> | null>(null);
+  const loadingRules = useRef(false);
   const headers = { "Content-Type": "application/json", "X-Atende-Token": token };
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (loadingRules.current) return;
+    loadingRules.current = true;
+    if (!silent) setLoading(true);
     try {
       const response = await fetch(endpoint, { headers: { "X-Atende-Token": token } });
       const data = await response.json() as ApiError & { rules?: Rule[]; serviceAccountEmail?: string | null; connectionType?: "appsScript" | "serviceAccount" | null };
       if (!response.ok) throw new Error(apiError(data, "Não foi possível carregar as automações."));
-      setRules(Array.isArray(data.rules) ? data.rules : []);
+      const nextRules = Array.isArray(data.rules) ? data.rules : [];
+      const completions = new Map(nextRules.filter(rule => rule.completedAt && rule.completionStatus)
+        .map(rule => [rule.id || "", `${rule.completedAt}:${rule.completionStatus}`]));
+      if (seenCompletions.current) for (const rule of nextRules) {
+        if (!rule.id || !rule.completedAt || !rule.completionStatus ||
+          seenCompletions.current.get(rule.id) === completions.get(rule.id)) continue;
+        setFeedback(`“${rule.name}”: ${rule.completionStatus === "completed" ? "chamada concluída; a automação parou automaticamente." : "chamada encerrada; há itens para revisar. A automação parou automaticamente."}`);
+      }
+      seenCompletions.current = completions;
+      setRules(nextRules);
       setServiceEmail(data.serviceAccountEmail || null);
       setConnectionType(data.connectionType || null);
     } catch (error) { setFeedback(error instanceof Error ? error.message : "Não foi possível carregar as automações."); }
-    finally { setLoading(false); }
+    finally { loadingRules.current = false; if (!silent) setLoading(false); }
   }, [endpoint, token]);
   useEffect(() => {
     let active = true;
     queueMicrotask(() => { if (active) void load(); });
     return () => { active = false; };
   }, [load]);
+  useEffect(() => {
+    const interval = rules.some(rule => rule.mode === "monthlyCall" && rule.active) ? 15_000 : 60_000;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void load(true); }, interval);
+    return () => window.clearInterval(timer);
+  }, [load, rules]);
   function change(patch: Partial<Rule>) { setEditing(current => current ? { ...current, ...patch } : current); setPreview(null); }
   function selectMode(mode: Rule["mode"]) {
     change(mode === "monthlyCall" ? { mode, spreadsheetId: monthlySpreadsheetUrl, range: "MES_ANTERIOR!A1:M1001", detailsRange: "Clientes!A1:F1001",
@@ -77,7 +109,7 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
       const data = await response.json() as ApiError & Preview;
       if (!response.ok) throw new Error(apiError(data, "Não foi possível ler a planilha."));
       setPreview(data);
-      setFeedback(editing.mode === "monthlyCall" ? `${data.monthSheet}: ${data.eligible || 0} contato(s) apto(s) para uma mensagem; ${data.missing || 0} linha(s) sem correspondência; ${data.ambiguous || 0} ambígua(s). A prévia não envia mensagens.` : editing.mode === "cnpjCall" ? `${data.eligible || 0} cliente(s) apto(s); ${data.missing || 0} sem correspondência; ${data.ambiguous || 0} ambíguo(s); ${data.alreadyCalled || 0} já marcado(s). A prévia não envia mensagens.` : `${data.total} linha(s) encontradas. A prévia não altera contatos nem envia mensagens.`);
+      setFeedback(editing.mode === "monthlyCall" ? `${data.monthSheet}: ${data.eligible || 0} contato(s) apto(s) com CNPJ vinculado e etiqueta Arquivos Mensais; ${data.excluded || 0} linha(s) sem a etiqueta; ${data.missing || 0} linha(s) sem correspondência; ${data.ambiguous || 0} ambígua(s). A prévia não envia mensagens.` : editing.mode === "cnpjCall" ? `${data.eligible || 0} cliente(s) apto(s); ${data.missing || 0} sem correspondência; ${data.ambiguous || 0} ambíguo(s); ${data.alreadyCalled || 0} já marcado(s). A prévia não envia mensagens.` : `${data.total} linha(s) encontradas. A prévia não altera contatos nem envia mensagens.`);
     } catch (error) { setFeedback(error instanceof Error ? error.message : "Não foi possível ler a planilha."); }
     finally { setBusy(false); }
   }
@@ -159,14 +191,22 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
     <div className="settings-section-heading"><div><h2>Automações</h2><p>Crie um mapeamento manual de planilhas para contatos ou configure a chamada mensal.</p></div><button className="solid-button" onClick={() => { setEditing(blank()); setPreview(null); }}><Plus size={17}/>Nova automação</button></div>
     <section className="settings-card automation-connection"><div><h3>Google Sheets privado</h3><p>{connectionType === "appsScript" ? <>Ponte Apps Script configurada no servidor. A planilha continua privada; confira a prévia antes de iniciar.</> : serviceEmail ? <>Conectado pela conta de serviço <b>{serviceEmail}</b>.</> : <>Configure a ponte Apps Script da planilha e informe <code>GOOGLE_APPS_SCRIPT_URL</code> e <code>GOOGLE_APPS_SCRIPT_SECRET</code> no servidor. Veja <code>docs/AUTOMACOES.md</code>.</>}</p></div><span className={connectionType ? "automation-connected" : "automation-pending"}>{connectionType ? <><CheckCircle2 size={16}/>Configurado</> : <><CircleAlert size={16}/>Configuração pendente</>}</span></section>
     <div className="automation-steps"><span>1. Salvar rascunho <ArrowRight size={14}/></span><span>2. Conectar planilha <ArrowRight size={14}/></span><span>3. Conferir prévia <ArrowRight size={14}/></span><span>4. Iniciar automação</span></div>
+    {feedback && <p className="settings-feedback" role="status">{feedback}</p>}
     {loading ? <p>Carregando automações…</p> : <div className="automation-list">
       {rules.map(rule => <article className="settings-card automation-rule" key={rule.id}>
-        <header><div><h3>{rule.name}</h3><p>{rule.active ? `Ativa · a cada ${rule.intervalMinutes} minutos` : "Pausada"} · {rule.mode === "monthlyCall" ? `${rule.callRound || 1}ª chamada · uma mensagem por contato` : rule.sendMessage ? "Mensagem automática habilitada" : "Somente atualiza contatos"}</p></div><span className={rule.active ? "automation-connected" : "automation-pending"}>{rule.active ? "Ativa" : "Pausada"}</span></header>
+        <header><div><h3>{rule.name}</h3><p>{rule.active ? `Ativa · a cada ${rule.intervalMinutes} minutos` : rule.completionStatus === "completed" ? "Concluída" : rule.completionStatus === "review" ? "Encerrada · revisar" : "Pausada"} · {rule.mode === "monthlyCall" ? `${rule.callRound || 1}ª chamada · uma mensagem por contato` : rule.sendMessage ? "Mensagem automática habilitada" : "Somente atualiza contatos"}</p></div><span className={rule.active || rule.completionStatus === "completed" ? "automation-connected" : "automation-pending"}>{rule.active ? "Ativa" : rule.completionStatus === "completed" ? "Concluída" : rule.completionStatus === "review" ? "Revisar" : "Pausada"}</span></header>
         <p className="automation-rule-meta"><b>Planilha em uso:</b> <a href={spreadsheetLink(rule.spreadsheetId)} target="_blank" rel="noopener noreferrer">Abrir no Google Sheets</a> · ID: <code>{spreadsheetIdFrom(rule.spreadsheetId)}</code></p>
         <p className="automation-rule-meta"><b>Aba e intervalo:</b> {rule.mode === "monthlyCall" ? `${monthSheet()} · ${rule.range.replace(/^MES_ANTERIOR!/, `${monthSheet()}!`)} · ${rule.detailsRange}` : rule.range} · {rule.sendMessage ? `Envios espaçados aleatoriamente em ${rule.sendPace || "5-10"} segundos · ` : ""}Última execução: {rule.lastRunAt ? new Date(rule.lastRunAt).toLocaleString("pt-BR") : "ainda não executada"}</p>
+        {rule.mode === "monthlyCall" && rule.completionStatus && <p className={rule.completionStatus === "review" ? "automation-completion automation-completion-review" : "automation-completion"} role="status">
+          {rule.completionStatus === "completed" ? "Chamada concluída: todos os contatos aptos desta etapa foram processados. A automação parou automaticamente." : "Chamada encerrada: não há mais envios pendentes, mas existem itens para revisar. A automação parou automaticamente."}
+          {rule.completedAt ? ` Conclusão: ${new Date(rule.completedAt).toLocaleString("pt-BR")}.` : ""}
+        </p>}
         {rule.lastError && <p className="automation-error">{rule.lastError}</p>}
-        {Boolean(rule.failures?.length) && <div className="automation-failures"><b>Envios que precisam de revisão</b>{rule.failures!.slice(0, 5).map(item => <p key={item.phone}>{item.phone}: {item.error}</p>)}</div>}
-        <footer><button disabled={busy} onClick={() => void toggle(rule)}>{rule.active ? "Pausar automação" : "Iniciar automação"}</button>{rule.mode === "monthlyCall" && !rule.active && rule.callRound < 3 && <button disabled={busy} onClick={() => void advance(rule)}>Preparar {rule.callRound + 1}ª chamada</button>}<button disabled={busy || !connectionType || !rule.active} onClick={() => void run(rule)}><RefreshCw size={15}/>Sincronizar agora</button><button disabled={busy || rule.active} title={rule.active ? "Pause a automação antes de editar" : undefined} onClick={() => { setEditing({ ...rule, mappings: [...rule.mappings] }); setPreview(null); }}>Editar</button><button className="danger" disabled={busy || rule.active} title={rule.active ? "Pause a automação antes de excluir" : undefined} onClick={() => void remove(rule)}><Trash2 size={15}/>Excluir</button></footer>
+        {Boolean(rule.failures?.length) && <div className="automation-failures"><b>Envios e marcações para revisar</b>{rule.failures!.slice(0, 5).map(item => <div className="automation-failure-item" key={item.phone}>
+          <strong>{failureContact(rule, item)}</strong><small>{failureStage(rule, item)}{item.processedAt ? ` · ${new Date(item.processedAt).toLocaleString("pt-BR")}` : ""}</small>
+          <p>{item.error}</p>{item.sheetCheck && <p><b>Conferência da planilha:</b> {item.sheetCheck}</p>}
+        </div>)}</div>}
+        <footer><button disabled={busy} onClick={() => void toggle(rule)}>{rule.active ? "Pausar automação" : "Iniciar automação"}</button>{rule.mode === "monthlyCall" && !rule.active && rule.callRound < 3 && <button disabled={busy} onClick={() => void advance(rule)}>Preparar {rule.callRound + 1}ª chamada</button>}{rule.mode === "monthlyCall" && rule.failures?.some(item => item.status === "sent_pending_sheet") && <button disabled={busy || loading} onClick={() => void load()}><RefreshCw size={15}/>Conferir marcações</button>}<button disabled={busy || !connectionType || !rule.active} onClick={() => void run(rule)}><RefreshCw size={15}/>Sincronizar agora</button><button disabled={busy || rule.active} title={rule.active ? "Pause a automação antes de editar" : undefined} onClick={() => { setEditing({ ...rule, mappings: [...rule.mappings] }); setPreview(null); }}>Editar</button><button className="danger" disabled={busy || rule.active} title={rule.active ? "Pause a automação antes de excluir" : undefined} onClick={() => void remove(rule)}><Trash2 size={15}/>Excluir</button></footer>
       </article>)}
       {!rules.length && <div className="settings-card automation-empty"><h3>Nenhuma automação criada</h3><p>Você pode salvar a regra pausada agora e conectar o Google Sheets depois.</p></div>}
     </div>}
@@ -179,6 +219,7 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
           <label>Link ou ID da planilha<input required value={editing.spreadsheetId} onChange={event => change({ spreadsheetId: event.target.value })} placeholder="https://docs.google.com/spreadsheets/d/…"/></label>
           {editing.spreadsheetId && <p className="form-help">Planilha selecionada: <a href={spreadsheetLink(editing.spreadsheetId)} target="_blank" rel="noopener noreferrer">abrir para conferir</a> · ID: <code>{spreadsheetIdFrom(editing.spreadsheetId)}</code>. Para trocar, cole outro link acima, confira a prévia e salve com a automação pausada.</p>}
           {editing.mode === "monthlyCall" && <p className="form-help"><b>Aba mensal utilizada agora:</b> {monthSheet()} · <code>{editing.range.replace(/^MES_ANTERIOR!/, `${monthSheet()}!`)}</code></p>}
+          {editing.mode === "monthlyCall" && <p className="form-help">Só recebem esta chamada os contatos que tenham o CNPJ em <b>CNPJs vinculados</b> e a etiqueta <b>Arquivos Mensais</b>. Contatos sem a etiqueta ficam excluídos da prévia e do envio.</p>}
           {editing.mode === "monthlyCall" ? <><div className="webhook-form-grid"><label>Aba mensal automática<input readOnly value="Mês anterior (ex.: Setembro2026 em outubro)"/></label><label>Intervalo da aba mensal<input readOnly value={editing.range}/></label></div><label>Intervalo da aba Clientes<input required value={editing.detailsRange} onChange={event => change({ detailsRange: event.target.value })} placeholder="Clientes!A1:F1001"/></label><div className="webhook-form-grid"><label>Empresa na aba mensal<input required value={editing.controlNameColumn} onChange={event => change({ controlNameColumn: event.target.value })}/></label><label>CNPJ na aba mensal<input required value={editing.controlCnpjColumn} onChange={event => change({ controlCnpjColumn: event.target.value })}/></label></div><div className="webhook-form-grid"><label>Nome na aba Clientes<input required value={editing.detailsNameColumn} onChange={event => change({ detailsNameColumn: event.target.value })}/></label><label>Razão social na aba Clientes<input required value={editing.legalNameColumn} onChange={event => change({ legalNameColumn: event.target.value })}/></label></div><div className="webhook-form-grid"><label>Coluna de retorno<input required value={editing.calledColumn} onChange={event => change({ calledColumn: event.target.value })}/></label><label>Valor da 1ª chamada<input readOnly value="Nós chamamos"/></label></div><small>1ª chamada: “Nós chamamos”; 2ª: “Nós chamamos 2x”; 3ª: “Nós chamamos 3x”. A etapa só avança manualmente. SPED e Vendas precisam estar vazios; um X isolado em EMPRESA ou Detalhe do chamado bloqueia o contato.</small></> : editing.mode === "cnpjCall" ? <><div className="webhook-form-grid"><label>Aba de controle (intervalo)<input required value={editing.range} onChange={event => change({ range: event.target.value })} placeholder="Controle!A1:H201"/></label><label>Aba com dados do cliente (intervalo)<input required value={editing.detailsRange} onChange={event => change({ detailsRange: event.target.value })} placeholder="Clientes!A1:D201"/></label></div><div className="webhook-form-grid"><label>Coluna CNPJ do controle<input required value={editing.controlCnpjColumn} onChange={event => change({ controlCnpjColumn: event.target.value })}/></label><label>Coluna de retorno<input required value={editing.calledColumn} onChange={event => change({ calledColumn: event.target.value })}/></label></div><small>Apenas linhas com “Chamado” vazio serão consideradas. O contato precisa existir e ter o CNPJ no campo Documento ou em um campo personalizado chamado CNPJ. Não cria contatos.</small></> : <><div className="webhook-form-grid"><label>Intervalo com cabeçalho na primeira linha<input required value={editing.range} onChange={event => change({ range: event.target.value })} placeholder="Página1!A1:Z201"/></label><label>Coluna do telefone<input required value={editing.phoneColumn} onChange={event => change({ phoneColumn: event.target.value })} placeholder="Telefone"/></label></div><small>O telefone identifica o contato existente. A sincronização não apaga contatos ausentes na planilha.</small></>}
           {editing.mode === "cnpjCall" && <div className="webhook-form-grid"><label>CNPJ na aba de dados<input required value={editing.detailsCnpjColumn} onChange={event => change({ detailsCnpjColumn: event.target.value })}/></label><label>Valor após envio<input required value={editing.calledValue} onChange={event => change({ calledValue: event.target.value })}/></label></div>}
           {editing.mode === "contacts" && <p className="form-help">Se o telefone da linha ainda não existir, a importação poderá criar um contato. Confira a prévia antes de iniciar.</p>}
@@ -189,6 +230,16 @@ export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token:
         <section><h4>Execução</h4><p className="form-help">Salvar mantém a automação pausada. Depois de conectar a planilha, use Iniciar automação na lista.</p><label>Frequência de conferência da planilha<select value={editing.intervalMinutes} onChange={event => change({ intervalMinutes: Number(event.target.value) })}>{[[15,"15 minutos"],[30,"30 minutos"],[60,"1 hora"],[180,"3 horas"],[360,"6 horas"],[1440,"1 dia"]].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Intervalo aleatório entre mensagens<select value={editing.sendPace || "5-10"} onChange={event => change({ sendPace: event.target.value as Rule["sendPace"] })}><option value="1-5">1 a 5 segundos</option><option value="5-10">5 a 10 segundos</option></select></label><small>O sistema envia uma mensagem por vez, inclusive ao usar “Sincronizar agora”. O intervalo é sorteado novamente após cada tentativa de envio.</small><button type="button" className="automation-add" disabled={busy || !connectionType} onClick={() => void requestPreview()}>{busy ? <LoaderCircle size={15} className="wa-spin"/> : <Eye size={15}/>}Conferir planilha</button>{preview && <div className="automation-preview"><b>{preview.monthSheet ? `${preview.monthSheet} · ` : ""}{preview.total} linha(s){editing.mode !== "contacts" ? ` · ${preview.eligible || 0} contato(s) apto(s) · ${preview.missing || 0} sem correspondência · ${preview.ambiguous || 0} ambíguo(s)` : ` · Colunas: ${preview.headers.join(", ")}`}</b><div>{preview.samples.map((sample, index) => <p key={index}>{Object.entries(sample).slice(0, 5).map(([key, value]) => `${key}: ${value}`).join(" · ")}</p>)}</div>{Boolean(preview.issues?.length) && <div className="automation-failures"><b>Linhas para revisar</b>{preview.issues!.slice(0, 20).map(issue => <p key={issue.row}>Linha {issue.row} · {issue.cnpj || "Sem CNPJ"}: {issue.reason}</p>)}</div>}</div>}</section>
       </div><footer><button type="button" onClick={() => setEditing(null)}>Cancelar</button><button className="solid-button" disabled={busy}><Save size={16}/>{busy ? "Aguarde…" : "Salvar automação"}</button></footer>
     </form></div>}
-    {feedback && <p className="settings-feedback" role="status">{feedback}</p>}
+  </div>;
+}
+
+export function AutomationSettings({ baseUrl, token }: { baseUrl: string; token: string }) {
+  const [tab, setTab] = useState<"sheets" | "robot">("sheets");
+  return <div className="automation-area">
+    <nav className="automation-tabs" aria-label="Tipos de automação">
+      <button type="button" className={tab === "sheets" ? "active" : ""} aria-current={tab === "sheets" ? "page" : undefined} onClick={() => setTab("sheets")}>Planilhas</button>
+      <button type="button" className={tab === "robot" ? "active" : ""} aria-current={tab === "robot" ? "page" : undefined} onClick={() => setTab("robot")}>Robô</button>
+    </nav>
+    {tab === "sheets" ? <SheetAutomationSettings baseUrl={baseUrl} token={token}/> : <RobotAutomationSettings baseUrl={baseUrl} token={token}/>}
   </div>;
 }

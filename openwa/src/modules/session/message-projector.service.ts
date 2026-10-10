@@ -39,6 +39,7 @@ import {
 } from '../message/message-status.util';
 import { DiscordUnassignedNotifier } from './discord-unassigned-notifier.service';
 import { OutOfHoursReplyService } from './out-of-hours-reply.service';
+import { RobotAutomationService } from '../operator-auth/robot-automation.service';
 
 /**
  * Projects engine message events into the `messages` table and out to webhooks/WebSocket.
@@ -127,6 +128,8 @@ export class MessageProjector {
     private readonly discordNotifier?: DiscordUnassignedNotifier,
     @Optional()
     private readonly outOfHoursReply?: OutOfHoursReplyService,
+    @Optional()
+    private readonly robotAutomation?: RobotAutomationService,
   ) {
     this.mutationProjector = new MessageMutationProjector(
       this.messageRepository,
@@ -259,11 +262,22 @@ export class MessageProjector {
       }
     }
     if(outcome.persisted&&!incoming.fromMe)void this.discordNotifier?.notify(id,incoming).catch(err=>this.logger.error('Failed to notify Discord about an unassigned message',String(err)));
-    if(outcome.persisted&&!incoming.fromMe)void this.outOfHoursReply?.reply(id,engine,incoming).catch(err=>this.logger.error('Failed to send the out-of-hours reply',String(err)));
+    let robotConfig: Awaited<ReturnType<RobotAutomationService['configForIncoming']>> = null;
+    if (outcome.persisted && !incoming.fromMe && this.robotAutomation) {
+      try { robotConfig = await this.robotAutomation.configForIncoming(id, incoming); }
+      catch (err) { this.logger.error('Failed to check the Atende robot', String(err)); }
+    }
+    if (robotConfig) {
+      void this.robotAutomation!.reply(id, engine, incoming, robotConfig)
+        .catch(err => this.logger.error('Failed to send the Atende robot reply', String(err)));
+    } else if (outcome.persisted && !incoming.fromMe) {
+      void this.outOfHoursReply?.reply(id, engine, incoming)
+        .catch(err => this.logger.error('Failed to send the out-of-hours reply', String(err)));
+    }
     if(outcome.persisted&&this.contactProfiles&&!incoming.fromMe&&incoming.type==='list_response'){
       void this.contactProfiles.handleFlowListResponse(id,engine,incoming.chatId,incoming.body||'').catch(err=>this.logger.error('Failed to continue an interactive conversation flow',String(err)));
     }
-    this.dispatchInboundMessage(id, finalMessage, outcome);
+    this.dispatchInboundMessage(id, finalMessage, outcome, Boolean(robotConfig));
   }
 
   /**
@@ -335,7 +349,7 @@ export class MessageProjector {
   }
 
   /** Fan an accepted inbound message out: `message:persisted` plugin hook, webhook, websocket emit. */
-  private dispatchInboundMessage(id: string, finalMessage: InboundMessageData, outcome: InboundPersistOutcome): void {
+  private dispatchInboundMessage(id: string, finalMessage: InboundMessageData, outcome: InboundPersistOutcome, robotApplies = false): void {
     const { dbMessage, persisted } = outcome;
     // Fire-and-forget: a plugin handler must never break the receive path. Both engine adapters
     // (wwjs `message` and Baileys `upsert`) converge on this persist, so one emit covers inbound.
@@ -365,7 +379,7 @@ export class MessageProjector {
     void this.webhookService.dispatch(id, 'message.received', finalMessage);
     // Autoreply rules ride the same at-most-once dispatch (the insert oracle above dedupes engine
     // re-fires) and stay fail-open like the webhook: a broken rule must never break the receive path.
-    void this.automationRules?.evaluateInbound(id, finalMessage).catch(() => undefined);
+    if (!robotApplies) void this.automationRules?.evaluateInbound(id, finalMessage).catch(() => undefined);
     // Emit real-time event to WebSocket clients
     this.eventsGateway.emitMessage(id, finalMessage);
   }

@@ -6,7 +6,7 @@ import { Public } from '../auth/decorators/auth.decorators';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { EventsGateway } from '../events/events.gateway';
 import { OperatorAuthService } from './operator-auth.service';
-import { ContactData, emptyContact } from './contact-profile.controller';
+import { ContactData, emptyContact, normalizeContactTag } from './contact-profile.controller';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatSummary, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -31,12 +31,13 @@ export function normalizeImportPhone(value: unknown): string {
 }
 
 function mergeTags(existing: unknown, incoming: string[]) {
-  const tags = Array.isArray(existing) ? existing.filter((tag): tag is string => typeof tag === 'string') : [];
+  const tags = Array.isArray(existing) ? existing.filter((tag): tag is string => typeof tag === 'string').map(normalizeContactTag) : [];
   const seen = new Set(tags.map(tag => tag.trim().toLocaleLowerCase('pt-BR')));
   for (const tag of incoming) {
-    const key = tag.trim().toLocaleLowerCase('pt-BR');
+    const normalized = normalizeContactTag(tag);
+    const key = normalized.toLocaleLowerCase('pt-BR');
     if (key && !seen.has(key) && key !== 'lançar atendimento') {
-      tags.push(tag.trim());
+      tags.push(normalized);
       seen.add(key);
     }
   }

@@ -8,6 +8,7 @@ import type { QuickReply } from "../../quick-replies";
 const emojis = ["😀", "😂", "😍", "🙏", "👍", "🎉", "❤️", "👋"];
 
 type Props = {
+  allowFlows?: boolean;
   flowToggleRef: RefObject<HTMLButtonElement | null>;
   flowMenuOpen: boolean;
   setFlowMenuOpen: Dispatch<SetStateAction<boolean>>;
@@ -43,6 +44,7 @@ type Props = {
 };
 
 export function MessageComposer({
+  allowFlows = true,
   flowToggleRef, flowMenuOpen, setFlowMenuOpen, loadFlows, setEmojiOpen,
   emojiToggleRef, emojiOpen, fileInputRef, sendFiles, flowMenuRef, flows,
   busy, sendFlow, emojiMenuRef, setDraft, recording, recordingPaused,
@@ -53,7 +55,7 @@ export function MessageComposer({
 }: Props) {
   return (
 <footer className="wa-composer">
-  <button
+  {allowFlows && <button
     ref={flowToggleRef}
     className={flowMenuOpen ? "active" : ""}
     onClick={() => {
@@ -65,7 +67,7 @@ export function MessageComposer({
     title="Fluxos de conversa"
   >
     <GitBranch size={23} />
-  </button>
+  </button>}
   <button
     ref={emojiToggleRef}
     onClick={() => {
@@ -93,7 +95,7 @@ export function MessageComposer({
       event.currentTarget.value = "";
     }}
   />
-  {flowMenuOpen && (
+  {allowFlows && flowMenuOpen && (
     <div className="wa-flow-menu" ref={flowMenuRef}>
       <header>
         <GitBranch size={17} />

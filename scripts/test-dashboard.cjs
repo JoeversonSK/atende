@@ -25,6 +25,9 @@ for(const label of ['Atendimentos realizados','Fila de espera','Em atendimento',
 assert.ok(!html.includes('Closed customer'));assert.ok(!html.includes('Excluded group'));
 assert.equal((html.match(/Test analyst/g)||[]).length,3);
 assert.ok(!html.includes('board-footnote'));
+assert.ok(!html.includes('Buscar cliente ou atendente'));
+assert.ok(!html.includes('board-search'));
+assert.ok(html.includes('Exibir dashboard em tela cheia'));
 const timestamp=Date.now()/1000;
 const queueHtml=renderToStaticMarkup(React.createElement(TicketDashboard,{
  chats:[{id:'waiting@c.us',name:'Incoming awaiting reply'},{id:'empty@c.us',name:'No messages'},{id:'outgoing@c.us',name:'Only outgoing'},{id:'answered@c.us',name:'Already answered'},{id:'read@c.us',name:'Read but unanswered'},{id:'assigned@c.us',name:'Assigned incoming'},{id:'closed@c.us',name:'Closed incoming'},{id:'group@g.us',name:'Group incoming'}],
@@ -45,4 +48,4 @@ assert.equal((queueHtml.match(/>Assigned incoming<\/button>/g)||[]).length,1);
 assert.ok(queueHtml.includes('<b>2</b><span>Na fila</span>'));
 assert.ok(queueHtml.includes('<b>1</b><span>Em alerta</span>'));
 assert.ok(queueHtml.indexOf('>Incoming awaiting reply</button>')<queueHtml.indexOf('>Read but unanswered</button>'));
-console.log('PASS: dashboard rendering, timers, missing timestamps, active/closed/group filtering, types, priority and waiting alerts.');
+console.log('PASS: dashboard rendering, no search field, fullscreen, timers, missing timestamps, active/closed/group filtering, types, priority and waiting alerts.');

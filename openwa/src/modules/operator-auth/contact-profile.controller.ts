@@ -9,6 +9,7 @@ import {
   Injectable,
   OnModuleInit,
   Optional,
+  Inject,
   Param,
   Post,
   Put,
@@ -26,6 +27,10 @@ import { normalizeCnpjList } from './contact-cnpj';
 
 const ratingOptions = [1, 2, 3, 4, 5].map(value => '⭐'.repeat(value));
 const completedServiceTag = 'Lançar atendimento';
+export const monthlyFilesTag = 'Arquivos Mensais';
+export const isMonthlyFilesTag = (value: unknown) =>
+  String(value || '').trim().replace(/[\s_-]+/g, '').toLocaleLowerCase('pt-BR') === 'arquivosmensais';
+export const normalizeContactTag = (value: string) => isMonthlyFilesTag(value) ? monthlyFilesTag : value.trim();
 const completedServiceAgents = new Set(['wesley', 'joeverson', 'thiago', 'crislainy', 'gabryel']);
 type Queryable = { query(query: string, parameters?: any[]): Promise<any> };
 type AssignmentOwner = { assignee_id?: unknown; assignee_name?: unknown; updated_at?: unknown };
@@ -51,6 +56,7 @@ export type ContactData = {
   campaigns: string[];
   custom: { id: string; label: string; value: string }[];
 };
+type FlowSheetRunner = {execute(session:string,chat:string,flowId:string,stepId:string,actorId:string,selectedCnpjs?:string[]):Promise<unknown>};
 export const emptyContact = (): ContactData => ({
   name: '',
   phone: '',
@@ -69,15 +75,34 @@ export const emptyContact = (): ContactData => ({
   campaigns: [],
   custom: [],
 });
+
+// WhatsApp can expose the same person as a phone chat and as a private LID chat.
+// Keep CNPJs on the existing phone profile so monthly call history and recipients
+// do not split between two identifiers.
+export async function linkedPhoneCnpjProfile(db: Queryable, session: string, chat: string, ownData?: Partial<ContactData>) {
+  const lid = /^(\d+)@lid$/.exec(chat)?.[1];
+  if (!lid || normalizeCnpjList(ownData?.cnpjs ?? []).length) return null;
+  const [source] = await db.query(
+    `SELECT p.chat_id AS "chatId",p.data,p.revision
+       FROM openwa.lid_mappings m
+       JOIN openwa.contact_profiles p ON p.session_id=$2 AND p.chat_id=m.phone||'@c.us'
+      WHERE m.lid=$1 AND m.phone ~ '^[0-9]{7,15}$'
+        AND COALESCE((p.data->>'directoryHidden')::boolean,false)=false`,
+    [lid, session],
+  );
+  if (!source || (ownData?.phone && String(ownData.phone).replace(/\D/g, '') !== String(source.data?.phone || source.chatId.split('@')[0]).replace(/\D/g, '')))
+    return null;
+  return source as { chatId: string; data: ContactData; revision: number };
+}
 @Injectable()
 export class ContactProfileService implements OnModuleInit {
   private isCompletedServiceTag(tag: unknown) {
     return String(tag || '').localeCompare(completedServiceTag, 'pt-BR', { sensitivity: 'base' }) === 0;
   }
   private sharedTags(data?: Partial<ContactData> | null) {
-    return (Array.isArray(data?.tags) ? data.tags : [])
-      .map(tag => String(tag))
-      .filter(tag => !this.isCompletedServiceTag(tag));
+    return Array.from(new Set((Array.isArray(data?.tags) ? data.tags : [])
+      .map(tag => normalizeContactTag(String(tag)))
+      .filter(tag => !this.isCompletedServiceTag(tag))));
   }
   private isCompletedServiceOwner(owner?: AssignmentOwner | null) {
     const firstName = String(owner?.assignee_name || '')
@@ -94,6 +119,17 @@ export class ContactProfileService implements OnModuleInit {
       'INSERT INTO openwa.contact_operator_tags (session_id,chat_id,operator_id,tag) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
       [session, chat, String(owner?.assignee_id), completedServiceTag],
     );
+  }
+  private async recordAssignedCompletion(db: Queryable, session: string, chat: string, owner?: AssignmentOwner | null) {
+    if (!owner?.assignee_id) return;
+    const seconds = owner.updated_at
+      ? Math.max(0, Math.floor((Date.now() - new Date(String(owner.updated_at)).getTime()) / 1000))
+      : 0;
+    await db.query(
+      'INSERT INTO openwa.support_completions (id,session_id,chat_id,assignee_id,assignee_name,duration_seconds) VALUES ($1,$2,$3,$4,$5,$6)',
+      [randomUUID(), session, chat, owner.assignee_id, owner.assignee_name || null, seconds],
+    );
+    await this.markAssignedCompletion(db, session, chat, owner);
   }
   private async dataForOperator(db: Queryable, session: string, chat: string, data: ContactData, operatorId: string) {
     const rows = await db.query(
@@ -211,6 +247,11 @@ export class ContactProfileService implements OnModuleInit {
         delay = Math.max(0, Math.min(3600, Number(step.delaySeconds) || 0));
       if (delay) await new Promise(resolve => setTimeout(resolve, delay * 1000));
       if (type === 'delay') continue;
+      if (type === 'sheet' || type === 'monthly-complete') {
+        if (!step.flowId || !step.id) throw new ConflictException('A etapa de planilha perdeu a referência ao fluxo.');
+        await this.flowSheets.execute(session,chat,step.flowId,step.id,actorId,step.selectedCnpjs);
+        continue;
+      }
       if (type === 'message') {
         if (step.text) await engine.sendTextMessage(chat, step.text);
         continue;
@@ -265,16 +306,7 @@ export class ContactProfileService implements OnModuleInit {
       );
       await db.query('DELETE FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, chat]);
       if (current?.data?.status === 'closed') return;
-      if (owner) {
-        const seconds = owner.updated_at
-          ? Math.max(0, Math.floor((Date.now() - new Date(owner.updated_at).getTime()) / 1000))
-          : 0;
-        await db.query(
-          'INSERT INTO openwa.support_completions (id,session_id,chat_id,assignee_id,assignee_name,duration_seconds) VALUES ($1,$2,$3,$4,$5,$6)',
-          [randomUUID(), session, chat, owner.assignee_id, owner.assignee_name, seconds],
-        );
-      }
-      await this.markAssignedCompletion(db, session, chat, owner);
+      await this.recordAssignedCompletion(db, session, chat, owner);
       const base = { ...(current?.data || emptyContact()) } as ContactData;
       const data = {
         ...base,
@@ -466,16 +498,7 @@ export class ContactProfileService implements OnModuleInit {
           ...current,
           data: await this.dataForOperator(db, session, chat, current.data, user.id),
         };
-      if (owner) {
-        const seconds = owner.updated_at
-          ? Math.max(0, Math.floor((Date.now() - new Date(owner.updated_at).getTime()) / 1000))
-          : 0;
-        await db.query(
-          'INSERT INTO openwa.support_completions (id,session_id,chat_id,assignee_id,assignee_name,duration_seconds) VALUES ($1,$2,$3,$4,$5,$6)',
-          [randomUUID(), session, chat, owner.assignee_id, owner.assignee_name, seconds],
-        );
-      }
-      await this.markAssignedCompletion(db, session, chat, owner);
+      await this.recordAssignedCompletion(db, session, chat, owner);
       const base = { ...(current?.data || emptyContact()) } as ContactData;
       const data = {
         ...base,
@@ -581,7 +604,7 @@ export class ContactProfileService implements OnModuleInit {
     );
     const completed = await this.db.query(
       `WITH finished AS (
-        SELECT assignee_id,assignee_name,duration_seconds,closed_at FROM openwa.support_completions WHERE session_id=$1
+        SELECT assignee_id,assignee_name,duration_seconds,closed_at FROM openwa.support_completions WHERE session_id=$1 AND assignee_id IS NOT NULL
         UNION ALL
         SELECT v.user_id,u.display_name,GREATEST(0,EXTRACT(EPOCH FROM (v.ended_at-v.started_at))::integer),v.ended_at
         FROM openwa.operator_onsite_visits v JOIN openwa.operator_users u ON u.id=v.user_id
@@ -598,6 +621,7 @@ export class ContactProfileService implements OnModuleInit {
     @InjectDataSource('data') private readonly db: DataSource,
     private readonly auth: OperatorAuthService,
     private readonly engines: EngineRegistry,
+    @Inject('FLOW_SHEET_SERVICE') private readonly flowSheets: FlowSheetRunner,
     @Optional() private readonly webhooks?: WebhookService,
   ) {}
   private publish(session: string, event: string, data: Record<string, unknown>) {
@@ -606,6 +630,17 @@ export class ContactProfileService implements OnModuleInit {
   async onModuleInit() {
     await this.db.query(
       'CREATE TABLE IF NOT EXISTS openwa.contact_profiles (session_id varchar(255) NOT NULL,chat_id varchar(255) NOT NULL,data jsonb NOT NULL,revision integer NOT NULL DEFAULT 1,updated_at timestamptz NOT NULL DEFAULT NOW(),PRIMARY KEY(session_id,chat_id))',
+    );
+    await this.db.query(
+      `UPDATE openwa.contact_profiles p SET data=jsonb_set(p.data,'{tags}',(
+        SELECT jsonb_agg(DISTINCT CASE WHEN LOWER(REGEXP_REPLACE(BTRIM(tag),'[[:space:]_-]+','','g'))='arquivosmensais'
+          THEN $1 ELSE tag END)
+        FROM jsonb_array_elements_text(p.data->'tags') AS entry(tag)
+      ),true),revision=revision+1,updated_at=NOW()
+      WHERE jsonb_typeof(p.data->'tags')='array' AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(p.data->'tags') AS entry(tag)
+        WHERE LOWER(REGEXP_REPLACE(BTRIM(tag),'[[:space:]_-]+','','g'))='arquivosmensais' AND tag<>$1
+      )`, [monthlyFilesTag],
     );
     await this.ensureCompletions();
     await this.db.query(
@@ -674,8 +709,14 @@ export class ContactProfileService implements OnModuleInit {
       'SELECT data,revision FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',
       [session, chat],
     );
-    if (!row) return { data: emptyContact(), revision: 0 };
-    return { ...row, data: await this.dataForOperator(this.db, session, chat, row.data, user.id) };
+    const ownData = row?.data || emptyContact();
+    const source = await linkedPhoneCnpjProfile(this.db, session, chat, ownData);
+    const data = source ? { ...ownData, cnpjs: normalizeCnpjList(source.data.cnpjs ?? []) } : ownData;
+    return {
+      data: await this.dataForOperator(this.db, session, chat, data, user.id),
+      revision: row?.revision || 0,
+      ...(source ? { cnpjSourceRevision: source.revision } : {}),
+    };
   }
   async hideFromDirectory(token: string, session: string, chat: string) {
     await this.auth.requirePermission(token, 'canAssign');
@@ -707,7 +748,7 @@ export class ContactProfileService implements OnModuleInit {
     );
     return Array.from(
       new Set([
-        ...rows.map((row: { tag: string }) => row.tag).filter((tag: string) => !this.isCompletedServiceTag(tag)),
+        ...rows.map((row: { tag: string }) => normalizeContactTag(row.tag)).filter((tag: string) => !this.isCompletedServiceTag(tag)),
         ...operatorRows.map((row: { tag: string }) => row.tag),
       ]),
     ).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -738,7 +779,7 @@ export class ContactProfileService implements OnModuleInit {
   async save(token: string, session: string, chat: string, body: unknown) {
     const user = await this.auth.requirePermission(token, 'canAssign');
     this.identifiers(session, chat);
-    const input = body as { revision: number; data: ContactData };
+    const input = body as { revision: number; data: ContactData; cnpjSourceRevision?: number };
     if (
       !input ||
       !Number.isInteger(input.revision) ||
@@ -789,9 +830,14 @@ export class ContactProfileService implements OnModuleInit {
       throw new BadRequestException('Preencha os títulos, notas e datas.');
     if (new Set(cleaned.notes.map(n => n.id)).size !== cleaned.notes.length)
       throw new BadRequestException('Notas duplicadas.');
+    const [beforeOwn] = chat.endsWith('@lid')
+      ? await this.db.query('SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2', [session, chat])
+      : [];
+    const sourceBefore = await linkedPhoneCnpjProfile(this.db, session, chat, beforeOwn?.data || emptyContact());
     const result = await this.db.transaction(async db => {
       // Serialize initial creation as well as later edits of this contact.
-      await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, chat])]);
+      for (const id of [chat, sourceBefore?.chatId].filter((id): id is string => Boolean(id)).sort())
+        await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify([session, id])]);
       const [current] = await db.query(
         'SELECT data,revision FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',
         [session, chat],
@@ -800,7 +846,28 @@ export class ContactProfileService implements OnModuleInit {
         throw new ConflictException(
           'Outra pessoa atualizou este perfil. Recarregue antes de salvar para não sobrescrever as alterações.',
         );
-      if (d.cnpjs === undefined) cleaned.cnpjs = normalizeCnpjList(current?.data?.cnpjs ?? []);
+      const source = await linkedPhoneCnpjProfile(db, session, chat, current?.data || emptyContact());
+      if (source?.chatId !== sourceBefore?.chatId)
+        throw new ConflictException('A associação do contato mudou. Recarregue antes de salvar.');
+      let cnpjSourceRevision: number | undefined;
+      let cnpjSourceData: ContactData | undefined;
+      if (source) {
+        const existing = normalizeCnpjList(source.data.cnpjs ?? []);
+        const requested = d.cnpjs === undefined ? existing : cleaned.cnpjs || [];
+        if (JSON.stringify(requested) !== JSON.stringify(existing)) {
+          if (input.cnpjSourceRevision !== source.revision)
+            throw new ConflictException('Os CNPJs foram alterados por outra pessoa. Recarregue antes de salvar.');
+          const [updated] = await db.query(
+            `UPDATE openwa.contact_profiles SET data=jsonb_set(data,'{cnpjs}',$3::jsonb,true),revision=revision+1,updated_at=NOW()
+              WHERE session_id=$1 AND chat_id=$2 AND revision=$4 RETURNING revision`,
+            [session, source.chatId, JSON.stringify(requested), source.revision],
+          );
+          if (!updated) throw new ConflictException('Os CNPJs foram alterados. Recarregue antes de salvar.');
+          cnpjSourceRevision = updated.revision;
+          cnpjSourceData = { ...source.data, cnpjs: requested };
+        } else cnpjSourceRevision = source.revision;
+        cleaned.cnpjs = normalizeCnpjList(current?.data?.cnpjs ?? []);
+      } else if (d.cnpjs === undefined) cleaned.cnpjs = normalizeCnpjList(current?.data?.cnpjs ?? []);
       if (
         requestedOwnCompletionTag &&
         this.isCompletedServiceOwner({ assignee_id: user.id, assignee_name: user.displayName })
@@ -819,14 +886,7 @@ export class ContactProfileService implements OnModuleInit {
           'SELECT assignee_id,assignee_name,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2',
           [session, chat],
         );
-        const seconds = owner?.updated_at
-          ? Math.max(0, Math.floor((Date.now() - new Date(owner.updated_at).getTime()) / 1000))
-          : 0;
-        await db.query(
-          'INSERT INTO openwa.support_completions (id,session_id,chat_id,assignee_id,assignee_name,duration_seconds) VALUES ($1,$2,$3,$4,$5,$6)',
-          [randomUUID(), session, chat, owner?.assignee_id || null, owner?.assignee_name || null, seconds],
-        );
-        await this.markAssignedCompletion(db, session, chat, owner);
+        await this.recordAssignedCompletion(db, session, chat, owner);
       }
       if (current?.data?.status === 'closed' && cleaned.status !== 'closed')
         await db.query(
@@ -847,10 +907,16 @@ export class ContactProfileService implements OnModuleInit {
         'INSERT INTO openwa.contact_profiles (session_id,chat_id,data,revision) VALUES ($1,$2,$3,$4) ON CONFLICT(session_id,chat_id) DO UPDATE SET data=EXCLUDED.data,revision=EXCLUDED.revision,updated_at=NOW() RETURNING data,revision',
         [session, chat, JSON.stringify(cleaned), input.revision + 1],
       );
-      return { ...row, data: await this.dataForOperator(db, session, chat, row.data, user.id) };
+      const effective = source ? { ...row.data, cnpjs: d.cnpjs === undefined ? normalizeCnpjList(source.data.cnpjs ?? []) : normalizeCnpjList(d.cnpjs) } : row.data;
+      return { ...row, data: await this.dataForOperator(db, session, chat, effective, user.id),
+        ...(source ? { cnpjSourceRevision } : {}), cnpjSourceChatId: cnpjSourceData ? source?.chatId : undefined,
+        cnpjSourceData };
     });
     this.publish(session, 'contact.updated', { chatId: chat, contactProfile: result.data, revision: result.revision, actorId: user.id });
-    return result;
+    if (result.cnpjSourceChatId) this.publish(session, 'contact.updated', { chatId: result.cnpjSourceChatId,
+      contactProfile: result.cnpjSourceData, revision: result.cnpjSourceRevision, actorId: user.id });
+    const { cnpjSourceChatId: _sourceChatId, cnpjSourceData: _sourceData, ...response } = result;
+    return response;
   }
 }
 @Public()

@@ -3,6 +3,7 @@ import { messageTimestamp, reconcileMessages } from "./message-reconciliation";
 export type Chat = {
   id: string;
   name: string;
+  isGroup?: boolean;
   phone?: string;
   avatar?: string;
   last: string;
@@ -11,18 +12,26 @@ export type Chat = {
 };
 
 export type MessageMedia = { data?: string; mimetype: string; filename?: string; omitted?: boolean };
+export type MessageContactCard = { name: string; phone?: string; waid?: string };
 export type Message = {
   id: string;
   waMessageId?: string;
   body: string;
   time: string;
   mine: boolean;
+  senderName?: string;
   type: string;
   media?: MessageMedia;
+  contactCards?: MessageContactCard[];
   quotedMessage?: { id: string; body: string };
   forwarded?: boolean;
   identityIds?: string[];
 };
+
+export type ConversationFilter = "all" | "unread" | "mine" | "groups";
+
+export const isGroupChat = (chat: Pick<Chat, "id" | "isGroup">) =>
+  chat.isGroup === true || chat.id.endsWith("@g.us");
 export type MessageSource = "database" | "history" | "optimistic" | "both";
 export type MessageWithTimestamp = Message & {
   timestamp: number;
@@ -56,6 +65,8 @@ function preview(value: unknown) {
   if (value && typeof value === "object") {
     const message = value as Record<string, unknown>;
     const body = String(message.body || message.text || message.content || "").trim();
+    const cards = parseVCard(body);
+    if (cards.length) return cards.map(card => card.name).join(", ");
     if (body) return body;
     const type = String(message.type || message.messageType || "").toLowerCase();
     const mime = String(message.mimetype || (message.media && typeof message.media === "object"
@@ -72,6 +83,53 @@ function preview(value: unknown) {
   return "Sem mensagens";
 }
 
+function decodeVCardValue(value: string): string {
+  return value
+    .replace(/\\n/gi, "\n")
+    .replace(/\\([\\,;:])/g, "$1")
+    .trim();
+}
+
+function unfoldVCard(value: string): string[] {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n[ \t]/g, "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+/** Extract only the user-facing fields from a WhatsApp shared-contact vCard. */
+export function parseVCard(value: unknown): MessageContactCard[] {
+  const raw = typeof value === "string" ? value : "";
+  if (!/BEGIN:VCARD/i.test(raw) || !/END:VCARD/i.test(raw)) return [];
+  const blocks = [...raw.matchAll(/BEGIN:VCARD[\s\S]*?END:VCARD/gi)].map(match => match[0]);
+  return blocks.map(block => {
+    const lines = unfoldVCard(block);
+    const field = (name: string) => lines.find(line => new RegExp(`^${name}(?:;[^:]*)?:`, "i").test(line));
+    const fn = field("FN");
+    const n = field("N");
+    const nameValue = decodeVCardValue(fn?.slice(fn.indexOf(":") + 1) || "");
+    const nameParts = decodeVCardValue(n?.slice(n.indexOf(":") + 1) || "").split(";").filter(Boolean);
+    const name = nameValue || nameParts.reverse().join(" ") || "Contato";
+    const phoneLine = lines.find(line => /^TEL(?:;[^:]*)?:/i.test(line));
+    const phone = phoneLine ? decodeVCardValue(phoneLine.slice(phoneLine.indexOf(":") + 1)) : "";
+    const waidMatch = phoneLine?.match(/(?:^|;)waid=([^;:]+)/i);
+    const waid = waidMatch ? decodeVCardValue(waidMatch[1]) : "";
+    return phone
+      ? { name, phone, ...(waid ? { waid } : {}) }
+      : waid ? { name, waid } : { name };
+  }).filter(card => card.name || card.waid);
+}
+
+export function messageDisplayText(message: Pick<Message, "body" | "contactCards">): string {
+  if (message.contactCards?.length)
+    return message.contactCards.map(card => card.name).join(", ");
+  const cards = parseVCard(message.body);
+  return cards.length ? cards.map(card => card.name).join(", ") : message.body;
+}
+
 export function toChat(value: Record<string, unknown>): Chat {
   const id = String(value.id || value.chatId || value.remoteJid || "");
   const stamp = value.timestamp || value.lastMessageAt;
@@ -83,6 +141,7 @@ export function toChat(value: Record<string, unknown>): Chat {
         hasMedia: value.lastMessageHasMedia };
   return {
     id,
+    isGroup: value.isGroup === true || value.kind === "group" || id.endsWith("@g.us"),
     name: String(value.name || value.pushName || value.contactName || value.phone || id.replace(/@.*/, "")),
     last: preview(lastMessage),
     time: date && !Number.isNaN(date.valueOf())
@@ -99,6 +158,14 @@ export function serializedMessageId(value: unknown): string {
 }
 
 export function messageIdentityIds(id: string): string[] {
+  const group = id.match(/^(true|false)_([^_]+@g\.us)_(.+)$/i);
+  if (group) {
+    // Em grupos, o trecho final pode ser o JID do participante. Ele se repete
+    // em mensagens diferentes e nunca deve ser usado sozinho como identidade.
+    const messageId = group[3].match(/^(.+)_([^_]+@(?:c\.us|lid|s\.whatsapp\.net))$/i)?.[1] || group[3];
+    const canonical = `${group[1].toLowerCase()}_${group[2]}_${messageId}`;
+    return canonical === id ? [id] : [id, canonical];
+  }
   const serialized = id.match(/^(true|false)_.+_([^_]+)$/i);
   return serialized ? [id, `${serialized[1].toLowerCase()}_${serialized[2]}`] : [id];
 }
@@ -136,17 +203,28 @@ export function toMessage(value: Record<string, unknown>, source: "database" | "
   const rawIds = [value.waMessageId, value.messageId, value.id].map(serializedMessageId).filter(Boolean);
   const id = rawIds[0] || eventId();
   const identityIds = [...new Set(rawIds.flatMap(messageIdentityIds))];
+  const body = String(value.body || value.text || value.content || fallback);
+  const contact = value.contact && typeof value.contact === "object"
+    ? value.contact as Record<string, unknown> : null;
+  const author = String(value.author || "");
+  const senderName = (value.isGroup === true || String(value.chatId || "").endsWith("@g.us")) &&
+    value.fromMe !== true && String(value.direction || "").toLowerCase() !== "outgoing" && author
+    ? String(contact?.name || contact?.pushName || value.pushName || author.replace(/@.*/, ""))
+    : "";
+  const contactCards = type === "contact" || /BEGIN:VCARD/i.test(body) ? parseVCard(body) : [];
   return {
     id,
     ...(waMessageId ? { waMessageId } : {}),
     identityIds: identityIds.length ? identityIds : [id],
-    body: String(value.body || value.text || value.content || fallback),
+    body,
     mine: Boolean(value.fromMe) || String(value.direction).toLowerCase() === "outgoing",
+    ...(senderName ? { senderName } : {}),
     time: messageDateTime(date),
     timestamp,
     ...(source === "history" && timestamp ? { historyTimestamp: timestamp } : {}),
     type,
     media,
+    ...(contactCards.length ? { contactCards } : {}),
     ...(quotedId ? { quotedMessage: { id: quotedId, body: String(quotedValue?.body || "") } } : {}),
     ...(value.forwarded === true || value.isForwarded === true || metadata?.forwarded === true ? { forwarded: true } : {}),
     source,

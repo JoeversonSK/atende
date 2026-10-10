@@ -1,6 +1,13 @@
 import { ContactImportService, normalizeImportPhone } from './contact-import.controller';
+import { isMonthlyFilesTag, normalizeContactTag } from './contact-profile.controller';
 
 describe('contact spreadsheet import', () => {
+  it('apresenta a etiqueta mensal antiga com o nome padronizado', () => {
+    expect(isMonthlyFilesTag('arquivosmensais')).toBe(true);
+    expect(isMonthlyFilesTag('Arquivos Mensais')).toBe(true);
+    expect(normalizeContactTag('arquivosmensais')).toBe('Arquivos Mensais');
+    expect(normalizeContactTag('Outra etiqueta')).toBe('Outra etiqueta');
+  });
   it('normalizes Brazilian local numbers without changing full international numbers', () => {
     expect(normalizeImportPhone('(11) 99999-9999')).toBe('5511999999999');
     expect(normalizeImportPhone('+55 11 99999-9999')).toBe('5511999999999');

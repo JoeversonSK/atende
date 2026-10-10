@@ -33,6 +33,7 @@ yarn-error.log*
 # Local secrets. Keep only the safe template in Git.
 .env*
 !.env.example
+!.env.dev.example
 
 # vercel
 .vercel

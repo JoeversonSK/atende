@@ -3,11 +3,11 @@
 import type { RefObject } from "react";
 import { CheckCheck, Forward, Reply } from "lucide-react";
 import type { ApiConfig } from "../../atende-api";
-import type { Chat, Message } from "../../conversation-model";
-import { MessageAttachment, MessageText } from "./message-content";
+import { isGroupChat, messageDisplayText, type Chat, type Message, type MessageContactCard } from "../../conversation-model";
+import { MessageAttachment, MessageContactCards, MessageText } from "./message-content";
 
 export function ConversationThread({
-  selected, messages, loading, config, areaRef, bottomRef, keepAtBottomRef, onReply, onForward,
+  selected, messages, loading, config, areaRef, bottomRef, keepAtBottomRef, onReply, onForward, onOpenContact,
 }: {
   selected: Chat;
   messages: Message[];
@@ -18,6 +18,7 @@ export function ConversationThread({
   keepAtBottomRef: RefObject<boolean>;
   onReply: (message: Message) => void;
   onForward: (message: Message) => void;
+  onOpenContact?: (card: MessageContactCard) => void;
 }) {
   return <div ref={areaRef} className="wa-message-area" onScroll={event => {
     const area = event.currentTarget;
@@ -34,15 +35,18 @@ export function ConversationThread({
         return <div key={message.id} id={`wa-message-${message.id}`}
           className={`wa-message ${message.mine ? "mine" : ""}`}>
           <article>
+            {isGroupChat(selected) && message.senderName && !message.mine &&
+              <strong className="wa-message-author">{message.senderName}</strong>}
             {message.forwarded && <span className="wa-forwarded-label"><Reply size={13} />Encaminhada</span>}
             {message.quotedMessage && <button type="button" className="wa-quoted-message"
               onClick={() => quotedOriginal && document.getElementById(`wa-message-${quotedOriginal.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
               title={quotedOriginal ? "Ir para a mensagem original" : undefined}>
               <b>{quotedOriginal ? quotedOriginal.mine ? "Você" : selected.name : "Mensagem respondida"}</b>
-              <span>{quotedOriginal?.body || message.quotedMessage.body || "Mensagem original"}</span>
+              <span>{quotedOriginal ? messageDisplayText(quotedOriginal) : message.quotedMessage.body || "Mensagem original"}</span>
             </button>}
             <MessageAttachment message={message} config={config} chatId={selected.id} />
-            {message.body && !(hasAttachment && ["Imagem", "Vídeo", "Áudio", "Mensagem de voz", "Figurinha", "Documento"].includes(message.body)) &&
+            {message.contactCards?.length ? <MessageContactCards cards={message.contactCards} onOpenContact={onOpenContact} /> : null}
+            {message.body && !message.contactCards?.length && !(hasAttachment && ["Imagem", "Vídeo", "Áudio", "Mensagem de voz", "Figurinha", "Documento"].includes(message.body)) &&
               <MessageText text={message.body} />}
             <footer>
               {message.waMessageId && <button type="button" className="wa-message-reply"

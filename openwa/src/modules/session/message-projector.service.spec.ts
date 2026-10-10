@@ -12,6 +12,8 @@ import { HookManager } from '../../core/hooks';
 import { StatusStoreService } from '../status-store/status-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { AutomationRulesService } from '../automation/automation-rules.service';
+import { RobotAutomationService } from '../operator-auth/robot-automation.service';
+import { OutOfHoursReplyService } from './out-of-hours-reply.service';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import type { IncomingMessage, IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 
@@ -297,6 +299,8 @@ describe('MessageProjector (inbound projection)', () => {
   let lidResolver: { resolveSenderPhone: jest.Mock };
   let chatMediaArchive: { archive: jest.Mock };
   let automationRules: { evaluateInbound: jest.Mock };
+  let robotAutomation: { configForIncoming: jest.Mock; reply: jest.Mock };
+  let outOfHoursReply: { reply: jest.Mock };
 
   const SESSION_ID = 'session-1';
 
@@ -338,6 +342,8 @@ describe('MessageProjector (inbound projection)', () => {
     lidResolver = { resolveSenderPhone: jest.fn().mockResolvedValue(null) };
     chatMediaArchive = { archive: jest.fn().mockResolvedValue(null) };
     automationRules = { evaluateInbound: jest.fn().mockResolvedValue(undefined) };
+    robotAutomation = { configForIncoming: jest.fn().mockResolvedValue(null), reply: jest.fn().mockResolvedValue(true) };
+    outOfHoursReply = { reply: jest.fn().mockResolvedValue(false) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -355,6 +361,8 @@ describe('MessageProjector (inbound projection)', () => {
         { provide: ConfigService, useValue: { get: jest.fn() } },
         { provide: ChatMediaArchiveService, useValue: chatMediaArchive },
         { provide: AutomationRulesService, useValue: automationRules },
+        { provide: RobotAutomationService, useValue: robotAutomation },
+        { provide: OutOfHoursReplyService, useValue: outOfHoursReply },
       ],
     }).compile();
 
@@ -483,6 +491,21 @@ describe('MessageProjector (inbound projection)', () => {
     });
 
     describe('automation rules', () => {
+      it('prioriza o robô ativo e não envia outra resposta automática para a mesma entrada', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        robotAutomation.configForIncoming.mockResolvedValueOnce({ enabled: true, generation: 1, message: 'Olá' });
+
+        projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(robotAutomation.reply).toHaveBeenCalledWith(SESSION_ID, engine,
+          expect.objectContaining({ chatId: '15550001111@c.us' }), expect.objectContaining({ generation: 1 }));
+        expect(outOfHoursReply.reply).not.toHaveBeenCalled();
+        expect(automationRules.evaluateInbound).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessage).toHaveBeenCalled();
+      });
+
       it('hands the dispatched message to the rule evaluator', async () => {
         const engine = makeEngine();
         engines.set(SESSION_ID, engine);

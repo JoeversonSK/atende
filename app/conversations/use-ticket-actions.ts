@@ -2,7 +2,7 @@
 
 import { useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type { ApiConfig } from "../atende-api";
-import type { Chat } from "../conversation-model";
+import { isGroupChat, type Chat } from "../conversation-model";
 import type { SupportOverview } from "../dashboard-model";
 import type { OperatorIdentity } from "../operator-activity";
 import { assignConversation, closeTicket, readAssignment, removeAssignment, type Assignment } from "./ticket-actions";
@@ -31,7 +31,7 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
   const [closingTickets, setClosingTickets] = useState<Set<string>>(() => new Set());
 
   async function loadAssignment(chat: Chat, active = config) {
-    if (!active.apiKey || !active.sessionId) return;
+    if (isGroupChat(chat) || !active.apiKey || !active.sessionId) return;
     try {
       const assignment = await readAssignment(active, chat.id);
       if (assignment !== undefined && selectedRef.current?.id === chat.id) setAssignment(assignment);
@@ -42,6 +42,7 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
 
   async function saveAssignment(targetId?: string) {
     if (!selected || !operator) { setOperatorOpen(true); return; }
+    if (isGroupChat(selected)) return;
     setSavingAssignment(true);
     try {
       const owner = await assignConversation(config, selected.id, operator.displayName, targetId || operator.id);
@@ -67,7 +68,7 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
   }
 
   async function clearAssignment() {
-    if (!selected) return;
+    if (!selected || isGroupChat(selected)) return;
     setSavingAssignment(true);
     try {
       await removeAssignment(config, selected.id);
@@ -86,7 +87,7 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
   }
 
   async function finishTicket() {
-    if (!selected || closingTickets.has(selected.id)) return;
+    if (!selected || isGroupChat(selected) || closingTickets.has(selected.id)) return;
     if (profileDirtyRef.current && !window.confirm("Há alterações não salvas no perfil. Deseja descartá-las e encerrar o atendimento?")) return;
     const chatId = selected.id;
     setClosingTickets(current => new Set(current).add(chatId));

@@ -5,13 +5,13 @@ import { errorMessage, operatorRequest } from "./atende-api";
 import {
   ArrowDown, ArrowUp, AudioLines, CheckCircle2, CircleAlert, Clock3, FileText, GitBranch,
   GripVertical, Image as ImageIcon, ListChecks, MessageSquareText, Pencil, Plus, Save,
-  Trash2, UserCheck, Video, X,
+  Trash2, UserCheck, Video, X, Table2,
 } from "lucide-react";
 
 export type ConversationFlowKind="regular"|"start"|"evaluation";
 export type ConversationFlowStep={
   id:string;
-  type:"message"|"image"|"video"|"audio"|"document"|"poll"|"delay"|"action";
+  type:"message"|"image"|"video"|"audio"|"document"|"poll"|"delay"|"action"|"sheet"|"monthly-complete";
   text?:string;
   delaySeconds?:number;
   data?:string;
@@ -22,6 +22,13 @@ export type ConversationFlowStep={
   options?:string[];
   allowMultipleAnswers?:boolean;
   action?:"assign-current"|"close-ticket";
+  spreadsheetId?:string;
+  sheetRange?:string;
+  lookupColumn?:string;
+  lookupValue?:string;
+  sheetMappings?:{column:string;value:string}[];
+  flowId?:string;
+  selectedCnpjs?:string[];
 };
 export type ConversationFlow={id:string;name:string;description:string;active:boolean;kind:ConversationFlowKind;steps:ConversationFlowStep[];pollOptions:string[]};
 
@@ -30,8 +37,8 @@ const uid=()=>globalThis.crypto?.randomUUID?.()||`bloco-${Date.now()}-${Math.ran
 const messageBlock=():ConversationFlowStep=>({id:uid(),type:"message",text:"",delaySeconds:0});
 const blankFlow=():ConversationFlow=>({id:"",name:"Novo fluxo",description:"",active:true,kind:"regular",steps:[messageBlock()],pollOptions:[]});
 const normalizeFlow=(flow:ConversationFlow):ConversationFlow=>({...flow,steps:(flow.steps||[]).map(step=>({...step,id:step.id||uid(),type:step.type||"message",delaySeconds:Number(step.delaySeconds)||0,options:step.options||[]}))});
-const labels:Record<ConversationFlowStep["type"],string>={message:"Mensagem",image:"Imagem",video:"Vídeo",audio:"Áudio",document:"Documento",poll:"Lista de opções",delay:"Espera",action:"Ação"};
-const icons={message:MessageSquareText,image:ImageIcon,video:Video,audio:AudioLines,document:FileText,poll:ListChecks,delay:Clock3,action:UserCheck};
+const labels:Record<ConversationFlowStep["type"],string>={message:"Mensagem",image:"Imagem",video:"Vídeo",audio:"Áudio",document:"Documento",poll:"Lista de opções",delay:"Espera",action:"Ação",sheet:"Atualizar planilha","monthly-complete":"Finalizar arquivos mensais"};
+const icons={message:MessageSquareText,image:ImageIcon,video:Video,audio:AudioLines,document:FileText,poll:ListChecks,delay:Clock3,action:UserCheck,sheet:Table2,"monthly-complete":Table2};
 
 function validateFlow(flow:ConversationFlow):string{
   if(!flow.name.trim())return "Informe um nome para o fluxo.";
@@ -48,6 +55,10 @@ function validateFlow(flow:ConversationFlow):string{
       if(new Set(options.map(option=>option.toLocaleLowerCase("pt-BR"))).size!==options.length)return `As alternativas da lista do bloco ${position} não podem ser repetidas.`;
     }
     if(step.type==="delay"&&(!Number.isFinite(step.delaySeconds)||Number(step.delaySeconds)<1||Number(step.delaySeconds)>3600))return `A espera do bloco ${position} deve ficar entre 1 e 3600 segundos.`;
+    if(step.type==="sheet"){
+      if(!step.spreadsheetId?.trim()||!step.sheetRange?.trim()||!step.lookupColumn?.trim()||!step.lookupValue?.trim())return `Configure a planilha, a aba e a busca do bloco ${position}.`;
+      if(!(step.sheetMappings||[]).length||(step.sheetMappings||[]).some(mapping=>!mapping.column.trim()))return `Configure pelo menos uma coluna de destino no bloco ${position}.`;
+    }
   }
   return "";
 }
@@ -57,6 +68,8 @@ function newBlock(type:ConversationFlowStep["type"]):ConversationFlowStep{
   if(type==="poll")return {id:uid(),type,question:"Como você avalia?",options:["Opção 1","Opção 2"],allowMultipleAnswers:false,delaySeconds:0};
   if(type==="delay")return {id:uid(),type,delaySeconds:5};
   if(type==="action")return {id:uid(),type,action:"assign-current"};
+  if(type==="sheet")return {id:uid(),type,spreadsheetId:"",sheetRange:"MES_ANTERIOR!A1:AZ1001",lookupColumn:"CNPJ",lookupValue:"{{cnpj}}",sheetMappings:[{column:"Quem gerou",value:"{{atendente}}"}]};
+  if(type==="monthly-complete")return {id:uid(),type};
   return {id:uid(),type,data:"",mimetype:"",filename:"",caption:"",delaySeconds:0};
 }
 
@@ -109,12 +122,15 @@ export function FlowSettings({baseUrl,token}:{baseUrl:string;token:string}){
             <PaletteButton type="document" text="Arquivo" detail="PDF, DOC e outros" add={addBlock}/>
             <PaletteButton type="delay" text="Espera" detail="Intervalo entre blocos" add={addBlock}/>
             <PaletteButton type="action" text="Ação" detail="Atribuir ou encerrar" add={addBlock}/>
+            <PaletteButton type="sheet" text="Atualizar planilha" detail="Buscar linha e preencher colunas" add={addBlock}/>
+            <PaletteButton type="monthly-complete" text="Finalizar arquivos mensais" detail="Marcar SPED e Vendas como gerados" add={addBlock}/>
           </div>}
           <div className="flow-variables-card">
             <b>Campos automáticos</b>
             <code>{"{{atendente}}"}</code><code>{"{{cliente}}"}</code><code>{"{{nome}}"}</code><code>{"{{saudacao}}"}</code>
             <code>{"{{telefone}}"}</code><code>{"{{email}}"}</code><code>{"{{empresa}}"}</code>
             <code>{"{{documento}}"}</code><code>{"{{cpf_cnpj}}"}</code><code>{"{{endereco}}"}</code><code>{"{{etiquetas}}"}</code>
+            <code>{"{{cnpj}}"}</code>
             <code>{"{{status}}"}</code><code>{"{{tipo_atendimento}}"}</code><code>{"{{prioridade}}"}</code>
             <code>{"{{campos_personalizados}}"}</code><code>{"{{data}}"}</code><code>{"{{hora}}"}</code>
             <small>Os campos sem informação cadastrada ficam vazios. Data e hora usam o fuso de Brasília.</small>
@@ -137,6 +153,23 @@ function FlowNode({step,index,total,patch,remove,move,chooseFile,onDragStart,onD
     {isMedia&&<div className="flow-media-editor"><label className="flow-file-picker"><input type="file" accept={accept} onChange={event=>chooseFile(event.target.files?.[0])}/><span className={`flow-node-icon ${step.type}`}><Icon size={22}/></span><b>{step.filename||`Selecionar ${labels[step.type].toLowerCase()}`}</b><small>{step.data?"Arquivo pronto para ser enviado":"Até 8 MB"}</small></label>{step.data&&<button className="flow-clear-file" onClick={()=>patch({data:"",filename:"",mimetype:""})}>Remover arquivo</button>}{step.type!=="audio"&&<textarea rows={2} maxLength={1024} value={step.caption||""} onChange={event=>patch({caption:event.target.value})} placeholder="Legenda opcional"/>}</div>}
     {step.type==="delay"&&<label className="flow-delay-editor"><Clock3 size={20}/><span>Aguardar</span><input type="number" min={1} max={3600} value={step.delaySeconds||1} onChange={event=>patch({delaySeconds:Number(event.target.value)})}/><span>segundos</span></label>}
     {step.type==="action"&&<div className="flow-action-editor"><button className={step.action==="assign-current"?"active":""} onClick={()=>patch({action:"assign-current"})}><UserCheck size={18}/><span><b>Atribuir atendimento</b><small>Responsável será quem disparar o fluxo</small></span></button><button className={step.action==="close-ticket"?"active danger":""} onClick={()=>patch({action:"close-ticket"})}><CheckCircle2 size={18}/><span><b>Encerrar atendimento</b><small>Conclui e remove a atribuição</small></span></button></div>}
-    {!['delay','action'].includes(step.type)&&<label className="flow-node-delay">Esperar antes de enviar <input type="number" min={0} max={3600} value={step.delaySeconds||0} onChange={event=>patch({delaySeconds:Number(event.target.value)})}/> segundos</label>}
+    {step.type==="sheet"&&<div className="flow-sheet-editor">
+      <label>Link ou ID da planilha<input value={step.spreadsheetId||""} onChange={event=>patch({spreadsheetId:event.target.value})} placeholder="https://docs.google.com/spreadsheets/d/…"/></label>
+      <label>Aba e intervalo com cabeçalhos na linha 1<input value={step.sheetRange||""} onChange={event=>patch({sheetRange:event.target.value})} placeholder="MES_ANTERIOR!A1:AZ1001"/></label>
+      <div className="flow-sheet-pair">
+        <label>Coluna para encontrar a linha<input value={step.lookupColumn||""} onChange={event=>patch({lookupColumn:event.target.value})} placeholder="CNPJ"/></label>
+        <label>Valor procurado<input value={step.lookupValue||""} onChange={event=>patch({lookupValue:event.target.value})} placeholder="{{cnpj}}"/></label>
+      </div>
+      <b>Colunas a atualizar</b>
+      {(step.sheetMappings||[]).map((mapping,mappingIndex)=><div className="flow-sheet-pair" key={mappingIndex}>
+        <input aria-label="Coluna de destino" value={mapping.column} onChange={event=>patch({sheetMappings:(step.sheetMappings||[]).map((item,i)=>i===mappingIndex?{...item,column:event.target.value}:item)})} placeholder="Nome da coluna"/>
+        <input aria-label="Valor para escrever" value={mapping.value} onChange={event=>patch({sheetMappings:(step.sheetMappings||[]).map((item,i)=>i===mappingIndex?{...item,value:event.target.value}:item)})} placeholder="{{atendente}}"/>
+        <button type="button" aria-label="Remover coluna" onClick={()=>patch({sheetMappings:(step.sheetMappings||[]).filter((_,i)=>i!==mappingIndex)})}><X size={15}/></button>
+      </div>)}
+      {(step.sheetMappings||[]).length<10&&<button type="button" onClick={()=>patch({sheetMappings:[...(step.sheetMappings||[]),{column:"",value:""}]})}><Plus size={14}/>Adicionar coluna</button>}
+      <small>Também aceita <code>{"{{responsavel}}"}</code> e <code>{"{{custom:Nome do campo}}"}</code>. Zero ou múltiplas linhas interrompem o fluxo sem alterar a planilha. Requer a ponte privada do Google Sheets no servidor.</small>
+    </div>}
+    {step.type==="monthly-complete"&&<div className="flow-sheet-editor"><b>Arquivos mensais</b><small>Usa a planilha configurada em Automações e a aba do mês anterior. Encontra todas as linhas pelos CNPJs vinculados ao contato e preenche apenas células vazias: SPED → Gerado; Vendas → Geradas. Valores já existentes são preservados. Coloque este bloco depois da mensagem de finalização.</small></div>}
+    {!['delay','action','sheet','monthly-complete'].includes(step.type)&&<label className="flow-node-delay">Esperar antes de enviar <input type="number" min={0} max={3600} value={step.delaySeconds||0} onChange={event=>patch({delaySeconds:Number(event.target.value)})}/> segundos</label>}
   </article><div className="flow-connector"><span/></div></>;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ContactRound, Phone, X } from "lucide-react";
 import { request, type ApiConfig } from "../../atende-api";
 import {
   listFrom,
@@ -11,6 +11,30 @@ import {
   type Message,
   type MessageMedia,
 } from "../../conversation-model";
+
+export function MessageContactCards({
+  cards,
+  onOpenContact,
+}: {
+  cards: NonNullable<Message["contactCards"]>;
+  onOpenContact?: (card: NonNullable<Message["contactCards"]>[number]) => void;
+}) {
+  return <div className="wa-contact-cards" aria-label="Contato compartilhado">
+    {cards.map((card, index) => {
+      const content = <>
+        <span className="wa-contact-card-avatar"><ContactRound size={23} /></span>
+        <span className="wa-contact-card-copy"><strong>{card.name}</strong>{card.phone && <small><Phone size={12} />{card.phone}</small>}</span>
+      </>;
+      return (card.phone || card.waid) && onOpenContact
+        ? <button type="button" className="wa-contact-card" key={`${card.name}-${card.phone}-${index}`}
+            onClick={() => onOpenContact(card)} aria-label={`Abrir conversa com ${card.name}`} title="Abrir conversa">
+            {content}
+          </button>
+        : <div className="wa-contact-card" key={`${card.name}-${card.phone || "sem-telefone"}-${index}`}>{content}</div>;
+    })}
+    <small className="wa-contact-card-label">Contato compartilhado</small>
+  </div>;
+}
 
 export function MessageText({ text }: { text: string }) {
   const parts: (string | { url: string })[] = [];

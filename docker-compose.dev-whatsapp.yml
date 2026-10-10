@@ -1,0 +1,10 @@
+# Aplicar somente quando houver um número EXCLUSIVO de testes.
+# A rede adicional permite ao OpenWA de criação conectar ao WhatsApp.
+# Não copie sessões autenticadas da produção para este projeto.
+services:
+  openwa:
+    environment:
+      AUTO_START_SESSIONS: "true"
+    networks:
+      - atende-dev-internal
+      - atende-dev-access

@@ -11,7 +11,7 @@ export type OperatorUser = { id: string; username: string; displayName: string; 
 export type OperationHours = { enabled: boolean; days: { weekday: number; enabled: boolean; intervals: { start: string; end: string }[] }[]; autoReplyEnabled: boolean; autoReplyMessage: string };
 export type ConversationFlowStep = {
   id?:string;
-  type?:'message'|'image'|'video'|'audio'|'document'|'poll'|'delay'|'action';
+  type?:'message'|'image'|'video'|'audio'|'document'|'poll'|'delay'|'action'|'sheet'|'monthly-complete';
   text?:string;
   delaySeconds?:number;
   data?:string;
@@ -22,6 +22,13 @@ export type ConversationFlowStep = {
   options?:string[];
   allowMultipleAnswers?:boolean;
   action?:'assign-current'|'close-ticket';
+  spreadsheetId?:string;
+  sheetRange?:string;
+  lookupColumn?:string;
+  lookupValue?:string;
+  sheetMappings?:{column:string;value:string}[];
+  flowId?:string;
+  selectedCnpjs?:string[];
 };
 export type ConversationFlowInput = { name:string; description?:string; active:boolean; kind:'regular'|'start'|'evaluation'; steps:ConversationFlowStep[]; pollOptions:string[] };
 export type NotificationWebhookInput = { name:string; destinationType:'discord'|'json'; url:string; active:boolean; onlyUnassigned:boolean; includeGroups:boolean; includeText:boolean; includeMedia:boolean; senderName:string; title:string; color:string; fields:string[] };
@@ -239,6 +246,8 @@ export class OperatorAuthService implements OnModuleInit {
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS flows_seeded boolean NOT NULL DEFAULT false');
       await db.query('CREATE TABLE IF NOT EXISTS openwa.quick_replies (id varchar(36) PRIMARY KEY,shortcut varchar(60) NOT NULL UNIQUE,text varchar(10000) NOT NULL,updated_at timestamptz NOT NULL DEFAULT NOW())');
       await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS flow_actions_migrated boolean NOT NULL DEFAULT false');
+      await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS monthly_complete_flow_seeded boolean NOT NULL DEFAULT false');
+      await db.query('ALTER TABLE openwa.operator_settings ADD COLUMN IF NOT EXISTS monthly_complete_flow_finalized boolean NOT NULL DEFAULT false');
       await db.query('CREATE TABLE IF NOT EXISTS openwa.conversation_flows (id varchar(36) PRIMARY KEY, name varchar(100) NOT NULL, description varchar(240) NOT NULL DEFAULT \'\', active boolean NOT NULL DEFAULT true, steps jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT NOW(), updated_at timestamptz NOT NULL DEFAULT NOW())');
       await db.query("ALTER TABLE openwa.conversation_flows ADD COLUMN IF NOT EXISTS kind varchar(16) NOT NULL DEFAULT 'regular', ADD COLUMN IF NOT EXISTS poll_options jsonb NOT NULL DEFAULT '[]'::jsonb");
       const legacyWebhook=process.env.DISCORD_UNASSIGNED_WEBHOOK_URL?.trim();
@@ -256,6 +265,23 @@ export class OperatorAuthService implements OnModuleInit {
       if(migrateActions.length){
         await db.query("UPDATE openwa.conversation_flows SET kind='start',description='Apresenta o atendente e assume a conversa',updated_at=NOW() WHERE LOWER(name)=LOWER('Início do atendimento')");
         await db.query("UPDATE openwa.conversation_flows SET kind='evaluation',description='Envia uma avaliação e encerra o atendimento',poll_options=$1::jsonb,updated_at=NOW() WHERE LOWER(name)=LOWER('Avaliação do atendimento')",[JSON.stringify(['1 - Muito ruim','2 - Ruim','3 - Regular','4 - Bom','5 - Excelente'])]);
+      }
+      const monthlyFlowSeed=await db.query('UPDATE openwa.operator_settings SET monthly_complete_flow_seeded=true WHERE id=1 AND monthly_complete_flow_seeded=false RETURNING id');
+      if(monthlyFlowSeed.length && !(await db.query("SELECT 1 FROM openwa.conversation_flows WHERE LOWER(name)=LOWER('Finalizar arquivos') LIMIT 1")).length){
+        await db.query('INSERT INTO openwa.conversation_flows (id,name,description,active,kind,steps,poll_options) VALUES ($1,$2,$3,true,$4,$5::jsonb,$6::jsonb)',[
+          randomUUID(),'Finalizar arquivos','Envia a confirmação e marca SPED e Vendas na aba mensal','regular',JSON.stringify([
+            {id:'mensagem-finalizacao',type:'message',text:'Geração dos arquivos concluída. Assim que possível, vou encaminhá-los à contabilidade.',delaySeconds:0},
+            {id:'finalizar-arquivos-mensais',type:'monthly-complete'},
+            {id:'encerrar-atendimento',type:'action',action:'close-ticket'},
+          ]),JSON.stringify([]),
+        ]);
+      }
+      const monthlyFlowFinalize=await db.query('UPDATE openwa.operator_settings SET monthly_complete_flow_finalized=true WHERE id=1 AND monthly_complete_flow_finalized=false RETURNING id');
+      if(monthlyFlowFinalize.length){
+        const [flow]=await db.query("SELECT id,steps FROM openwa.conversation_flows WHERE LOWER(name)=LOWER('Finalizar arquivos') LIMIT 1");
+        const steps=Array.isArray(flow?.steps)?flow.steps:[];
+        if(flow&&!steps.some((step:{type?:string;action?:string})=>step.type==='action'&&step.action==='close-ticket'))
+          await db.query('UPDATE openwa.conversation_flows SET steps=$2::jsonb,updated_at=NOW() WHERE id=$1',[flow.id,JSON.stringify([...steps,{id:'encerrar-atendimento',type:'action',action:'close-ticket'}])]);
       }
     }).catch(error => { this.schemaReady=undefined; throw error; });
     return this.schemaReady;
@@ -414,6 +440,22 @@ export class OperatorAuthService implements OnModuleInit {
       }
       if(type==='delay')return {id,type,delaySeconds:Math.max(1,delaySeconds)};
       if(type==='action'&&['assign-current','close-ticket'].includes(String(raw.action)))return {id,type,action:raw.action as 'assign-current'|'close-ticket'};
+      if(type==='monthly-complete')return {id,type};
+      if(type==='sheet'){
+        const link=String(raw.spreadsheetId||'').trim();
+        const spreadsheetId=link.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)?.[1]||link;
+        const sheetRange=String(raw.sheetRange||'').trim();
+        const lookupColumn=String(raw.lookupColumn||'').trim();
+        const lookupValue=String(raw.lookupValue||'').trim();
+        const sheetMappings=(Array.isArray(raw.sheetMappings)?raw.sheetMappings:[]).map(item=>({column:String(item.column||'').trim(),value:String(item.value||'')}));
+        const range=sheetRange.match(/^([^!]{1,80})!([A-Z]+)1:([A-Z]+)(\d{1,4})$/);
+        if(!/^[A-Za-z0-9_-]{20,160}$/.test(spreadsheetId)||!range||Number(range[4])>1001||Number(range[4])<2||
+          !lookupColumn||lookupColumn.length>120||!lookupValue||lookupValue.length>240||
+          !sheetMappings.length||sheetMappings.length>10||sheetMappings.some(item=>!item.column||item.column.length>120||item.value.length>4000)||
+          new Set(sheetMappings.map(item=>item.column)).size!==sheetMappings.length)
+          throw new BadRequestException(`Configure corretamente a planilha do bloco ${index+1}.`);
+        return {id,type,spreadsheetId,sheetRange,lookupColumn,lookupValue,sheetMappings};
+      }
       return null;
     }).filter((step):step is ConversationFlowStep=>Boolean(step));
     const kind=['regular','start','evaluation'].includes(input.kind)?input.kind:'regular';

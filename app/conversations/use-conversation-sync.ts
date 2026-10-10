@@ -61,7 +61,8 @@ export function useConversationSync({
     setSyncWarning(live ? "" : "WhatsApp ainda não sincronizado. Exibindo os dados salvos; novas mensagens e leitura dependem da reconexão.");
     if (live) setStatus("ready");
     if (!live && chatsRef.current.length) data = chatsRef.current.map(chat => ({
-      id: chat.id, name: chat.name, phone: chat.phone, lastMessage: chat.last, unreadCount: chat.unread,
+      id: chat.id, name: chat.name, isGroup: chat.isGroup, phone: chat.phone,
+      lastMessage: chat.last, unreadCount: chat.unread,
     }));
     setOverview(meta);
     const syncOptions = () => ({

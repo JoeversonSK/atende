@@ -1,4 +1,4 @@
-import type { Chat } from "../conversation-model";
+import { isGroupChat, type Chat, type MessageContactCard } from "../conversation-model";
 import type { SupportOverview } from "../dashboard-model";
 
 export type ContactRow = {
@@ -9,6 +9,15 @@ export type ContactRow = {
   tags: string[];
 };
 
+const phoneDigits = (value?: string) => (value || "").replace(/\D/g, "");
+
+/** Localiza um contato pelo telefone de um vCard, aceitando formatos com máscara. */
+export function findContactRowByPhone(rows: ContactRow[], phone?: string): ContactRow | undefined {
+  const wanted = phoneDigits(phone);
+  if (!wanted) return undefined;
+  return rows.find(row => phoneDigits(row.phone || row.id.split("@")[0]) === wanted);
+}
+
 type Profile = SupportOverview["contacts"][number];
 const hasName = (value?: string) => Boolean(value && /[\p{L}]/u.test(value));
 const displayName = (...values: (string | undefined)[]) =>
@@ -17,11 +26,36 @@ const nameKey = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR")
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
+/** Resolve um cartão compartilhado para uma conversa já carregada, sem criar histórico. */
+export function findChatForSharedContact(
+  chats: Chat[],
+  rows: ContactRow[],
+  card: MessageContactCard,
+): Chat | undefined {
+  const phones = [card.waid, card.phone].filter((phone): phone is string => Boolean(phone));
+  const row = phones.map(phone => findContactRowByPhone(rows, phone)).find(Boolean);
+  const byPhone = (row && chats.find(chat => !isGroupChat(chat) && chat.id === row.id)) || chats.find(chat => {
+    if (isGroupChat(chat)) return false;
+    const digits = phoneDigits(chat.phone || chat.id.split("@")[0]);
+    return digits && phones.some(phone => digits === phoneDigits(phone));
+  });
+  if (byPhone) return byPhone;
+
+  const key = nameKey(card.name);
+  if (key.length < 2) return undefined;
+  const named = chats.filter(chat => {
+    if (isGroupChat(chat)) return false;
+    const chatKey = nameKey(chat.name);
+    return chatKey === key || chatKey.startsWith(`${key} `) || chatKey.endsWith(` ${key}`);
+  });
+  return named.length === 1 ? named[0] : undefined;
+}
+
 export function buildContactRows(chats: Chat[], contacts: Profile[]): ContactRow[] {
   const hiddenIds = new Set(contacts.filter(contact => contact.data.directoryHidden).map(contact => contact.chatId));
-  const liveChatIds = new Set(chats.map(chat => chat.id));
+  const liveChatIds = new Set(chats.filter(chat => !isGroupChat(chat)).map(chat => chat.id));
   const rows = new Map<string, ContactRow>(chats
-    .filter(chat => !hiddenIds.has(chat.id))
+    .filter(chat => !isGroupChat(chat) && !hiddenIds.has(chat.id))
     .map(chat => [chat.id, {
       id: chat.id, name: displayName(chat.name), phone: chat.phone, avatar: chat.avatar, tags: [],
     }]));

@@ -1,6 +1,6 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { ApiConfig } from "../atende-api";
-import { eventId, type Chat, type Message, type MessageWithTimestamp } from "../conversation-model";
+import { eventId, isGroupChat, type Chat, type Message, type MessageWithTimestamp } from "../conversation-model";
 import type { SupportOverview } from "../dashboard-model";
 import type { ConversationFlow } from "../flow-settings";
 import type { OperatorIdentity } from "../operator-activity";
@@ -8,7 +8,7 @@ import type { PendingPaste } from "./components/conversation-dialogs";
 import { appendOptimisticText, confirmOptimisticText, discardOptimisticText } from "./conversation-history";
 import { executeConversationFlow } from "./flow-execution";
 import { createFlowTemplate } from "./flow-variables";
-import { deliverMedia, deliverText } from "./message-delivery";
+import { deliverMedia, deliverText, signOutgoingText } from "./message-delivery";
 import type { Assignment } from "./ticket-actions";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
@@ -70,7 +70,7 @@ export function useConversationActions({
     const target = selected;
     const originalText = draft.trim();
     const replyTarget = replyingTo?.waMessageId;
-    const signedText = `*${operator.displayName}:*\n\n${originalText}`;
+    const signedText = signOutgoingText(operator.displayName, originalText);
     const optimisticId = `optimistic-${eventId()}`;
     const optimisticTimestamp = Date.now();
     const pendingList = appendOptimisticText(
@@ -90,7 +90,10 @@ export function useConversationActions({
       );
       historyCacheRef.current.set(target.id, confirmedList);
       if (selectedRef.current?.id === target.id) setMessages(confirmedList);
-      void refreshMessages(target).catch(() => undefined);
+      // A mensagem enviada ao grupo já está confirmada na tela. O evento do
+      // WhatsApp sincroniza o histórico; evitar uma segunda leitura aqui impede
+      // que a conversa extensa pareça recarregar logo após o envio.
+      if (!isGroupChat(target)) void refreshMessages(target).catch(() => undefined);
       void refreshChats().catch(() => undefined);
     } catch (error) {
       const withoutFailed = discardOptimisticText(historyCacheRef.current.get(target.id) || [], optimisticId);
@@ -104,8 +107,12 @@ export function useConversationActions({
     }
   }
 
-  async function sendFlow(flow: ConversationFlow) {
+  async function sendFlow(flow: ConversationFlow, selectedCnpjs?: string[]) {
     if (!selected || busy) return;
+    if (isGroupChat(selected)) {
+      setNotice("Fluxos de atendimento não estão disponíveis para grupos.");
+      return;
+    }
     if (operator?.role !== "admin" && operator?.canSend === false) {
       setNotice("Sua conta não tem permissão para enviar fluxos.");
       return;
@@ -139,7 +146,7 @@ export function useConversationActions({
     setNotice("Enviando o fluxo “" + flow.name + "”…");
     try {
       const result = await executeConversationFlow({
-        config, flow, chatId: target.id, operatorName: operator.displayName, fill,
+        config, flow, chatId: target.id, operatorName: operator.displayName, fill, selectedCnpjs,
         onAssigned: started => {
           setAssignments(current => ({ ...current, [target.id]: started.assignment }));
           setOverview(current => ({

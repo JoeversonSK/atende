@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSyncedChats, fetchChatSnapshot } from "../app/conversations/conversation-sync.ts";
+import { buildSyncedChats, fetchChatSnapshot, filterVisibleChats } from "../app/conversations/conversation-sync.ts";
 import { appendOptimisticText, confirmOptimisticText, discardOptimisticText,
   fetchMessageRecords, reconcileMessageRecords } from "../app/conversations/conversation-history.ts";
 
@@ -41,7 +41,7 @@ test("usa atividade salva quando a lista ao vivo está indisponível", async () 
   }
 });
 
-test("mantém leitura otimista, avatar e perfil sem exibir grupos", () => {
+test("mantém leitura otimista, avatar e perfil e preserva os grupos", () => {
   const chats = buildSyncedChats({
     records: [
       { id: "cliente@c.us", name: "Nome WhatsApp", unreadCount: 3 },
@@ -53,11 +53,33 @@ test("mantém leitura otimista, avatar e perfil sem exibir grupos", () => {
     readVersions: new Map([["cliente@c.us", 1]]),
     pendingReads: new Set(),
   });
-  assert.equal(chats.length, 1);
+  assert.equal(chats.length, 2);
   assert.equal(chats[0].name, "Nome cadastrado");
   assert.equal(chats[0].phone, "5511999999999");
   assert.equal(chats[0].avatar, "/avatar");
   assert.equal(chats[0].unread, 0);
+  assert.equal(chats[1].name, "Grupo");
+  assert.equal(chats[1].isGroup, true);
+  assert.equal(chats[1].unread, 2);
+});
+
+test("separa grupos de Todas, Não lidas e Minhas sem alterar a busca", () => {
+  const chats = [
+    { id: "cliente@c.us", name: "Cliente", unread: 2 },
+    { id: "outro@c.us", name: "Outro", unread: 0 },
+    { id: "equipe@g.us", name: "Equipe", isGroup: true, unread: 3 },
+  ];
+  const tags = new Map([["cliente@c.us", ["VIP"]]]);
+  const assignments = { "cliente@c.us": { assigneeId: "operador" } };
+  const visible = (filter, search = "", tag = "") =>
+    filterVisibleChats(chats, filter, search, tag, tags, assignments, "operador").map(chat => chat.id);
+  assert.deepEqual(visible("all"), ["cliente@c.us", "outro@c.us"]);
+  assert.deepEqual(visible("unread"), ["cliente@c.us"]);
+  assert.deepEqual(visible("mine"), ["cliente@c.us"]);
+  assert.deepEqual(visible("groups"), ["equipe@g.us"]);
+  assert.deepEqual(visible("groups", "equi"), ["equipe@g.us"]);
+  assert.deepEqual(visible("groups", "", "VIP"), ["equipe@g.us"]);
+  assert.deepEqual(visible("all", "", "VIP"), ["cliente@c.us"]);
 });
 
 test("recupera mensagens salvas quando o histórico ao vivo falha", async () => {

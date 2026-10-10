@@ -2,6 +2,10 @@ import { errorMessage, request, type ApiConfig } from "../atende-api";
 
 type SentTextResult = { messageId?: unknown; timestamp?: number; message?: string } | null;
 
+export function signOutgoingText(operatorName: string, text: string): string {
+  return `*${operatorName}:*\n${text.trimStart()}`;
+}
+
 export async function deliverText(
   config: ApiConfig,
   chatId: string,

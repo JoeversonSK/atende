@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deliverMedia, deliverText } from "../app/conversations/message-delivery.ts";
+import { deliverMedia, deliverText, signOutgoingText } from "../app/conversations/message-delivery.ts";
 import { createFlowTemplate } from "../app/conversations/flow-variables.ts";
 
 const config = { baseUrl: "http://atende.test", apiKey: "teste", sessionId: "sessao" };
+
+test("assinatura ocupa uma linha e preserva parágrafos da mensagem", () => {
+  assert.equal(signOutgoingText("Ana", "\nOlá, Maria\n\nTudo bem?"), "*Ana:*\nOlá, Maria\n\nTudo bem?");
+});
 
 test("envia texto citado ao endpoint correto", async () => {
   const originalFetch = globalThis.fetch;

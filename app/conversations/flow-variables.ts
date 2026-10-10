@@ -8,7 +8,20 @@ type FlowProfile = SupportOverview["contacts"][number]["data"] & {
   address?: string;
   tags?: string[];
   custom?: { label?: string; value?: string }[];
+  cnpjs?: string[];
 };
+
+export function linkedFlowCnpjs(profile: FlowProfile | undefined): string[] {
+  const sources = [
+    ...(Array.isArray(profile?.cnpjs) ? profile.cnpjs : []),
+    profile?.document || "",
+    ...(profile?.custom || []).filter(field => field.label?.trim().toLocaleLowerCase("pt-BR") === "cnpj")
+      .map(field => field.value || ""),
+  ];
+  return [...new Set(sources.flatMap(value =>
+    (String(value).match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14}/g) || [])
+      .map(cnpj => cnpj.replace(/\D/g, "")).filter(cnpj => cnpj.length === 14)))];
+}
 
 export function createFlowTemplate(
   operatorName: string,
@@ -44,6 +57,7 @@ export function createFlowTemplate(
     "{{empresa}}": profile?.company || "",
     "{{documento}}": profile?.document || "",
     "{{cpf_cnpj}}": profile?.document || "",
+    "{{cnpj}}": profile?.cnpjs?.[0] || profile?.document || "",
     "{{endereco}}": profile?.address || "",
     "{{etiquetas}}": profile?.tags?.join(", ") || "",
     "{{status}}": profile?.status || "",

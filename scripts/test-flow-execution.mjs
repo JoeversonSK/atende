@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { executeConversationFlow } from "../app/conversations/flow-execution.ts";
+import { linkedFlowCnpjs } from "../app/conversations/flow-variables.ts";
 
 const config = { baseUrl: "http://atende.test", apiKey: "teste", sessionId: "sessao" };
 const flow = (kind, steps) => ({ id: "fluxo", name: "Teste", description: "", active: true, kind, steps, pollOptions: [] });
@@ -29,7 +30,7 @@ test("atribui uma vez, envia mensagem assinada e encerra na ordem dos blocos", a
       onClosed: (data, evaluation) => effects.push(["closed", data.status, evaluation]),
     });
     assert.deepEqual(calls.map(call => call.path.split("/").at(-1)), ["start", "send-text", "close"]);
-    assert.equal(calls[1].body.text, "*Ana:*\n\nOlá, Maria");
+    assert.equal(calls[1].body.text, "*Ana:*\nOlá, Maria");
     assert.deepEqual(effects, [["assigned", "open"], ["closed", "closed", false]]);
     assert.deepEqual(result, { assignedByFlow: true, closedByFlow: true, waitingForAnswer: false, evaluation: false });
   } finally {
@@ -62,8 +63,8 @@ test("enquete grava continuação preenchida e aguarda resposta sem enviar bloco
     });
     assert.equal(calls[1].body.pollMessageId, "enquete-1");
     assert.deepEqual(calls[1].body.expectedOptions, ["Sim", "Não"]);
-    assert.equal(calls[1].body.steps[0].text, "*Ana:*\n\nObrigada, Maria");
-    assert.equal(calls[1].body.steps[1].caption, "*Ana:*\n\nFoto de Maria");
+    assert.equal(calls[1].body.steps[0].text, "*Ana:*\nObrigada, Maria");
+    assert.equal(calls[1].body.steps[1].caption, "*Ana:*\nFoto de Maria");
     assert.equal(result.waitingForAnswer, true);
   } finally {
     globalThis.fetch = originalFetch;
@@ -114,4 +115,65 @@ test("erro no envio interrompe o fluxo antes do próximo bloco", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("bloco de planilha usa a API protegida e interrompe o fluxo se a atualização falhar", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async url => {
+    const path = new URL(url).pathname;
+    calls.push(path);
+    return path.includes("flow-sheet")
+      ? Response.json({ message: "Linha ambígua" }, { status: 409 })
+      : Response.json({ messageId: "mensagem-1" });
+  };
+  try {
+    await assert.rejects(executeConversationFlow({
+      config, chatId: "cliente@c.us", operatorName: "Ana", fill,
+      flow: flow("regular", [
+        { id: "planilha", type: "sheet" },
+        { id: "texto", type: "message", text: "Não enviar" },
+      ]), onAssigned: () => {}, onClosed: () => {},
+    }), /Linha ambígua/);
+    assert.deepEqual(calls, ["/api/operator-auth/contacts/sessao/cliente%40c.us/flow-sheet/fluxo/planilha"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("enquete conserva a referência segura do bloco de planilha na continuação", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });
+    return Response.json({ messageId: "enquete-1" });
+  };
+  try {
+    await executeConversationFlow({
+      config, chatId: "cliente@c.us", operatorName: "Ana", fill,
+      flow: flow("regular", [
+        { id: "enquete", type: "poll", question: "Escolha", options: ["Sim", "Não"] },
+        { id: "planilha", type: "sheet", lookupValue: "{{cliente}}" },
+      ]), onAssigned: () => {}, onClosed: () => {},
+    });
+    assert.equal(calls[1].body.steps[0].flowId, "fluxo");
+    assert.equal(calls[1].body.steps[0].lookupValue, "{{cliente}}");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("consolida CNPJs vinculados e legados sem duplicar", () => {
+  assert.deepEqual(linkedFlowCnpjs({cnpjs:["12.345.678/0001-90","12345678000190"],
+    document:"98.765.432/0001-10",custom:[{label:"CNPJ",value:"11.222.333/0001-44"}]}),
+  ["12345678000190","98765432000110","11222333000144"]);
+});
+
+test("bloco de finalização envia somente os CNPJs escolhidos para a API", async () => {
+  const originalFetch=globalThis.fetch;
+  const calls=[];
+  globalThis.fetch=async (url,init)=>{calls.push({path:new URL(url).pathname,body:JSON.parse(init.body||"{}")});return Response.json({success:true});};
+  try {
+    await executeConversationFlow({config,chatId:"cliente@c.us",operatorName:"Ana",fill,
+      selectedCnpjs:["12345678000190"],flow:flow("regular",[{id:"finalizar",type:"monthly-complete"}]),
+      onAssigned:()=>{},onClosed:()=>{}});
+    assert.deepEqual(calls,[{path:"/api/operator-auth/contacts/sessao/cliente%40c.us/flow-sheet/fluxo/finalizar",
+      body:{selectedCnpjs:["12345678000190"]}}]);
+  } finally {globalThis.fetch=originalFetch;}
 });

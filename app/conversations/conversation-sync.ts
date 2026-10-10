@@ -1,5 +1,5 @@
 import { request, type ApiConfig } from "../atende-api";
-import { listFrom, toChat, type Chat } from "../conversation-model";
+import { isGroupChat, listFrom, toChat, type Chat, type ConversationFilter } from "../conversation-model";
 import type { SupportOverview } from "../dashboard-model";
 
 export type ChatSnapshot = {
@@ -51,11 +51,10 @@ export function buildSyncedChats({
 }): Chat[] {
   const profiles = new Map(overview.contacts.map(profile => [profile.chatId, profile.data]));
   return records
-    .filter(record => record.isGroup !== true &&
-      !/@(g\.us|broadcast|newsletter)$/.test(String(record.id || "")))
+    .filter(record => !/@(broadcast|newsletter)$/.test(String(record.id || "")))
     .map(record => {
       const chat = toChat(record);
-      const profile = profiles.get(chat.id);
+      const profile = isGroupChat(chat) ? undefined : profiles.get(chat.id);
       return {
         ...chat,
         name: profile?.name || chat.name,
@@ -67,6 +66,22 @@ export function buildSyncedChats({
           ? 0 : chat.unread,
       };
     });
+}
+
+export function filterVisibleChats(
+  chats: Chat[], filter: ConversationFilter, search: string, tagFilter: string,
+  tagsByChat: Map<string, string[]>, assignments: Record<string, { assigneeId?: string }>,
+  operatorId?: string,
+): Chat[] {
+  const query = search.toLocaleLowerCase("pt-BR");
+  return chats.filter(chat => {
+    const group = isGroupChat(chat);
+    if (filter === "groups" ? !group : group) return false;
+    if (filter === "unread" && chat.unread <= 0) return false;
+    if (filter === "mine" && assignments[chat.id]?.assigneeId !== operatorId) return false;
+    return (filter === "groups" || !tagFilter || tagsByChat.get(chat.id)?.includes(tagFilter)) &&
+      (chat.name.toLocaleLowerCase("pt-BR").includes(query) || chat.id.includes(search));
+  });
 }
 
 export async function fetchProfilePictures(

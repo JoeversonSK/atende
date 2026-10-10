@@ -3,12 +3,12 @@ import {useCallback,useEffect,useRef,useState} from "react";
 import {Plus,Trash2} from "lucide-react";
 import {errorMessage} from "./atende-api";
 type Data={name:string;phone:string;email:string;company:string;document:string;cnpjs:string[];address:string;status:string;serviceType?:string;priority?:string;notes:{id:string;text:string;author:string;createdAt:string}[];events:{id:string;title:string;date:string}[];tags:string[];sequences:string[];campaigns:string[];custom:{id:string;label:string;value:string}[]};
-type ProfileResult={data:Data;revision:number};
+type ProfileResult={data:Data;revision:number;cnpjSourceRevision?:number};
 const empty:Data={name:"",phone:"",email:"",company:"",document:"",cnpjs:[],address:"",status:"open",serviceType:"remote",priority:"normal",notes:[],events:[],tags:[],sequences:[],campaigns:[],custom:[]};
 export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactName,contactPhone="",canEdit,dirtyRef,onSaved}:{baseUrl:string;apiKey:string;token:string;sessionId:string;chatId:string;contactName:string;contactPhone?:string;canEdit:boolean;dirtyRef:{current:boolean};onSaved?:(data:Data)=>void}){
   const onSavedRef=useRef(onSaved);
   useEffect(()=>{onSavedRef.current=onSaved;},[onSaved]);
-  const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[savingPriority,setSavingPriority]=useState(false),[dirty,setDirty]=useState(false),[autoSaveBlocked,setAutoSaveBlocked]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
+  const [data,setData]=useState<Data>(empty),[revision,setRevision]=useState(0),[cnpjSourceRevision,setCnpjSourceRevision]=useState<number|undefined>(),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[savingPriority,setSavingPriority]=useState(false),[dirty,setDirty]=useState(false),[autoSaveBlocked,setAutoSaveBlocked]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");
   const [note,setNote]=useState(""),[fieldName,setFieldName]=useState(""),[fieldValue,setFieldValue]=useState("");
   const [drafts,setDrafts]=useState({tags:"",sequences:"",campaigns:""});
   const [availableTags,setAvailableTags]=useState<string[]>([]),[tagChoice,setTagChoice]=useState("");
@@ -23,7 +23,7 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
   const apply=useCallback((result:ProfileResult)=>{
     const cleanName=/[\p{L}\p{N}]/u.test(result.data.name||"")?result.data.name:"";
     const fallback=/^[+\d\s()-]+$/.test(contactName)||contactName.includes("@")||contactName==="Contato sem nome"?"":contactName;
-    setData({...empty,...result.data,cnpjs:Array.isArray(result.data.cnpjs)?result.data.cnpjs:[],name:cleanName||(result.revision===0?fallback:""),...(result.revision===0?{phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setDirty(false);
+    setData({...empty,...result.data,cnpjs:Array.isArray(result.data.cnpjs)?result.data.cnpjs:[],name:cleanName||(result.revision===0?fallback:""),...(result.revision===0?{phone:result.data.phone||contactPhone}:{})});setRevision(result.revision);setCnpjSourceRevision(result.cnpjSourceRevision);setDirty(false);
   },[contactName,contactPhone]);
   useEffect(()=>{const abort=new AbortController();fetchProfile(abort.signal).then(apply).catch(e=>{if(e.name!=="AbortError")setError(e.message);}).finally(()=>{if(!abort.signal.aborted)setLoading(false);});return()=>abort.abort();},[fetchProfile,apply]);
   useEffect(()=>{const abort=new AbortController();fetch(`${baseUrl.replace(/\/$/,"")}/api/operator-auth/contacts/${encodeURIComponent(sessionId)}/catalog/tags`,{signal:abort.signal,headers:{"X-Atende-Token":token}}).then(async response=>response.ok?response.json():[]).then(tags=>{if(!abort.signal.aborted)setAvailableTags(Array.isArray(tags)?tags:[]);}).catch(()=>undefined);return()=>abort.abort();},[baseUrl,sessionId,token]);
@@ -38,16 +38,16 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
         const response=await fetch(endpoint,{signal:abort.signal,headers:{"X-Atende-Token":token}});
         if(!response.ok)return;
         const result=await response.json() as ProfileResult;
-        if(!abort.signal.aborted&&!dirtyRef.current&&result.revision!==revision)apply(result);
+        if(!abort.signal.aborted&&!dirtyRef.current&&(result.revision!==revision||result.cnpjSourceRevision!==cnpjSourceRevision))apply(result);
       }catch{/* The next refresh retries without discarding edits. */}
     },8000);
     return()=>{window.clearInterval(timer);abort.abort();};
-  },[endpoint,token,revision,dirty,saving,loading,dirtyRef,apply]);
+  },[endpoint,token,revision,cnpjSourceRevision,dirty,saving,loading,dirtyRef,apply]);
   const save=useCallback(async()=>{
     if(!dirty||saving)return;if(invalidCnpjs){setError("Preencha 14 dígitos em cada CNPJ e remova os repetidos neste contato.");return;}setSaving(true);setAutoSaveBlocked(false);setError("");setNotice("Salvando automaticamente…");
-    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,data})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));apply(result);onSavedRef.current?.(result.data);setNotice("Informações salvas para a equipe.");}
+    try{const response=await fetch(endpoint,{method:"PUT",headers:{"Content-Type":"application/json","X-Atende-Token":token},body:JSON.stringify({revision,cnpjSourceRevision,data})});const result=await response.json() as ProfileResult;if(!response.ok)throw new Error(errorMessage(result));apply(result);onSavedRef.current?.(result.data);setNotice("Informações salvas para a equipe.");}
     catch(e){setAutoSaveBlocked(true);setError(e instanceof Error?e.message:"Erro ao salvar.");setNotice("");}finally{setSaving(false);}
-  },[dirty,saving,invalidCnpjs,revision,data,endpoint,token,apply]);
+  },[dirty,saving,invalidCnpjs,revision,cnpjSourceRevision,data,endpoint,token,apply]);
   useEffect(()=>{if(!canEdit||!dirty||saving||savingPriority||loading||autoSaveBlocked||invalidCnpjs)return;const timer=window.setTimeout(()=>void save(),650);return()=>window.clearTimeout(timer);},[canEdit,dirty,saving,savingPriority,loading,autoSaveBlocked,invalidCnpjs,save]);
   async function reload(){if(dirty&&!window.confirm("Descartar as alterações não salvas e recarregar o perfil?"))return;setLoading(true);setError("");try{apply(await fetchProfile());}catch(e){setError(e instanceof Error?e.message:"Erro ao carregar.");}finally{setLoading(false);}}
   async function savePriority(priority:string){
@@ -63,7 +63,7 @@ export function ContactProfile({baseUrl,apiKey,token,sessionId,chatId,contactNam
       <div className="crm-content"><label>Prioridade<select value={data.priority||"normal"} disabled={savingPriority} onChange={e=>void savePriority(e.target.value)}><option value="low">Baixa</option><option value="normal">Normal</option><option value="high">Alta</option></select><small>{savingPriority?"Atualizando o dashboard…":"A alteração é salva automaticamente."}</small></label></div>
       <details open><summary>Dados do usuário <span>{[data.name,data.phone,data.email,data.company,data.address].filter(Boolean).length+data.cnpjs.length}</span></summary><div className="crm-content">
         {([["name","Nome"],["phone","Telefone"],["email","E-mail"],["company","Empresa"],["address","Endereço"]] as const).map(([key,label])=><label key={key}>{label}<input value={data[key]} type={key==="email"?"email":"text"} maxLength={key==="address"?1000:key==="phone"?50:300} placeholder={key==="phone"?"Informe o número com DDD":""} onChange={e=>change({[key]:e.target.value})}/></label>)}
-        <div><strong>CNPJs vinculados</strong>{data.cnpjs.map((cnpj,index)=><div className="crm-entry" key={index}><label>CNPJ {index+1}<input inputMode="numeric" maxLength={18} value={cnpj} placeholder="00.000.000/0000-00" onChange={e=>change({cnpjs:data.cnpjs.map((value,position)=>position===index?e.target.value.replace(/\D/g,"").slice(0,14):value)})}/></label><button type="button" aria-label={`Remover CNPJ ${index+1}`} onClick={()=>change({cnpjs:data.cnpjs.filter((_,position)=>position!==index)})}><Trash2 size={14}/></button></div>)}<button type="button" className="crm-add" disabled={data.cnpjs.length>=20} onClick={()=>change({cnpjs:[...data.cnpjs,""]})}><Plus size={15}/>Adicionar CNPJ</button>{invalidCnpjs&&<small role="alert">Preencha 14 dígitos em cada CNPJ antes de salvar.</small>}</div>
+        <div><strong>CNPJs vinculados</strong>{cnpjSourceRevision!==undefined&&<small>Lista compartilhada com o cadastro deste telefone; alterações aqui atualizam a mesma lista usada pela automação.</small>}{data.cnpjs.map((cnpj,index)=><div className="crm-entry" key={index}><label>CNPJ {index+1}<input inputMode="numeric" maxLength={18} value={cnpj} placeholder="00.000.000/0000-00" onChange={e=>change({cnpjs:data.cnpjs.map((value,position)=>position===index?e.target.value.replace(/\D/g,"").slice(0,14):value)})}/></label><button type="button" aria-label={`Remover CNPJ ${index+1}`} onClick={()=>change({cnpjs:data.cnpjs.filter((_,position)=>position!==index)})}><Trash2 size={14}/></button></div>)}<button type="button" className="crm-add" disabled={data.cnpjs.length>=20} onClick={()=>change({cnpjs:[...data.cnpjs,""]})}><Plus size={15}/>Adicionar CNPJ</button>{invalidCnpjs&&<small role="alert">Preencha 14 dígitos em cada CNPJ antes de salvar.</small>}</div>
         <small>Dados internos do contato. Não alteram o cadastro no WhatsApp.</small>
       </div></details>
       <details><summary>Notas <span>{data.notes.length}</span></summary><div className="crm-content">

@@ -1,6 +1,7 @@
 import { errorMessage, request, type ApiConfig } from "../atende-api";
 import type { SupportOverview } from "../dashboard-model";
 import type { ConversationFlow, ConversationFlowStep } from "../flow-settings";
+import { signOutgoingText } from "./message-delivery";
 import { closeTicket, type Assignment } from "./ticket-actions";
 
 type ProfileData = SupportOverview["contacts"][number]["data"];
@@ -12,36 +13,37 @@ export type FlowExecutionResult = {
   evaluation: boolean;
 };
 
-function signed(operatorName: string, text: string): string {
-  return `*${operatorName}:*\n\n${text}`;
-}
-
 function prepareRemainingSteps(
   steps: ConversationFlowStep[],
   operatorName: string,
   fill: (value?: string) => string,
+  flowId: string,
+  selectedCnpjs?: string[],
 ): ConversationFlowStep[] {
   return steps.map(step => {
     if ((step.type || "message") === "message")
-      return { ...step, text: signed(operatorName, fill(step.text)) };
+      return { ...step, text: signOutgoingText(operatorName, fill(step.text)) };
+    if (step.type === "sheet") return { ...step, flowId };
+    if (step.type === "monthly-complete") return { ...step, flowId, selectedCnpjs };
     if (step.type === "poll")
       return { ...step, question: fill(step.question), options: (step.options || []).map(fill) };
     if (["image", "video", "audio", "document"].includes(step.type || "")) {
       const caption = fill(step.caption);
-      return { ...step, caption: caption ? signed(operatorName, caption) : "" };
+      return { ...step, caption: caption ? signOutgoingText(operatorName, caption) : "" };
     }
     return step;
   });
 }
 
 export async function executeConversationFlow({
-  config, flow, chatId, operatorName, fill, onAssigned, onClosed,
+  config, flow, chatId, operatorName, fill, selectedCnpjs, onAssigned, onClosed,
 }: {
   config: ApiConfig;
   flow: ConversationFlow;
   chatId: string;
   operatorName: string;
   fill: (value?: string) => string;
+  selectedCnpjs?: string[];
   onAssigned: (started: StartedTicket) => void;
   onClosed: (data: ProfileData, evaluation: boolean) => void;
 }): Promise<FlowExecutionResult> {
@@ -89,11 +91,17 @@ export async function executeConversationFlow({
       else if (step.action === "close-ticket") await closeFromFlow();
       continue;
     }
+    if (type === "sheet" || type === "monthly-complete") {
+      const response = await request(config, `${contactPath}/flow-sheet/${encodeURIComponent(flow.id)}/${encodeURIComponent(step.id)}`, { method: "POST",
+        ...(type === "monthly-complete" ? { body: JSON.stringify({ selectedCnpjs }) } : {}) });
+      if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+      continue;
+    }
 
     let path = "send-text";
     let body: Record<string, unknown> = { chatId };
     if (type === "message")
-      body.text = signed(operatorName, fill(step.text));
+      body.text = signOutgoingText(operatorName, fill(step.text));
     else if (type === "poll") {
       path = "send-poll";
       body = { chatId, name: fill(step.question), options: (step.options || []).map(fill), allowMultipleAnswers: false };
@@ -105,7 +113,7 @@ export async function executeConversationFlow({
         base64: step.data,
         mimetype: step.mimetype || "application/octet-stream",
         filename: step.filename || "arquivo",
-        ...(caption ? { caption: signed(operatorName, caption) } : {}),
+        ...(caption ? { caption: signOutgoingText(operatorName, caption) } : {}),
       };
     }
     const response = await request(config,
@@ -118,7 +126,7 @@ export async function executeConversationFlow({
       const continuation = await request(config, `${contactPath}/flow-continuation`, {
         method: "POST",
         body: JSON.stringify({
-          steps: prepareRemainingSteps(flow.steps.slice(stepIndex + 1), operatorName, fill),
+          steps: prepareRemainingSteps(flow.steps.slice(stepIndex + 1), operatorName, fill, flow.id, selectedCnpjs),
           expectedOptions: (step.options || []).map(fill),
           pollMessageId: sent?.messageId,
         }),

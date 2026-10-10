@@ -3,7 +3,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { X } from "lucide-react";
 import type { ApiConfig } from "../../atende-api";
-import type { Chat } from "../../conversation-model";
+import { isGroupChat, type Chat } from "../../conversation-model";
 import type { OperatorIdentity } from "../../operator-activity";
 import type { SupportOverview } from "../../ticket-dashboard";
 import { ContactProfile } from "../../contact-profile";
@@ -33,6 +33,17 @@ export function ConversationProfile({
   operatorToken: string;
   onContactSaved: (data: { name: string; phone: string }) => void;
 }) {
+  if (isGroupChat(selected)) return <aside className={`wa-details ${detailsOpen ? "profile-is-open" : "profile-is-closed"}`}>
+    <header>
+      <div><span className="section-kicker">INFORMAÇÕES</span><b>Grupo do WhatsApp</b></div>
+      <button onClick={() => setDetailsOpen(false)} aria-label="Fechar informações do grupo"><X size={20} /></button>
+    </header>
+    <section>
+      <ContactAvatar chat={selected} className="wa-detail-avatar" />
+      <b>{selected.name}</b>
+      <small>Conversa em grupo · não entra na fila de atendimentos nem no cadastro de contatos.</small>
+    </section>
+  </aside>;
   return <aside className={`wa-details ${detailsOpen ? "profile-is-open" : "profile-is-closed"}`}>
     <header>
       <div><span className="section-kicker">INFORMAÇÕES</span><b>Perfil do contato</b></div>

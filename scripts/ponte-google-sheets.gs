@@ -38,6 +38,48 @@ function doPost(e) {
         return reply_({ ok: true });
       } finally { lock.releaseLock(); }
     }
+    if (request.action === 'update' || request.action === 'updateMany') {
+      const changes = request.changes;
+      const keys = request.action === 'update'
+        ? [{ cell: request.keyCell, expected: request.expectedKey }]
+        : request.keys;
+      if (!Array.isArray(keys) || !keys.length || keys.length > 20 ||
+          !Array.isArray(changes) || !changes.length || changes.length > (request.action === 'update' ? 10 : 40))
+        throw new Error('Atualização inválida.');
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        const keyCells = keys.map(function (key) {
+          const cell = sheet.getRange(String(key.cell));
+          if (cell.getNumRows() !== 1 || cell.getNumColumns() !== 1 ||
+              String(cell.getDisplayValue()).trim() !== String(key.expected).trim())
+            throw new Error('A linha mudou; nenhuma célula foi alterada.');
+          return cell;
+        });
+        const sheetId = keyCells[0].getSheet().getSheetId();
+        const rows = new Set(keyCells.map(function (cell) { return cell.getRow(); }));
+        if (rows.size !== keyCells.length || keyCells.some(function (cell) { return cell.getSheet().getSheetId() !== sheetId; }))
+          throw new Error('Linhas de busca inválidas.');
+        const pending = changes.map(function (change) {
+          const cell = sheet.getRange(String(change.cell));
+          if (cell.getNumRows() !== 1 || cell.getNumColumns() !== 1 ||
+              cell.getSheet().getSheetId() !== sheetId ||
+              !rows.has(cell.getRow()) ||
+              String(cell.getDisplayValue()).trim() !== String(change.expectedValue).trim() ||
+              String(change.nextValue).length > 4000)
+            throw new Error('A planilha mudou; nenhuma célula foi alterada.');
+          return { cell: cell, value: String(change.nextValue) };
+        });
+        if (new Set(pending.map(function (item) { return item.cell.getA1Notation(); })).size !== pending.length)
+          throw new Error('Colunas duplicadas.');
+        pending.forEach(function (item) {
+          const value = item.value;
+          item.cell.setValue(/^[=+\-@]/.test(value) ? "'" + value : value);
+        });
+        SpreadsheetApp.flush();
+        return reply_({ ok: true });
+      } finally { lock.releaseLock(); }
+    }
     throw new Error('Ação inválida.');
   } catch (error) {
     return reply_({ ok: false, error: String(error && error.message || error) });
