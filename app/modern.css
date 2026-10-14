@@ -486,25 +486,60 @@ body .wa-chat-copy em {
 body .wa-chat-copy .chat-owner-label {
   justify-content: flex-start;
   align-items: center;
-  gap: 4px;
-  font-size: 9px;
+  gap: 6px;
+  font-size: 10px;
   color: #98a5ad;
-  margin-top: 7px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: block;
+  margin-top: 8px;
+  line-height: 1.35;
+  display: flex;
 }
-.chat-owner-label svg {
+.chat-owner-label:not(.assigned) > svg {
   display: inline;
   margin-right: 4px;
   vertical-align: -1px;
 }
 body .wa-chat-copy .chat-owner-label.assigned {
-  color: #4e8376;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
 }
-body .wa-chat-copy .wa-owner-marker {
-  display: none;
+body .wa-chat-copy .chat-owner-icon {
+  display: grid;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  color: #168bf5;
+  background: #e9f3ff;
+  border-radius: 50%;
+}
+body .wa-chat-copy .chat-owner-icon.financial-alert {
+  color: #ce2f3b;
+  background: #ffebed;
+  box-shadow: inset 0 0 0 1px #f6cbd0;
+}
+body .wa-chat-copy .chat-owner-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+body .wa-chat-copy .chat-owner-content strong {
+  color: #294658;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+body .wa-chat-copy .chat-owner-content small {
+  color: #667e8d;
+  font-size: 10px;
+  line-height: 1.2;
+}
+body .wa-chat-copy .chat-owner-label.forwarded .chat-owner-content small {
+  color: #9a6c20;
 }
 body .wa-conversation-header {
   min-height: 79px;
@@ -536,17 +571,6 @@ body .wa-top-actions .profile-toggle {
   display: flex;
   gap: 7px;
   font-size: 11px;
-}
-body .wa-top-actions .close-conversation {
-  width: 34px;
-  height: 34px;
-  border: 1px solid #e2e9ed;
-  border-radius: 8px;
-  color: #647784;
-}
-body .wa-top-actions .close-conversation:hover {
-  background: #f2f6f7;
-  color: #233d4c;
 }
 body .wa-message-area {
   background: #f3f6f8;
@@ -3790,19 +3814,17 @@ body .wa-conversation-search {
   border-radius: 6px;
 }
 .wa-conversation-search-input button:hover { background: #eef3f1; }
-.wa-conversation-search-status {
-  max-width: 230px;
-  overflow: hidden;
-  color: #70828a;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .wa-conversation-search-warning {
   margin: 0;
   padding: 0 18px 9px;
   color: #9b6a20;
   font-size: 11px;
+}
+.wa-conversation-search-empty {
+  margin: 0;
+  padding: 0 18px 12px;
+  color: #70828a;
+  font-size: 12px;
 }
 .wa-conversation-search-results {
   max-height: min(28vh, 260px);
@@ -3864,8 +3886,4 @@ body .wa-message.is-search-match article {
   body .wa-conversation-header .wa-top-actions button.conversation-search-toggle { display: grid; }
   .wa-conversation-search-input { padding: 8px 12px; }
   .wa-conversation-search-results { max-height: 36vh; }
-}
-@media (max-width: 600px) {
-  .wa-conversation-search-input { flex-wrap: wrap; }
-  .wa-conversation-search-status { order: 4; width: 100%; max-width: none; margin-left: 25px; }
 }

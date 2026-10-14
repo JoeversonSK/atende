@@ -83,28 +83,41 @@ export function ConversationSidebar({
     <div className="list-caption"><span>{shownChats.length} conversa{shownChats.length === 1 ? "" : "s"}</span><span>MAIS RECENTES</span></div>
     {syncWarning && <p className="sync-warning" role="status">{syncWarning}</p>}
     <div className="wa-chat-list">
-      {shownChats.length ? shownChats.map(chat => <button key={chat.id} onClick={() => onChooseChat(chat)}
-        aria-pressed={selectedId === chat.id}
-        className={`wa-chat ${selectedId === chat.id ? "selected" : ""} ${chat.unread ? "has-unread" : ""}`}>
-        <ContactAvatar chat={chat} />
-        <span className="wa-chat-copy">
-          <span><b>{chat.name}</b><time className={chat.unread ? "unread-time" : ""}>{chat.time}</time></span>
-          <span><i>{chat.last}</i>
-            {!isGroupChat(chat) && assignments[chat.id] && <span className="wa-owner-marker"
-              title={`${assignments[chat.id].state === "forwarded" ? "Encaminhado" : "Em atendimento"} por ${assignments[chat.id].assigneeName}`}
-              aria-label={`${assignments[chat.id].state === "forwarded" ? "Encaminhado" : "Em atendimento"} por ${assignments[chat.id].assigneeName}`}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <circle cx="12" cy="7" r="4" /><path d="M4 21v-3a8 8 0 0 1 16 0v3Z" />
-              </svg>
-            </span>}
-            {chat.unread > 0 && <em>{chat.unread > 99 ? "99+" : chat.unread}</em>}
+      {shownChats.length ? shownChats.map(chat => {
+        const owner = !isGroupChat(chat) ? assignments[chat.id] : undefined;
+        const isSabrina = Boolean(owner && /^sabrina\b/i.test(owner.assigneeName.trim()));
+        const ownerLabel = owner?.state === "forwarded" ? `Encaminhado para ${owner.assigneeName}`
+          : owner ? `Em atendimento por ${owner.assigneeName}` : "";
+        return <button key={chat.id} onClick={() => onChooseChat(chat)}
+          aria-pressed={selectedId === chat.id}
+          className={`wa-chat ${selectedId === chat.id ? "selected" : ""} ${chat.unread ? "has-unread" : ""}`}>
+          <ContactAvatar chat={chat} />
+          <span className="wa-chat-copy">
+            <span><b>{chat.name}</b><time className={chat.unread ? "unread-time" : ""}>{chat.time}</time></span>
+            <span><i>{chat.last}</i>
+              {chat.unread > 0 && <em>{chat.unread > 99 ? "99+" : chat.unread}</em>}
+            </span>
+            <span className={`chat-owner-label ${owner ? `assigned ${owner.state === "forwarded" ? "forwarded" : "active"}` : ""}`}
+              title={ownerLabel || undefined}>
+              {owner ? <>
+                <span className={`chat-owner-icon ${isSabrina ? "financial-alert" : ""}`}
+                  role={isSabrina ? "img" : undefined}
+                  aria-label={isSabrina ? "Cliente com pendência financeira" : undefined}
+                  aria-hidden={isSabrina ? undefined : true}
+                  title={isSabrina ? "Cliente com pendência financeira" : undefined}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" focusable="false" aria-hidden="true">
+                    <circle cx="12" cy="7" r="4" /><path d="M4 21v-3a8 8 0 0 1 16 0v3Z" />
+                  </svg>
+                </span>
+                <span className="chat-owner-content">
+                  <strong>{owner.assigneeName}</strong>
+                  <small>{owner.state === "forwarded" ? "Encaminhado" : "Em atendimento"}</small>
+                </span>
+              </> : <><UserRound size={12} aria-hidden="true" />{isGroupChat(chat) ? "Grupo do WhatsApp" : "Sem responsável"}</>}
+            </span>
           </span>
-          <span className={`chat-owner-label ${!isGroupChat(chat) && assignments[chat.id] ? "assigned" : ""}`}>
-            <UserRound size={11} />{isGroupChat(chat) ? "Grupo do WhatsApp" : assignments[chat.id]?.state === "forwarded"
-              ? `Encaminhado para ${assignments[chat.id].assigneeName}` : assignments[chat.id]?.assigneeName || "Sem responsável"}
-          </span>
-        </span>
-      </button>) : <div className="wa-list-empty"><MessageCircle size={28} />
+        </button>;
+      }) : <div className="wa-list-empty"><MessageCircle size={28} />
         <p>{hasSession ? "Nenhuma conversa encontrada." : "Conecte o OpenWA para ver as conversas."}</p>
       </div>}
     </div>

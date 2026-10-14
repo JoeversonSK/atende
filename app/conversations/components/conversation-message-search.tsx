@@ -103,12 +103,6 @@ export function ConversationMessageSearch({ chatId, chatName, config, messages, 
     }
   }
 
-  const status = searchText.length < 2 ? "Busque no histórico da conversa"
-    : loadedHits.length
-      ? `${loadedHits.length} na conversa${olderHits.length ? ` · ${olderHits.length} antigas` : ""}`
-      : olderHits.length ? `${olderHits.length} no histórico salvo`
-        : loading ? "Buscando…" : "Nenhuma mensagem encontrada";
-
   return <section className="wa-conversation-search" role="search" aria-label={`Buscar mensagens de ${chatName}`}>
     <div className="wa-conversation-search-input">
       <Search size={17} aria-hidden="true" />
@@ -120,11 +114,12 @@ export function ConversationMessageSearch({ chatId, chatName, config, messages, 
         }} />
       {query && <button type="button" className="wa-conversation-search-clear" onClick={() => { changeQuery(""); inputRef.current?.focus(); }}
         aria-label="Limpar pesquisa" title="Limpar pesquisa"><X size={14} /></button>}
-      <span className="wa-conversation-search-status" role="status" aria-live="polite">{status}</span>
-      <button type="button" className="wa-conversation-search-close" onClick={onClose} aria-label="Fechar busca" title="Fechar busca"><X size={18} /></button>
     </div>
     {searchText.length >= 2 && <>
       {error && <p className="wa-conversation-search-warning">{loadedHits.length ? "As mensagens carregadas continuam pesquisáveis. " : ""}{error}</p>}
+      {!results.length && !error && <p className="wa-conversation-search-empty" role="status" aria-live="polite">
+        {loading ? "Buscando mensagens…" : "Nenhuma mensagem encontrada nesta conversa."}
+      </p>}
       {results.length > 0 && <div className="wa-conversation-search-results">
         {results.map(hit => <button key={`${hit.source}:${hit.messageId}`} type="button"
           className={`wa-conversation-search-result ${selectedId === `${hit.source}:${hit.messageId}` ? "active" : ""}`}

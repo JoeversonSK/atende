@@ -88,7 +88,9 @@ export function ConversationPane({ selected, assignment, connected, canFinish, c
         <div className="wa-top-actions">
           <button className="conversation-search-toggle" type="button" onClick={() => searchOpen ? closeSearch() : setSearchChatId(selected.id)}
             aria-label={searchOpen ? "Fechar busca na conversa" : "Buscar mensagens nesta conversa"}
-            aria-expanded={searchOpen} title="Buscar mensagens nesta conversa"><Search size={18} /></button>
+            aria-expanded={searchOpen} title={searchOpen ? "Fechar busca na conversa" : "Buscar mensagens nesta conversa"}>
+            {searchOpen ? <X size={18} /> : <Search size={18} />}
+          </button>
           {canFinish && <button className="finish-ticket" onClick={onFinish} disabled={closing || closed}
             title="Concluir atendimento e remover atribuição">
             <CheckCheck size={18} /><span>{closing ? "Encerrando…" : closed ? "Atendimento encerrado" : "Encerrar atendimento"}</span>
@@ -96,7 +98,6 @@ export function ConversationPane({ selected, assignment, connected, canFinish, c
           <button className="profile-toggle" onClick={onToggleDetails} aria-label="Mostrar ou ocultar perfil do contato" aria-expanded={detailsOpen}>
             <PanelRight size={18} /><span>Perfil</span>
           </button>
-          <button className="close-conversation" onClick={closePane} aria-label="Fechar conversa" title="Fechar conversa (Esc)"><X size={19} /></button>
         </div>
       </header>
       {searchOpen && <ConversationMessageSearch key={selected.id} chatId={selected.id} chatName={selected.name}

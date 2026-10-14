@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ConversationMessageSearch } from "../app/conversations/components/conversation-message-search.tsx";
 import {
   loadedSearchMessageId,
   searchConversationMessages,
@@ -8,6 +11,15 @@ import {
 } from "../app/conversations/conversation-message-search.ts";
 
 const config = { baseUrl: "http://atende.test", apiKey: "teste", sessionId: "sessao-1" };
+
+test("campo da busca não exibe texto auxiliar nem botão de fechar duplicado", () => {
+  const html = renderToStaticMarkup(createElement(ConversationMessageSearch, {
+    chatId: "cliente@c.us", chatName: "Cliente", config, messages: [],
+    onClose: () => {}, onClearMatch: () => {}, onSelect: () => false,
+  }));
+  assert.match(html, /Buscar nesta conversa/);
+  assert.doesNotMatch(html, /Busque no histórico da conversa|wa-conversation-search-status|wa-conversation-search-close/);
+});
 
 test("pesquisa apenas na sessão e conversa selecionadas, com paginação", async () => {
   const originalFetch = globalThis.fetch;
