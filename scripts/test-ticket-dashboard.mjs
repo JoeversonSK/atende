@@ -22,7 +22,9 @@ test("encaminhado permanece na fila, não conta como ativo e mostra o destino", 
   assert.match(html, /Nenhum atendimento em andamento/);
   assert.match(html, /Encaminhado/);
   assert.match(html, /Para Bia/);
+  assert.match(html, /class="board-forwarded-to"[^>]*>Para <strong>Bia<\/strong>/);
   assert.match(html, /Cliente de teste/);
+  assert.match(html, /title="Abrir conversa com Cliente de teste e atribuir atendente"/);
 });
 
 test("após assumir, deixa a fila e aparece em atendimento", () => {
@@ -42,4 +44,5 @@ test("após assumir, deixa a fila e aparece em atendimento", () => {
   }));
   assert.doesNotMatch(html, /Nenhum atendimento em andamento/);
   assert.match(html, /Nenhum cliente na fila/);
+  assert.match(html, /title="Abrir conversa com Cliente de teste e encaminhar atendimento"/);
 });

@@ -3377,6 +3377,7 @@ body .operations-board {
   gap: 16px;
   overflow: auto;
   min-height: 0;
+  container-type: inline-size;
 }
 body .operations-board:fullscreen {
   width: 100vw;
@@ -3476,23 +3477,23 @@ body .board-stat {
 body .analyst-panel {
   flex: 0 0 auto;
 }
-body .active-panel,
-body .queue-panel {
-  flex: 1;
-  min-height: 340px;
-}
 body .board-panel {
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
+body .active-panel,
+body .queue-panel {
+  flex: 1;
+  min-height: 340px;
+}
 body .board-panel h2 {
   text-align: center;
   text-transform: uppercase;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 700;
-  margin: 3px 0 16px;
+  margin: 3px 0 18px;
   color: #fff;
 }
 body .board-table-scroll {
@@ -3504,33 +3505,74 @@ body .analyst-panel {
   min-height: max-content;
 }
 body .analyst-panel .board-table-scroll {
-  overflow: visible;
+  overflow: auto;
   flex: none;
 }
 body .operations-board table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   text-align: left;
-  font-size: 15px;
+  font-size: clamp(16px, 0.95cqw, 18px);
   color: #e4e4e4;
 }
+body .analyst-panel th:nth-child(1) { width: 18%; }
+body .analyst-panel th:nth-child(2) { width: 25%; }
+body .analyst-panel th:nth-child(3) { width: 15%; }
+body .analyst-panel th:nth-child(4) { width: 20%; }
+body .analyst-panel th:nth-child(5) { width: 22%; }
+body .active-panel th:nth-child(1) { width: 20%; }
+body .active-panel th:nth-child(2) { width: 30%; }
+body .active-panel th:nth-child(3) { width: 17%; }
+body .active-panel th:nth-child(4) { width: 13%; }
+body .active-panel th:nth-child(5) { width: 20%; }
+body .queue-panel th:nth-child(1) { width: 45%; }
+body .queue-panel th:nth-child(2) { width: 25%; }
+body .queue-panel th:nth-child(3) { width: 30%; }
 body .operations-board th {
-  font-size: 13px;
+  font-size: clamp(14px, 0.8cqw, 16px);
   text-transform: uppercase;
   color: #bfc1c5;
   font-weight: 500;
-  padding: 10px;
+  padding: 12px 10px;
   border-top: 1px solid #333;
   border-bottom: 1px solid #333;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 body .operations-board td {
-  padding: 10px;
+  padding: 14px 10px;
   border-bottom: 1px solid #2b2b2b;
   vertical-align: middle;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 body .operations-board td strong {
   font-weight: 650;
+  overflow-wrap: anywhere;
+}
+body .operations-board .board-activity {
+  max-width: 100%;
+  padding: 5px 9px;
+  font-size: 14px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow: visible;
+  vertical-align: middle;
+}
+body .board-activity-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+body .active-panel td:first-child strong,
+body .operations-board .board-contact {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 body .analyst-panel th:not(:first-child),
 body .analyst-panel td:not(:first-child) {
@@ -3552,18 +3594,19 @@ body .operations-board .board-empty {
   padding: 25px;
   color: #e7e7e7;
   border-bottom: 1px solid #2b2b2b;
-  font-size: 14px;
+  font-size: 15px;
 }
 body .board-cards {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
   min-height: 140px;
-  flex: 0 0 140px;
+  flex: 0 0 auto;
 }
 body .board-stat {
   position: relative;
-  padding: 23px 18px 18px;
+  min-height: 140px;
+  padding: 20px 14px;
   border-left: 7px solid #ff5159;
   display: flex;
   flex-direction: column;
@@ -3578,8 +3621,9 @@ body .board-stat.done-stat {
   align-items: center;
   gap: 10px;
 }
+body .board-stat.done-stat > div { min-width: 0; }
 body .board-stat h2 {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   text-transform: uppercase;
   margin: 0 0 12px;
@@ -3587,14 +3631,14 @@ body .board-stat h2 {
 }
 body .board-stat b {
   display: block;
-  font-size: 30px;
+  font-size: clamp(34px, 2cqw, 40px);
   color: white;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 body .board-stat span {
   display: block;
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
   color: #bbc1ca;
   margin-top: 8px;
@@ -3602,9 +3646,9 @@ body .board-stat span {
 }
 body .board-stat-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   text-align: center;
-  gap: 9px;
+  gap: 6px;
 }
 body .board-stat-pair > div + div {
   border-left: 1px solid #363636;
@@ -3613,12 +3657,16 @@ body .board-clock {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  flex: 0 0 auto;
   text-align: center;
   border-left: 1px solid #363636;
-  padding-left: 18px;
-  font-family: Georgia, serif;
+  padding-left: 12px;
+  font-family: inherit;
   line-height: 1.1;
-  font-size: 34px;
+  font-size: clamp(28px, 1.7cqw, 34px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   color: white;
 }
 body .operations-board .board-contact {
@@ -3631,6 +3679,7 @@ body .operations-board .board-contact {
   font-size: inherit;
   line-height: 1.4;
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 body .operations-board .board-contact:hover {
   color: #28bce8;
@@ -3648,9 +3697,13 @@ body .board-timer {
 }
 body .board-priority,
 body .board-queue-state {
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
-  white-space: nowrap;
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
   padding: 5px 7px;
   border-radius: 4px;
   color: #c7ced4;
@@ -3672,12 +3725,23 @@ body .board-queue-state.forwarded {
 body .board-forwarded-to {
   display: block;
   margin-top: 5px;
-  color: #b6c2c7;
-  font-size: 10px;
+  color: #cbd5d9;
+  font-size: 12px;
+  line-height: 1.3;
+}
+body .board-forwarded-to strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
 }
 body .board-customer-wait {
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   color: #aaa;
   margin-top: 5px;
   line-height: 1.5;
@@ -3691,14 +3755,6 @@ body .board-footnote {
 body .operations-board button:focus-visible {
   outline: 2px solid #22b6e5;
   outline-offset: 3px;
-}
-@media (min-width: 1700px) {
-  body .operations-board table {
-    font-size: 17px;
-  }
-  body .operations-board th {
-    font-size: 16px;
-  }
 }
 @media (max-width: 1250px) {
   body .board-grid {
@@ -3715,45 +3771,45 @@ body .operations-board button:focus-visible {
     display: none;
   }
 }
+@container (max-width: 1250px) {
+  body .board-grid { grid-template-columns: minmax(0, 1fr); }
+  body .board-column { min-height: auto; }
+  body .active-panel,
+  body .queue-panel { min-height: 300px; }
+}
 @media (max-width: 650px) {
-  body .operations-board {
+  body .ticket-dashboard.operations-board {
     padding: 12px;
   }
-  body .board-toolbar {
-    flex-wrap: wrap;
-  }
   body .board-cards {
-    gap: 8px;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  body .board-stat {
-    padding: 14px 8px;
-    border-left-width: 4px;
-  }
-  body .board-stat h2 {
-    font-size: 10px;
-  }
-  body .board-stat b {
-    font-size: 25px;
-  }
-  body .board-stat span {
-    font-size: 8px;
-  }
-  body .board-clock {
-    font-size: 25px;
-    padding-left: 7px;
+  body .board-stat.done-stat {
+    grid-column: 1 / -1;
   }
   body .board-panel {
     padding: 14px 10px;
   }
+  body .analyst-panel table,
+  body .active-panel table {
+    min-width: 680px;
+  }
+  body .queue-panel th,
+  body .queue-panel td {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+  body .queue-panel table { font-size: 14px; }
 }
 @media (max-width: 800px) {
-  body .ticket-dashboard {
+  body .ticket-dashboard:not(.operations-board) {
     padding: 16px;
   }
   body .ticket-metrics {
     grid-template-columns: repeat(2, 1fr);
   }
-  body .ticket-dashboard header {
+  body .ticket-dashboard:not(.operations-board) header {
     align-items: flex-start;
     flex-direction: column;
   }
