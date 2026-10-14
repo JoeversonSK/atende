@@ -9,7 +9,7 @@ import type { SupportOverview } from "../../ticket-dashboard";
 import { ContactProfile } from "../../contact-profile";
 import { ContactAvatar } from "./contact-avatar";
 
-type Assignment = { assigneeName: string; assigneeId?: string; updatedAt?: string };
+type Assignment = { assigneeName: string; assigneeId?: string; state?: "active" | "forwarded"; updatedAt?: string };
 
 export function ConversationProfile({
   selected, detailsOpen, setDetailsOpen, assignment, savingAssignment, operator,
@@ -57,9 +57,11 @@ export function ConversationProfile({
     <section className="wa-assignment">
       <small>RESPONSÁVEL PELO ATENDIMENTO</small>
       <strong>{assignment?.assigneeName || "Nenhum atendente atribuído"}</strong>
-      <p>{assignment ? "Responsável por este atendimento" : "Assuma para organizar o atendimento."}</p>
+      <p>{assignment?.state === "forwarded" ? "Encaminhado · aguardando início do atendimento"
+        : assignment ? "Em atendimento" : "Assuma para iniciar o atendimento."}</p>
       <button className="wa-primary" disabled={savingAssignment || !operator} onClick={() => saveAssignment()}>
-        {assignment ? "Assumir com minha conta" : "Assumir conversa"}
+        {assignment?.state === "forwarded" && assignment.assigneeId === operator?.id
+          ? "Iniciar atendimento" : assignment ? "Assumir com minha conta" : "Iniciar atendimento"}
       </button>
       {(operator?.role === "admin" || operator?.canAssign) && <div className="transfer-controls">
         <label>Encaminhar para

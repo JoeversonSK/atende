@@ -7,7 +7,8 @@ import { isGroupChat, messageDisplayText, type Chat, type Message, type MessageC
 import { MessageAttachment, MessageContactCards, MessageText } from "./message-content";
 
 export function ConversationThread({
-  selected, messages, loading, config, areaRef, bottomRef, keepAtBottomRef, onReply, onForward, onOpenContact,
+  selected, messages, loading, config, areaRef, bottomRef, keepAtBottomRef, activeSearchMessageId,
+  onReply, onForward, onOpenContact,
 }: {
   selected: Chat;
   messages: Message[];
@@ -16,6 +17,7 @@ export function ConversationThread({
   areaRef: RefObject<HTMLDivElement | null>;
   bottomRef: RefObject<HTMLDivElement | null>;
   keepAtBottomRef: RefObject<boolean>;
+  activeSearchMessageId?: string | null;
   onReply: (message: Message) => void;
   onForward: (message: Message) => void;
   onOpenContact?: (card: MessageContactCard) => void;
@@ -33,7 +35,7 @@ export function ConversationThread({
           ? messages.find(candidate => candidate.waMessageId === quotedId || candidate.identityIds?.includes(quotedId))
           : undefined;
         return <div key={message.id} id={`wa-message-${message.id}`}
-          className={`wa-message ${message.mine ? "mine" : ""}`}>
+          className={`wa-message ${message.mine ? "mine" : ""} ${activeSearchMessageId === message.id ? "is-search-match" : ""}`}>
           <article>
             {isGroupChat(selected) && message.senderName && !message.mine &&
               <strong className="wa-message-author">{message.senderName}</strong>}

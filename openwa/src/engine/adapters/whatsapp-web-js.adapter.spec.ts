@@ -898,6 +898,23 @@ describe('WhatsAppWebJsAdapter.forwardMessage (returns the real sent id, not a s
     return adapter;
   };
 
+  it('uses the direct message lookup without scanning source history', async () => {
+    const forward = jest.fn().mockResolvedValue(undefined);
+    const sourceChat = { fetchMessages: jest.fn() };
+    const destChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'COPY' }, timestamp: 200 }]) };
+    const client = {
+      getMessageById: jest.fn().mockResolvedValue({ id: { _serialized: 'SRC1', remote: 'src@c.us' }, forward }),
+      getChatById: jest.fn((id: string) => Promise.resolve(id === 'dest@c.us' ? destChat : sourceChat)),
+    };
+
+    const result = await readyAdapter(client).forwardMessage('src@c.us', 'dest@c.us', 'SRC1');
+
+    expect(client.getMessageById).toHaveBeenCalledWith('SRC1');
+    expect(sourceChat.fetchMessages).not.toHaveBeenCalled();
+    expect(forward).toHaveBeenCalledWith('dest@c.us');
+    expect(result.id).toBe('COPY');
+  });
+
   it('returns the real id of the forwarded copy fetched from the destination chat', async () => {
     const forward = jest.fn().mockResolvedValue(undefined);
     const sourceChat = { fetchMessages: jest.fn().mockResolvedValue([{ id: { _serialized: 'SRC1' }, forward }]) };

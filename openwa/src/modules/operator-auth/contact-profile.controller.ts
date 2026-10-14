@@ -27,13 +27,15 @@ import { normalizeCnpjList } from './contact-cnpj';
 
 const ratingOptions = [1, 2, 3, 4, 5].map(value => '⭐'.repeat(value));
 const completedServiceTag = 'Lançar atendimento';
+// Preserve the old shared-tag migration scope; widening it would retroactively add tags to
+// historical contacts even though the new completion rule only applies to future closures.
+const legacyCompletedServiceAgents = new Set(['wesley', 'joeverson', 'thiago', 'crislainy', 'gabryel']);
 export const monthlyFilesTag = 'Arquivos Mensais';
 export const isMonthlyFilesTag = (value: unknown) =>
   String(value || '').trim().replace(/[\s_-]+/g, '').toLocaleLowerCase('pt-BR') === 'arquivosmensais';
 export const normalizeContactTag = (value: string) => isMonthlyFilesTag(value) ? monthlyFilesTag : value.trim();
-const completedServiceAgents = new Set(['wesley', 'joeverson', 'thiago', 'crislainy', 'gabryel']);
 type Queryable = { query(query: string, parameters?: any[]): Promise<any> };
-type AssignmentOwner = { assignee_id?: unknown; assignee_name?: unknown; updated_at?: unknown };
+type AssignmentOwner = { assignee_id?: unknown; assignee_name?: unknown; state?: 'active' | 'forwarded'; updated_at?: unknown };
 
 export type ContactData = {
   name: string;
@@ -105,13 +107,8 @@ export class ContactProfileService implements OnModuleInit {
       .filter(tag => !this.isCompletedServiceTag(tag))));
   }
   private isCompletedServiceOwner(owner?: AssignmentOwner | null) {
-    const firstName = String(owner?.assignee_name || '')
-      .trim()
-      .split(/\s+/)[0]
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
-    return Boolean(owner?.assignee_id) && completedServiceAgents.has(firstName);
+    // Assignment identity, not a hard-coded display-name list, decides who owns the private tag.
+    return Boolean(owner?.assignee_id) && owner?.state !== 'forwarded';
   }
   private async markAssignedCompletion(db: Queryable, session: string, chat: string, owner?: AssignmentOwner | null) {
     if (!this.isCompletedServiceOwner(owner)) return;
@@ -121,7 +118,7 @@ export class ContactProfileService implements OnModuleInit {
     );
   }
   private async recordAssignedCompletion(db: Queryable, session: string, chat: string, owner?: AssignmentOwner | null) {
-    if (!owner?.assignee_id) return;
+    if (!owner?.assignee_id || owner.state === 'forwarded') return;
     const seconds = owner.updated_at
       ? Math.max(0, Math.floor((Date.now() - new Date(String(owner.updated_at)).getTime()) / 1000))
       : 0;
@@ -287,7 +284,9 @@ export class ContactProfileService implements OnModuleInit {
       }
       if (type === 'action' && step.action === 'assign-current' && actorId) {
         await this.db.query(
-          'INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_name,assignee_id,updated_at) VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT(session_id,chat_id) DO UPDATE SET assignee_name=EXCLUDED.assignee_name,assignee_id=EXCLUDED.assignee_id,updated_at=NOW()',
+          `INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_name,assignee_id,state,updated_at)
+           VALUES ($1,$2,$3,$4,'active',NOW()) ON CONFLICT(session_id,chat_id) DO UPDATE SET
+           assignee_name=EXCLUDED.assignee_name,assignee_id=EXCLUDED.assignee_id,state=EXCLUDED.state,updated_at=NOW()`,
           [session, chat, actorName, actorId],
         );
       } else if (type === 'action' && step.action === 'close-ticket') await this.closeForFlow(session, chat);
@@ -301,7 +300,7 @@ export class ContactProfileService implements OnModuleInit {
         [session, chat],
       );
       const [owner] = await db.query(
-        'SELECT assignee_id,assignee_name,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2 FOR UPDATE',
+        'SELECT assignee_id,assignee_name,state,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2 FOR UPDATE',
         [session, chat],
       );
       await db.query('DELETE FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, chat]);
@@ -467,7 +466,13 @@ export class ContactProfileService implements OnModuleInit {
         [session, chat, JSON.stringify(data), (current?.revision || 0) + 1],
       );
       const [assignment] = await db.query(
-        'INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_name,assignee_id,updated_at) VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT(session_id,chat_id) DO UPDATE SET assignee_name=EXCLUDED.assignee_name,assignee_id=EXCLUDED.assignee_id,updated_at=CASE WHEN openwa.conversation_assignments.assignee_id IS DISTINCT FROM EXCLUDED.assignee_id THEN NOW() ELSE openwa.conversation_assignments.updated_at END RETURNING assignee_name AS "assigneeName",assignee_id AS "assigneeId",updated_at AS "updatedAt"',
+        `INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_name,assignee_id,state,updated_at)
+         VALUES ($1,$2,$3,$4,'active',NOW()) ON CONFLICT(session_id,chat_id) DO UPDATE SET
+         assignee_name=EXCLUDED.assignee_name,assignee_id=EXCLUDED.assignee_id,state=EXCLUDED.state,
+         updated_at=CASE WHEN openwa.conversation_assignments.assignee_id IS DISTINCT FROM EXCLUDED.assignee_id
+           OR openwa.conversation_assignments.state IS DISTINCT FROM EXCLUDED.state THEN NOW()
+           ELSE openwa.conversation_assignments.updated_at END
+         RETURNING assignee_name AS "assigneeName",assignee_id AS "assigneeId",state,updated_at AS "updatedAt"`,
         [session, chat, user.displayName, user.id],
       );
       return {
@@ -489,7 +494,7 @@ export class ContactProfileService implements OnModuleInit {
         [session, chat],
       );
       const [owner] = await db.query(
-        'SELECT assignee_id,assignee_name,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2 FOR UPDATE',
+        'SELECT assignee_id,assignee_name,state,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2 FOR UPDATE',
         [session, chat],
       );
       await db.query('DELETE FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, chat]);
@@ -589,10 +594,13 @@ export class ContactProfileService implements OnModuleInit {
       MAX(timestamp) FILTER (WHERE direction='outgoing' AND status NOT IN ('failed','pending')) AS outgoing
       FROM openwa.messages WHERE "sessionId"=$1 GROUP BY "chatId"
     ) SELECT a."chatId",a.incoming,a.outgoing,
-      CASE WHEN owner.chat_id IS NOT NULL THEN NULL ELSE (SELECT MIN(m.timestamp) FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m.direction='incoming' AND m.timestamp>COALESCE(a.outgoing,0) AND m.timestamp>=COALESCE((SELECT (p.data->>'queueOpenedAt')::bigint FROM openwa.contact_profiles p WHERE p.session_id=$1 AND p.chat_id=a."chatId"),0)) END AS "queueSince",
+      CASE WHEN owner.state='forwarded' THEN EXTRACT(EPOCH FROM owner.updated_at)::bigint
+        WHEN owner.chat_id IS NOT NULL THEN NULL
+        ELSE (SELECT MIN(m.timestamp) FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m.direction='incoming' AND m.timestamp>COALESCE(a.outgoing,0) AND m.timestamp>=COALESCE((SELECT (p.data->>'queueOpenedAt')::bigint FROM openwa.contact_profiles p WHERE p.session_id=$1 AND p.chat_id=a."chatId"),0))
+      END AS "queueSince",
       CASE WHEN a.outgoing>COALESCE(a.incoming,0) THEN a.outgoing ELSE NULL END AS "waitingSince"
       ,(SELECT m."chatName" FROM openwa.messages m WHERE m."sessionId"=$1 AND m."chatId"=a."chatId" AND m."chatName" IS NOT NULL ORDER BY m.timestamp DESC NULLS LAST LIMIT 1) AS name
-      ,owner.assignee_id AS "assigneeId",COALESCE(agent.display_name,owner.assignee_name) AS "assigneeName",owner.updated_at AS "assignedAt"
+      ,owner.assignee_id AS "assigneeId",COALESCE(agent.display_name,owner.assignee_name) AS "assigneeName",owner.state AS "assignmentState",owner.updated_at AS "assignedAt"
       FROM activity a LEFT JOIN openwa.conversation_assignments owner ON owner.session_id=$1 AND owner.chat_id=a."chatId" LEFT JOIN openwa.operator_users agent ON agent.id=owner.assignee_id
       WHERE a."chatId" NOT LIKE '%@g.us' AND a."chatId" NOT LIKE '%@broadcast' AND a."chatId" NOT LIKE '%@newsletter'`,
       [session],
@@ -628,6 +636,8 @@ export class ContactProfileService implements OnModuleInit {
     void this.webhooks?.dispatch(session, event, data).catch(() => undefined);
   }
   async onModuleInit() {
+    // Existing assignments stay active; only future explicit forwards enter the waiting queue.
+    await this.db.query("ALTER TABLE openwa.conversation_assignments ADD COLUMN IF NOT EXISTS state varchar(16) NOT NULL DEFAULT 'active'");
     await this.db.query(
       'CREATE TABLE IF NOT EXISTS openwa.contact_profiles (session_id varchar(255) NOT NULL,chat_id varchar(255) NOT NULL,data jsonb NOT NULL,revision integer NOT NULL DEFAULT 1,updated_at timestamptz NOT NULL DEFAULT NOW(),PRIMARY KEY(session_id,chat_id))',
     );
@@ -660,7 +670,7 @@ export class ContactProfileService implements OnModuleInit {
           AND LOWER(SPLIT_PART(BTRIM(COALESCE(c.assignee_name,'')),' ',1))=ANY($2::text[])
         ORDER BY p.session_id,p.chat_id,c.closed_at DESC
       ) latest ON CONFLICT DO NOTHING`,
-      [completedServiceTag, Array.from(completedServiceAgents)],
+      [completedServiceTag, Array.from(legacyCompletedServiceAgents)],
     );
     await this.db.query(
       `UPDATE openwa.contact_profiles p SET data=jsonb_set(
@@ -883,7 +893,7 @@ export class ContactProfileService implements OnModuleInit {
         );
       if (cleaned.status === 'closed' && current?.data?.status !== 'closed') {
         const [owner] = await db.query(
-          'SELECT assignee_id,assignee_name,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2',
+          'SELECT assignee_id,assignee_name,state,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2',
           [session, chat],
         );
         await this.recordAssignedCompletion(db, session, chat, owner);

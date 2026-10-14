@@ -2,7 +2,7 @@ import { Body, ConflictException, Controller, Delete, Get, Param, Put, Req, UseG
 import { OperatorWriteGuard } from '../operator-auth/operator-write.guard';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Repository } from 'typeorm';
 import { RequireRole, SessionScoped } from '../auth/decorators/auth.decorators';
 import { ApiKeyRole } from '../auth/entities/api-key.entity';
@@ -18,6 +18,9 @@ class AssignConversationDto {
   @IsNotEmpty()
   @MaxLength(36)
   assigneeId!: string;
+  @IsOptional()
+  @IsIn(['active', 'forwarded'])
+  state?: 'active' | 'forwarded';
 }
 
 @ApiTags('conversation assignments')
@@ -31,7 +34,7 @@ export class ConversationAssignmentController {
   @Get('assignments')
   async listAssignments(@Param('sessionId') sessionId: string) {
     return this.sessions.query(
-      'SELECT a.chat_id AS "chatId", COALESCE(u.display_name, a.assignee_name) AS "assigneeName", a.assignee_id AS "assigneeId", a.updated_at AS "updatedAt" FROM openwa.conversation_assignments a LEFT JOIN openwa.operator_users u ON u.id = a.assignee_id WHERE a.session_id = $1',
+      'SELECT a.chat_id AS "chatId", COALESCE(u.display_name, a.assignee_name) AS "assigneeName", a.assignee_id AS "assigneeId", a.state, a.updated_at AS "updatedAt" FROM openwa.conversation_assignments a LEFT JOIN openwa.operator_users u ON u.id = a.assignee_id WHERE a.session_id = $1',
       [sessionId],
     );
   }
@@ -42,7 +45,7 @@ export class ConversationAssignmentController {
   @ApiParam({ name: 'chatId' })
   async getAssignment(@Param('sessionId') sessionId: string, @Param('chatId') chatId: string) {
     const rows = await this.sessions.query(
-      'SELECT assignee_name AS "assigneeName", assignee_id AS "assigneeId", updated_at AS "updatedAt" FROM openwa.conversation_assignments WHERE session_id = $1 AND chat_id = $2',
+      'SELECT assignee_name AS "assigneeName", assignee_id AS "assigneeId", state, updated_at AS "updatedAt" FROM openwa.conversation_assignments WHERE session_id = $1 AND chat_id = $2',
       [sessionId, chatId],
     );
     return rows[0] ?? null;
@@ -57,18 +60,20 @@ export class ConversationAssignmentController {
     @Req() request: { atendeOperator?: { id: string; displayName: string } },
   ) {
     const assigneeName = dto.assigneeName.trim();
+    const state = dto.state || 'active';
     const assignment=await this.sessions.manager.transaction(async db => {
     await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[JSON.stringify([sessionId,chatId])]);
     const [profile]=await db.query('SELECT data FROM openwa.contact_profiles WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId]);
     let reopened=false,profileData=profile?.data;
     if (profile?.data?.status==='closed') {
-      profileData={...profile.data,status:'open',serviceType:'remote',closedAt:undefined,queueOpenedAt:undefined};
+      profileData={...profile.data,status:'open',serviceType:'remote',closedAt:undefined,
+        queueOpenedAt:state==='forwarded'?Math.floor(Date.now()/1000):undefined};
       await db.query('UPDATE openwa.contact_profiles SET data=$3,revision=revision+1,updated_at=NOW() WHERE session_id=$1 AND chat_id=$2',[sessionId,chatId,JSON.stringify(profileData)]);
       reopened=true;
     }
     const rows = await db.query(
-      'INSERT INTO openwa.conversation_assignments (session_id, chat_id, assignee_name, assignee_id, updated_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (session_id, chat_id) DO UPDATE SET assignee_name = EXCLUDED.assignee_name, updated_at = CASE WHEN openwa.conversation_assignments.assignee_id IS DISTINCT FROM EXCLUDED.assignee_id THEN NOW() ELSE openwa.conversation_assignments.updated_at END, assignee_id = EXCLUDED.assignee_id RETURNING assignee_name AS "assigneeName", assignee_id AS "assigneeId", updated_at AS "updatedAt"',
-      [sessionId, chatId, assigneeName, dto.assigneeId.trim()],
+      'INSERT INTO openwa.conversation_assignments (session_id, chat_id, assignee_name, assignee_id, state, updated_at) VALUES ($1, $2, $3, $4, $5, NOW()) ON CONFLICT (session_id, chat_id) DO UPDATE SET assignee_name = EXCLUDED.assignee_name, updated_at = CASE WHEN openwa.conversation_assignments.assignee_id IS DISTINCT FROM EXCLUDED.assignee_id OR openwa.conversation_assignments.state IS DISTINCT FROM EXCLUDED.state THEN NOW() ELSE openwa.conversation_assignments.updated_at END, assignee_id = EXCLUDED.assignee_id, state = EXCLUDED.state RETURNING assignee_name AS "assigneeName", assignee_id AS "assigneeId", state, updated_at AS "updatedAt"',
+      [sessionId, chatId, assigneeName, dto.assigneeId.trim(), state],
     );
     return {...rows[0],reopened,profileData};
     });
@@ -76,6 +81,7 @@ export class ConversationAssignmentController {
       chatId,
       assigneeId:assignment.assigneeId,
       assigneeName:assignment.assigneeName,
+      state:assignment.state,
       assignedById:request.atendeOperator?.id,
       assignedByName:request.atendeOperator?.displayName,
       updatedAt:assignment.updatedAt,

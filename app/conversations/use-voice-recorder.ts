@@ -1,4 +1,5 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { voiceRecorderErrorMessage } from "./voice-recorder-errors";
 
 export function useVoiceRecorder({
   onVoice,
@@ -15,6 +16,8 @@ export function useVoiceRecorder({
 
   async function startRecording() {
     try {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia)
+        throw new Error("Microphone requires a secure context");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       recorderRef.current = recorder;
@@ -36,8 +39,9 @@ export function useVoiceRecorder({
       recorder.start();
       setRecording(true);
       setNotice("Gravando áudio.");
-    } catch {
-      setNotice("Permita o uso do microfone para gravar um áudio.");
+    } catch (error) {
+      setNotice(voiceRecorderErrorMessage(error, window.isSecureContext,
+        Boolean(navigator.mediaDevices?.getUserMedia)));
     }
   }
 

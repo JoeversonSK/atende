@@ -69,17 +69,30 @@ export function useConversationSync({
       records: data, overview: meta, pictures: profilePicturesRef.current, readSnapshot,
       readVersions: readVersionsRef.current, pendingReads: pendingReadsRef.current,
     });
-    let next = buildSyncedChats(syncOptions());
-    if (live) {
-      const missing = next.filter(chat => !profilePicturesRef.current.has(chat.id)).slice(0, 50);
-      const pictures = await fetchProfilePictures(active, missing.map(chat => chat.id));
-      if (pictures) {
-        for (const chat of missing) profilePicturesRef.current.set(chat.id, pictures[chat.id] || null);
-        next = buildSyncedChats(syncOptions());
-      }
-    }
+    const next = buildSyncedChats(syncOptions());
     setChats(next);
     setSelected(current => current ? next.find(chat => chat.id === current.id) || current : null);
+    // Avatars are cosmetic. Never hold the conversation list, assignments or the next refresh
+    // behind dozens of WhatsApp Web page evaluations, especially with several operators online.
+    if (live) {
+      const missing = next.filter(chat => !profilePicturesRef.current.has(chat.id)).slice(0, 20);
+      for (const chat of missing) profilePicturesRef.current.set(chat.id, null);
+      if (missing.length) void fetchProfilePictures(active, missing.map(chat => chat.id))
+        .then(pictures => {
+          if (!pictures) {
+            for (const chat of missing) profilePicturesRef.current.delete(chat.id);
+            return;
+          }
+          for (const chat of missing) profilePicturesRef.current.set(chat.id, pictures[chat.id] || null);
+          if (generation !== refreshGenerationRef.current) return;
+          setChats(current => current.map(chat => ({
+            ...chat, avatar: profilePicturesRef.current.get(chat.id) || chat.avatar,
+          })));
+        })
+        .catch(() => {
+          for (const chat of missing) profilePicturesRef.current.delete(chat.id);
+        });
+    }
     const rows = await listAssignments(active);
     if (rows) {
       if (generation !== refreshGenerationRef.current) return;

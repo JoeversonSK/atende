@@ -82,7 +82,7 @@ describe('ContactProfileService flow poll continuation', () => {
     );
   });
 
-  it.each(['Wesley - Coordenador de Suporte', 'Joeverson', 'Thiago', 'Crislainy', 'Gabryel - Analista de Suporte'])(
+  it.each(['Wesley - Coordenador de Suporte', 'Joeverson', 'Thiago', 'Crislainy', 'Gabryel - Analista de Suporte', 'Nova atendente'])(
     'adds a private completion tag for the assigned target agent: %s',
     async assigneeName => {
       const query = jest
@@ -112,6 +112,26 @@ describe('ContactProfileService flow poll continuation', () => {
       expect(result.data.tags).toEqual(['Cliente', 'Lançar atendimento']);
     },
   );
+
+  it('não credita conclusão nem etiqueta quando o chamado ainda está apenas encaminhado', async () => {
+    const query = jest.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('SELECT data,revision FROM openwa.contact_profiles'))
+        return [{ data: { status: 'open', tags: [] }, revision: 2 }];
+      if (sql.includes('SELECT assignee_id,assignee_name,state,updated_at'))
+        return [{ assignee_id: 'agent-2', assignee_name: 'Bia', state: 'forwarded', updated_at: new Date() }];
+      if (sql.includes('RETURNING data,revision'))
+        return [{ data: JSON.parse(String(params?.[2])), revision: 3 }];
+      return [];
+    });
+    const auth = { requirePermission: jest.fn().mockResolvedValue({ id: 'agent-1' }) };
+    const service = new ContactProfileService({ transaction: async callback => callback({ query }) } as never,
+      auth as never, {} as never);
+
+    await service.close('token', 'session-1', 'client@c.us');
+
+    expect(query.mock.calls.some(([sql]) => sql.includes('INSERT INTO openwa.support_completions'))).toBe(false);
+    expect(query.mock.calls.some(([sql]) => sql.includes('INSERT INTO openwa.contact_operator_tags'))).toBe(false);
+  });
 
   it('does not show one agent completion tag to another agent', async () => {
     const query = jest
@@ -197,12 +217,13 @@ describe('ContactProfileService flow poll continuation', () => {
     expect(query.mock.calls.some(([sql]) => sql.includes('INSERT INTO openwa.support_completions'))).toBe(false);
   });
 
-  it('does not add the completion tag for another assigned agent', async () => {
+  it('adds the completion tag to the assigned agent even when another operator closes', async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ data: { status: 'open', tags: ['Cliente'] }, revision: 2 }])
       .mockResolvedValueOnce([{ assignee_id: 'agent-2', assignee_name: 'Outro atendente', updated_at: new Date() }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ data: { status: 'closed', tags: ['Cliente'] }, revision: 3 }])
@@ -213,7 +234,10 @@ describe('ContactProfileService flow poll continuation', () => {
 
     await service.close('token', 'session-1', '5511999999999@c.us');
 
-    const savedData = JSON.parse(query.mock.calls[5][1][2]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('contact_operator_tags'), [
+      'session-1', '5511999999999@c.us', 'agent-2', 'Lançar atendimento',
+    ]);
+    const savedData = JSON.parse(query.mock.calls[6][1][2]);
     expect(savedData.tags).toEqual(['Cliente']);
   });
 });

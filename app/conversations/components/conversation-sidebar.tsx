@@ -5,7 +5,7 @@ import { ArrowLeft, Check, ChevronRight, Filter, MessageCircle, Search, UserRoun
 import { isGroupChat, type Chat, type ConversationFilter } from "../../conversation-model";
 import { ContactAvatar } from "./contact-avatar";
 
-type Assignment = { assigneeName: string; assigneeId?: string; updatedAt?: string };
+type Assignment = { assigneeName: string; assigneeId?: string; state?: "active" | "forwarded"; updatedAt?: string };
 
 export type ConversationSidebarProps = {
   search: string;
@@ -91,8 +91,8 @@ export function ConversationSidebar({
           <span><b>{chat.name}</b><time className={chat.unread ? "unread-time" : ""}>{chat.time}</time></span>
           <span><i>{chat.last}</i>
             {!isGroupChat(chat) && assignments[chat.id] && <span className="wa-owner-marker"
-              title={`Atribuído para ${assignments[chat.id].assigneeName}`}
-              aria-label={`Atribuído para ${assignments[chat.id].assigneeName}`}>
+              title={`${assignments[chat.id].state === "forwarded" ? "Encaminhado" : "Em atendimento"} por ${assignments[chat.id].assigneeName}`}
+              aria-label={`${assignments[chat.id].state === "forwarded" ? "Encaminhado" : "Em atendimento"} por ${assignments[chat.id].assigneeName}`}>
               <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <circle cx="12" cy="7" r="4" /><path d="M4 21v-3a8 8 0 0 1 16 0v3Z" />
               </svg>
@@ -100,7 +100,8 @@ export function ConversationSidebar({
             {chat.unread > 0 && <em>{chat.unread > 99 ? "99+" : chat.unread}</em>}
           </span>
           <span className={`chat-owner-label ${!isGroupChat(chat) && assignments[chat.id] ? "assigned" : ""}`}>
-            <UserRound size={11} />{isGroupChat(chat) ? "Grupo do WhatsApp" : assignments[chat.id]?.assigneeName || "Sem responsável"}
+            <UserRound size={11} />{isGroupChat(chat) ? "Grupo do WhatsApp" : assignments[chat.id]?.state === "forwarded"
+              ? `Encaminhado para ${assignments[chat.id].assigneeName}` : assignments[chat.id]?.assigneeName || "Sem responsável"}
           </span>
         </span>
       </button>) : <div className="wa-list-empty"><MessageCircle size={28} />

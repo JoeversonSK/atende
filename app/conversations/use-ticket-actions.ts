@@ -45,10 +45,12 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
     if (isGroupChat(selected)) return;
     setSavingAssignment(true);
     try {
-      const owner = await assignConversation(config, selected.id, operator.displayName, targetId || operator.id);
+      const forwarding = Boolean(targetId);
+      const owner = await assignConversation(config, selected.id, operator.displayName,
+        targetId || operator.id, forwarding ? "forwarded" : "active");
       setAssignment(owner);
       setAssignments(current => ({ ...current, [selected.id]: owner }));
-      setNotice("Conversa atribuída com sucesso.");
+      setNotice(forwarding ? "Atendimento encaminhado e mantido na fila de espera." : "Atendimento iniciado com sucesso.");
       if (owner.reopened && owner.profileData) {
         setOverview(current => ({
           ...current,
@@ -57,7 +59,7 @@ export function useTicketActions({ config, selected, operator, selectedRef, prof
         }));
         profileDirtyRef.current = false;
         setProfileReload(value => value + 1);
-        setNotice("Atendimento reaberto e encaminhado com sucesso.");
+        setNotice(forwarding ? "Atendimento reaberto e encaminhado para a fila de espera." : "Atendimento reaberto e iniciado.");
       }
       void refreshChats().catch(() => undefined);
     } catch (error) {

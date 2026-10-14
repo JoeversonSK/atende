@@ -363,12 +363,12 @@ export class ContactImportService {
             `UPDATE openwa.contact_profiles SET data=jsonb_set(data,'{directoryHidden}','true'::jsonb),revision=revision+1,updated_at=NOW()
              WHERE session_id=$1 AND chat_id=$2`, [session, duplicateId],
           );
-          const [sourceOwner] = await db.query('SELECT assignee_id,assignee_name,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, duplicateId]);
+          const [sourceOwner] = await db.query('SELECT assignee_id,assignee_name,state,updated_at FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, duplicateId]);
           if (sourceOwner) {
             await db.query(
-              `INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_id,assignee_name,updated_at)
-               VALUES ($1,$2,$3,$4,$5) ON CONFLICT(session_id,chat_id) DO NOTHING`,
-              [session, chatId, sourceOwner.assignee_id, sourceOwner.assignee_name, sourceOwner.updated_at],
+              `INSERT INTO openwa.conversation_assignments (session_id,chat_id,assignee_id,assignee_name,state,updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT(session_id,chat_id) DO NOTHING`,
+              [session, chatId, sourceOwner.assignee_id, sourceOwner.assignee_name, sourceOwner.state, sourceOwner.updated_at],
             );
             await db.query('DELETE FROM openwa.conversation_assignments WHERE session_id=$1 AND chat_id=$2', [session, duplicateId]);
           }

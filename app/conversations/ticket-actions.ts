@@ -4,6 +4,7 @@ import type { SupportOverview } from "../dashboard-model";
 export type Assignment = {
   assigneeName: string;
   assigneeId?: string;
+  state?: "active" | "forwarded";
   updatedAt?: string;
 };
 
@@ -34,10 +35,11 @@ export async function assignConversation(
   chatId: string,
   assigneeName: string,
   assigneeId: string,
+  state: "active" | "forwarded" = "active",
 ): Promise<AssignedConversation> {
   const response = await request(config, assignmentPath(config, chatId), {
     method: "PUT",
-    body: JSON.stringify({ assigneeName, assigneeId }),
+    body: JSON.stringify({ assigneeName, assigneeId, state }),
   });
   if (!response.ok)
     throw new Error(errorMessage(await response.json().catch(() => null)));

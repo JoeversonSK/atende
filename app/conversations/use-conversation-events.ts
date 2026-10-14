@@ -37,13 +37,18 @@ export function useConversationEvents({
   useEffect(() => {
     if (!operatorToken || !apiKey || !sessionId) return;
     const active: ApiConfig = { baseUrl, apiKey, sessionId };
-    let eventRefreshTimer = 0;
+    let eventChatRefreshTimer = 0;
+    let eventMessageRefreshTimer = 0;
     let hasConnected = false;
     const scheduleEventRefresh = () => {
-      if (eventRefreshTimer) return;
-      eventRefreshTimer = window.setTimeout(() => {
-        eventRefreshTimer = 0;
+      // A burst is broadcast to every open operator screen. Reconcile the full chat list less
+      // often, while keeping the selected conversation responsive to individual messages.
+      if (!eventChatRefreshTimer) eventChatRefreshTimer = window.setTimeout(() => {
+        eventChatRefreshTimer = 0;
         void refreshChatsRef.current(active).catch(() => undefined);
+      }, 3000);
+      if (!eventMessageRefreshTimer) eventMessageRefreshTimer = window.setTimeout(() => {
+        eventMessageRefreshTimer = 0;
         const current = selectedRef.current;
         if (current)
           void refreshMessagesRef.current(current, active).catch(() => undefined);
@@ -103,13 +108,15 @@ export function useConversationEvents({
     };
 
     const notifyAssignment = (data: EventData) => {
+      // Every operator's dashboard needs the forwarded/active queue transition, even when
+      // only the destination operator receives the personal assignment notification.
+      scheduleEventRefresh();
       const currentOperator = operatorRef.current;
       const assigneeId = String(data.assigneeId || "");
       const assignedById = String(data.assignedById || "");
       if (!currentOperator || assigneeId !== currentOperator.id || assignedById === currentOperator.id) return;
       const chatId = String(data.chatId || "");
       if (!chatId) return;
-      scheduleEventRefresh();
       const customer = chatsRef.current.find(chat => chat.id === chatId)?.name || "Novo atendimento";
       const assignedBy = String(data.assignedByName || "outro atendente");
       const body = `Atendimento encaminhado por ${assignedBy}.`;
@@ -147,7 +154,8 @@ export function useConversationEvents({
       setNotice("Não foi possível ouvir os eventos agora; tentando reconectar automaticamente."));
     socketRef.current = socket;
     return () => {
-      window.clearTimeout(eventRefreshTimer);
+      window.clearTimeout(eventChatRefreshTimer);
+      window.clearTimeout(eventMessageRefreshTimer);
       socket.disconnect();
       if (socketRef.current === socket) socketRef.current = null;
     };

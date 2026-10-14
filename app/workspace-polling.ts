@@ -123,7 +123,7 @@ export function useWorkspacePolling(options: WorkspacePollingOptions) {
     ];
     if (apiKey && sessionId) tasks.push({
       id: "reconcile",
-      intervalMs: 15000,
+      intervalMs: 30000,
       run() {
         if (document.visibilityState === "visible") callbacks.current.onReconcile();
       },

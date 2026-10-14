@@ -4,7 +4,7 @@ import {Maximize2,Minimize2} from "lucide-react";
 import {clockDuration,elapsed,type SupportOverview} from "./dashboard-model";
 export {emptyOverview,type SupportOverview} from "./dashboard-model";
 
-type Owner={assigneeId?:string;assigneeName:string;updatedAt?:string};
+type Owner={assigneeId?:string;assigneeName:string;state?:'active'|'forwarded';updatedAt?:string};
 type Props={chats:{id:string;name:string}[];owners:Record<string,Owner>;overview:SupportOverview;onOpen:(id:string)=>void;warning?:string};
 export function TicketDashboard({chats,owners,overview,onOpen,warning}:Props){
  const [now,setNow]=useState(() => Date.now());
@@ -28,13 +28,14 @@ export function TicketDashboard({chats,owners,overview,onOpen,warning}:Props){
   const profiles=new Map(overview.contacts.map(c=>[c.chatId,c.data]));
   const activity=new Map(overview.activity.map(c=>[c.chatId,c]));
   const rows=chats.filter(c=>!/@(g\.us|broadcast|newsletter)$/.test(c.id)).map(c=>{
-    const profile=profiles.get(c.id),a=activity.get(c.id),owner=owners[c.id]||(a?.assigneeId&&a.assigneeName?{assigneeId:a.assigneeId,assigneeName:a.assigneeName,updatedAt:a.assignedAt||undefined}:undefined);
-    return {...c,name:profile?.name||c.name,owner,closed:profile?.status==="closed",type:profile?.serviceType||"remote",priority:profile?.priority||"normal",assignedAt:Date.parse(owner?.updatedAt||""),queueAt:Number(a?.queueSince)*1000,customerAt:Number(a?.outgoing)>Number(a?.incoming)?Number(a?.outgoing)*1000:NaN};
+    const profile=profiles.get(c.id),a=activity.get(c.id),owner=owners[c.id]||(a?.assigneeId&&a.assigneeName?{assigneeId:a.assigneeId,assigneeName:a.assigneeName,state:a.assignmentState||'active',updatedAt:a.assignedAt||undefined}:undefined);
+    const forwarded=owner?.state==='forwarded';
+    return {...c,name:profile?.name||c.name,owner,forwarded,closed:profile?.status==="closed",type:profile?.serviceType||"remote",priority:profile?.priority||"normal",assignedAt:Date.parse(owner?.updatedAt||""),queueAt:Number(a?.queueSince)*1000|| (forwarded ? Date.parse(owner?.updatedAt||"") : 0),customerAt:Number(a?.outgoing)>Number(a?.incoming)?Number(a?.outgoing)*1000:NaN};
   });
   const visibleAgentIds=new Set(overview.agents.map(agent=>agent.id));
-  const active=rows.filter(r=>!r.closed&&r.owner&&r.owner.assigneeId&&visibleAgentIds.has(r.owner.assigneeId));
+  const active=rows.filter(r=>!r.closed&&!r.forwarded&&r.owner&&r.owner.assigneeId&&visibleAgentIds.has(r.owner.assigneeId));
   const onsiteActive=(overview.onsiteActive||[]).filter(v=>visibleAgentIds.has(v.assigneeId));
-  const queue=rows.filter(r=>!r.closed&&!r.owner&&r.queueAt>0&&Number.isFinite(r.queueAt)).sort((a,b)=>a.queueAt-b.queueAt);
+  const queue=rows.filter(r=>!r.closed&&(!r.owner||r.forwarded)&&r.queueAt>0&&Number.isFinite(r.queueAt)).sort((a,b)=>a.queueAt-b.queueAt);
   const completed=(overview.completed||[]).filter(item=>item.assigneeId&&visibleAgentIds.has(item.assigneeId));
   const analysts=new Map(overview.agents.map(a=>[a.id,{id:a.id,name:a.displayName,status:a.activityStatus||"available",note:a.activityNote||"",until:a.activityUntil||null,active:0,count:0,seconds:0}]));
   for(const r of active){const id=r.owner.assigneeId||"";if(analysts.has(id))analysts.get(id)!.active++;}
@@ -62,7 +63,7 @@ export function TicketDashboard({chats,owners,overview,onOpen,warning}:Props){
     <section className="board-stat active-stat"><h2>Em atendimento</h2><div className="board-stat-pair"><div><b>{active.filter(r=>r.type==="remote").length}</b><span>Remotos</span></div><div><b>{active.filter(r=>r.type==="onsite").length+onsiteActive.length}</b><span>Presencial</span></div></div></section>
     <section className="board-stat done-stat"><div><h2>Concluídos</h2><b>{completed.reduce((sum,c)=>sum+c.count,0)}</b><span>Total hoje</span></div><time className="board-clock" aria-label={`Horário de Brasília ${time.join(":")}`}><strong>{time[0]}</strong><strong>{time[1]}</strong></time></section>
    </div>
-   <section className="board-panel queue-panel" aria-labelledby="queue-heading"><h2 id="queue-heading">Fila de espera</h2><div className="board-table-scroll"><table><thead><tr><th>Cliente</th><th>Tempo de espera</th><th>Status</th></tr></thead><tbody>{queue.map(r=>{const waiting=elapsed(r.queueAt,now)??0;return <tr key={r.id}><td><button className="board-contact" title="Abrir conversa e atribuir atendente" onClick={()=>onOpen(r.id)}>{r.name}</button></td><td className="board-numeric">{clockDuration(waiting)}</td><td><span className={`board-queue-state ${waiting>=900?"alert":""}`}>{waiting>=900?"Em alerta":"Aguardando"}</span></td></tr>})}</tbody></table>{!queue.length&&<p className="board-empty">Nenhum cliente na fila!</p>}</div></section>
+   <section className="board-panel queue-panel" aria-labelledby="queue-heading"><h2 id="queue-heading">Fila de espera</h2><div className="board-table-scroll"><table><thead><tr><th>Cliente</th><th>Tempo de espera</th><th>Status</th></tr></thead><tbody>{queue.map(r=>{const waiting=elapsed(r.queueAt,now)??0;return <tr key={r.id}><td><button className="board-contact" title="Abrir conversa e atribuir atendente" onClick={()=>onOpen(r.id)}>{r.name}</button></td><td className="board-numeric">{clockDuration(waiting)}</td><td><span className={`board-queue-state ${r.forwarded?"forwarded":waiting>=900?"alert":""}`}>{r.forwarded?"Encaminhado":waiting>=900?"Em alerta":"Aguardando"}</span>{r.forwarded&&<small className="board-forwarded-to">Para {r.owner?.assigneeName}</small>}</td></tr>})}</tbody></table>{!queue.length&&<p className="board-empty">Nenhum cliente na fila!</p>}</div></section>
    </div>
   </div>
  </section>;

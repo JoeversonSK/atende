@@ -796,6 +796,7 @@ export default function Home() {
           onChooseChat={chooseChat}
         />
         <ConversationPane
+          key={selected?.id || "sem-conversa"}
           selected={selected}
           assignment={assignment}
           connected={connected}

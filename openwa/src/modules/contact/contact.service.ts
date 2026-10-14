@@ -12,6 +12,10 @@ import { isIndividualWid, parseWaId, toNeutralJid } from '../../engine/identity/
 @Injectable()
 export class ContactService {
   private readonly logger = createLogger('ContactService');
+  private readonly pictureCache = new Map<string, { url: string | null; expiresAt: number }>();
+  private readonly pictureLookups = new Map<string, Promise<string | null>>();
+  private activePictureLookups = 0;
+  private readonly pictureWaiters: Array<() => void> = [];
 
   constructor(private readonly engines: EngineRegistry) {}
 
@@ -80,6 +84,61 @@ export class ContactService {
 
   /** Per-id engine-lookup deadline: one hanging id must not hold the whole batch hostage. */
   private static readonly PROFILE_PICTURE_LOOKUP_TIMEOUT_MS = 8000;
+  private static readonly PROFILE_PICTURE_CACHE_MAX = 2000;
+
+  private async acquirePictureSlot(): Promise<void> {
+    if (this.activePictureLookups < 5) {
+      this.activePictureLookups++;
+      return;
+    }
+    await new Promise<void>(resolve => this.pictureWaiters.push(resolve));
+    // The previous holder transfers its slot to this waiter; the count remains at five.
+  }
+
+  private releasePictureSlot(): void {
+    const next = this.pictureWaiters.shift();
+    if (next) next();
+    else this.activePictureLookups--;
+  }
+
+  /** Share avatar lookups across operator browsers instead of evaluating the same ids in Chrome. */
+  private cachedProfilePicture(engine: IWhatsAppEngine, sessionId: string, id: string): Promise<string | null> {
+    const key = `${sessionId}\0${id}`;
+    const cached = this.pictureCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.url);
+    const pending = this.pictureLookups.get(key);
+    if (pending) return pending;
+
+    const lookup = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let ttl = 15_000; // A transport error is not a permanent "no picture" verdict.
+      let url: string | null = null;
+      await this.acquirePictureSlot();
+      try {
+        url = await Promise.race([
+          Promise.resolve().then(() => engine.getProfilePicture(id)),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('profile picture lookup timed out')),
+              ContactService.PROFILE_PICTURE_LOOKUP_TIMEOUT_MS);
+          }),
+        ]);
+        ttl = url ? 5 * 60_000 : 60_000;
+      } catch {
+        // The existing batch contract yields null for an unavailable lookup.
+      } finally {
+        if (timer) clearTimeout(timer);
+        this.releasePictureSlot();
+      }
+      this.pictureCache.delete(key);
+      this.pictureCache.set(key, { url, expiresAt: Date.now() + ttl });
+      while (this.pictureCache.size > ContactService.PROFILE_PICTURE_CACHE_MAX)
+        this.pictureCache.delete(this.pictureCache.keys().next().value!);
+      return url;
+    })();
+    this.pictureLookups.set(key, lookup);
+    void lookup.then(() => this.pictureLookups.delete(key), () => this.pictureLookups.delete(key));
+    return lookup;
+  }
 
   /**
    * Batch-resolve profile picture URLs for a list of contact ids (the dashboard's chat-list avatars
@@ -95,28 +154,8 @@ export class ContactService {
     const CHUNK = 5;
     for (let i = 0; i < capped.length; i += CHUNK) {
       const chunk = capped.slice(i, i + CHUNK);
-      const results = await Promise.all(
-        chunk.map((id): Promise<readonly [string, string | null]> => {
-          // Per-id deadline: a hanging lookup (bad/unreachable id) resolves null instead of
-          // stalling the whole batch; the timer is cleared the moment the engine settles.
-          return new Promise<readonly [string, string | null]>(resolve => {
-            const timer = setTimeout(
-              () => resolve([id, null] as const),
-              ContactService.PROFILE_PICTURE_LOOKUP_TIMEOUT_MS,
-            );
-            engine.getProfilePicture(id).then(
-              url => {
-                clearTimeout(timer);
-                resolve([id, url] as const);
-              },
-              () => {
-                clearTimeout(timer);
-                resolve([id, null] as const);
-              },
-            );
-          });
-        }),
-      );
+      const results = await Promise.all(chunk.map(async (id): Promise<readonly [string, string | null]> =>
+        [id, await this.cachedProfilePicture(engine, sessionId, id)] as const));
       for (const [id, url] of results) {
         pictures[id] = url;
       }

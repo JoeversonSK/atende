@@ -572,16 +572,28 @@ export class WwebjsMessaging {
   async forwardMessage(fromChatId: string, toChatId: string, messageId: string): Promise<MessageResult> {
     this.host.ensureReady();
     try {
-      const chat = await this.client().getChatById(fromChatId);
-      const recent = await chat.fetchMessages({ limit: 100 });
-      // The operator can view up to 2,000 messages in a conversation. Search that same range only
-      // when the quick recent lookup misses, so an older image/audio/file remains forwardable.
+      // A direct lookup avoids materializing up to 2,000 message models in the shared Chrome page
+      // for every forward. Check the source chat so an id from another conversation is never used.
+      let direct: Awaited<ReturnType<Client['getMessageById']>> | null = null;
+      try {
+        const candidate = await this.client().getMessageById(messageId);
+        if (candidate?.id?.remote === fromChatId) direct = candidate;
+      } catch (error) {
+        if (this.host.isPageTransportError(error)) throw error;
+        // Older WhatsApp Web builds may not be able to resolve this id directly.
+      }
+      // Preserve the historical range fallback for alias ids or versions without direct lookup.
       const hasMessageId = (m: { id: { _serialized: string } }) => {
         const id = m.id as { _serialized?: string; $1?: string };
         return (id._serialized ?? id.$1) === messageId;
       };
-      const msgToForward = recent.find(hasMessageId)
-        ?? (await chat.fetchMessages({ limit: 2000 })).find(hasMessageId);
+      let msgToForward = direct;
+      if (!msgToForward) {
+        const chat = await this.client().getChatById(fromChatId);
+        const recent = await chat.fetchMessages({ limit: 100 });
+        msgToForward = recent.find(hasMessageId)
+          ?? (await chat.fetchMessages({ limit: 2000 })).find(hasMessageId) ?? null;
+      }
 
       if (!msgToForward) {
         throw new MessageNotFoundError(messageId);

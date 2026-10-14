@@ -73,6 +73,21 @@ describe('ContactService', () => {
     expect(out).toEqual({ 'a@c.us': 'https://pps/1.jpg', 'b@c.us': null, 'c@c.us': 'https://pps/3.jpg' });
   });
 
+  it('shares avatar lookups across overlapping operator batches and reuses the short cache', async () => {
+    let finish!: (url: string) => void;
+    const getProfilePicture = jest.fn().mockReturnValue(new Promise<string>(resolve => { finish = resolve; }));
+    const service = makeService({ getProfilePicture });
+    const first = service.getProfilePictures('s1', ['a@c.us']);
+    const second = service.getProfilePictures('s1', ['a@c.us']);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(getProfilePicture).toHaveBeenCalledTimes(1);
+    finish('https://pps/a.jpg');
+    await expect(first).resolves.toEqual({ 'a@c.us': 'https://pps/a.jpg' });
+    await expect(second).resolves.toEqual({ 'a@c.us': 'https://pps/a.jpg' });
+    await expect(service.getProfilePictures('s1', ['a@c.us'])).resolves.toEqual({ 'a@c.us': 'https://pps/a.jpg' });
+    expect(getProfilePicture).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores ids beyond the 50-id batch cap', async () => {
     const getProfilePicture = jest.fn().mockResolvedValue(null);
     const ids = Array.from({ length: 60 }, (_, i) => `${i}@c.us`);
@@ -93,6 +108,24 @@ describe('ContactService', () => {
     });
     const ids = Array.from({ length: 12 }, (_, i) => `${i}@c.us`);
     await makeService({ getProfilePicture }).getProfilePictures('s1', ids);
+    expect(maxActive).toBeLessThanOrEqual(5);
+  });
+
+  it('limits Chrome avatar evaluations across simultaneous operator batches', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const getProfilePicture = jest.fn().mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise(r => setImmediate(r));
+      active--;
+      return null;
+    });
+    const service = makeService({ getProfilePicture });
+    await Promise.all([
+      service.getProfilePictures('s1', Array.from({ length: 10 }, (_, i) => `a${i}@c.us`)),
+      service.getProfilePictures('s1', Array.from({ length: 10 }, (_, i) => `b${i}@c.us`)),
+    ]);
     expect(maxActive).toBeLessThanOrEqual(5);
   });
 

@@ -82,14 +82,16 @@ test("atribuição e encerramento preservam os dados retornados pela API", async
   };
   try {
     assert.deepEqual(await readAssignment(config, "cliente@c.us"), { assigneeName: "Ana", assigneeId: "1" });
-    const assigned = await assignConversation(config, "cliente@c.us", "Bia", "2");
+    const assigned = await assignConversation(config, "cliente@c.us", "Bia", "2", "forwarded");
     assert.equal(assigned.reopened, true);
     assert.equal(assigned.profileData.name, "Cliente");
     await removeAssignment(config, "cliente@c.us");
     assert.deepEqual(await closeTicket(config, "cliente@c.us"), { name: "Cliente", status: "closed" });
     assert.deepEqual(calls.map(call => call.method), ["GET", "PUT", "DELETE", "POST"]);
     assert.ok(calls[0].path.endsWith("/conversations/cliente%40c.us/assignment"));
-    assert.deepEqual(calls[1].body, { assigneeName: "Bia", assigneeId: "2" });
+    assert.deepEqual(calls[1].body, { assigneeName: "Bia", assigneeId: "2", state: "forwarded" });
+    await assignConversation(config, "cliente@c.us", "Bia", "2");
+    assert.equal(calls.at(-1).body.state, "active");
   } finally {
     globalThis.fetch = originalFetch;
   }
