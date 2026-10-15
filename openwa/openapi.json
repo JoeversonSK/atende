@@ -10587,6 +10587,29 @@
         ]
       }
     },
+    "/api/operator-auth/contacts/{session}/activity": {
+      "get": {
+        "operationId": "ContactProfileController_dashboardActivity",
+        "parameters": [
+          {
+            "name": "session",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ContactProfile"
+        ]
+      }
+    },
     "/api/operator-auth/contacts/{session}/catalog/tags": {
       "get": {
         "operationId": "ContactProfileController_tags",

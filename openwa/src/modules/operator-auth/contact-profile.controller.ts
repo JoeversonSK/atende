@@ -558,6 +558,31 @@ export class ContactProfileService implements OnModuleInit {
       return true;
     });
   }
+  private visibleDashboardAgents() {
+    return this.db.query(
+      `SELECT id,display_name AS "displayName",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN 'available' ELSE activity_status END AS "activityStatus",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN '' ELSE activity_note END AS "activityNote",
+        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN NULL ELSE activity_until END AS "activityUntil"
+        FROM openwa.operator_users WHERE active=true AND dashboard_visible=true ORDER BY display_name`,
+    );
+  }
+  private activeDashboardVisits(session: string) {
+    return this.db.query(
+      `SELECT v.id,v.user_id AS "assigneeId",u.display_name AS "assigneeName",v.client_name AS "clientName",v.started_at AS "startedAt"
+       FROM openwa.operator_onsite_visits v JOIN openwa.operator_users u ON u.id=v.user_id
+       WHERE v.session_id=$1 AND v.ended_at IS NULL AND u.active=true AND u.dashboard_visible=true ORDER BY v.started_at`, [session],
+    );
+  }
+  async dashboardActivity(token: string, session: string) {
+    await this.auth.me(token);
+    this.identifiers(session, 'activity');
+    const [agents, onsiteActive] = await Promise.all([
+      this.visibleDashboardAgents(), this.activeDashboardVisits(session),
+    ]);
+    const [{ serverNow }] = await this.db.query('SELECT NOW() AS "serverNow"');
+    return { agents, onsiteActive, serverNow };
+  }
   async overview(token: string, session: string) {
     const user = await this.auth.me(token);
     this.identifiers(session, 'overview');
@@ -581,13 +606,7 @@ export class ContactProfileService implements OnModuleInit {
         tags: Array.from(new Set([...this.sharedTags(contact.data), ...(tagsByChat.get(contact.chatId) || [])])),
       };
     }
-    const agents = await this.db.query(
-      `SELECT id,display_name AS "displayName",
-        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN 'available' ELSE activity_status END AS "activityStatus",
-        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN '' ELSE activity_note END AS "activityNote",
-        CASE WHEN activity_until IS NOT NULL AND activity_until<=NOW() THEN NULL ELSE activity_until END AS "activityUntil"
-        FROM openwa.operator_users WHERE active=true AND dashboard_visible=true ORDER BY display_name`,
-    );
+    const agents = await this.visibleDashboardAgents();
     const activity = await this.db.query(
       `WITH activity AS (
       SELECT "chatId",MAX(timestamp) FILTER (WHERE direction='incoming') AS incoming,
@@ -605,11 +624,7 @@ export class ContactProfileService implements OnModuleInit {
       WHERE a."chatId" NOT LIKE '%@g.us' AND a."chatId" NOT LIKE '%@broadcast' AND a."chatId" NOT LIKE '%@newsletter'`,
       [session],
     );
-    const onsiteActive = await this.db.query(
-      `SELECT v.id,v.user_id AS "assigneeId",u.display_name AS "assigneeName",v.client_name AS "clientName",v.started_at AS "startedAt"
-       FROM openwa.operator_onsite_visits v JOIN openwa.operator_users u ON u.id=v.user_id
-       WHERE v.session_id=$1 AND v.ended_at IS NULL AND u.active=true AND u.dashboard_visible=true ORDER BY v.started_at`, [session],
-    );
+    const onsiteActive = await this.activeDashboardVisits(session);
     const completed = await this.db.query(
       `WITH finished AS (
         SELECT assignee_id,assignee_name,duration_seconds,closed_at FROM openwa.support_completions WHERE session_id=$1 AND assignee_id IS NOT NULL
@@ -971,6 +986,9 @@ export class ContactProfileController {
   }
   @Get(':session') overview(@Headers('x-atende-token') token = '', @Param('session') session: string) {
     return this.profiles.overview(token, session);
+  }
+  @Get(':session/activity') dashboardActivity(@Headers('x-atende-token') token = '', @Param('session') session: string) {
+    return this.profiles.dashboardActivity(token, session);
   }
   @Get(':session/catalog/tags') tags(@Headers('x-atende-token') token = '', @Param('session') session: string) {
     return this.profiles.tags(token, session);

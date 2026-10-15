@@ -3,6 +3,13 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TicketDashboard } from "../app/ticket-dashboard.tsx";
+import { serverAlignedNow } from "../app/dashboard-model.ts";
+
+test("relógio da pausa usa o horário do servidor sem depender do relógio local", () => {
+  const serverTime = "2026-10-15T15:00:00.000Z";
+  const end = Date.parse("2026-10-15T15:15:00.000Z");
+  assert.equal(Math.ceil((end - serverAlignedNow(serverTime, 500, 10_500)) / 1000), 890);
+});
 
 test("encaminhado permanece na fila, não conta como ativo e mostra o destino", () => {
   const chatId = "5511999999999@c.us";

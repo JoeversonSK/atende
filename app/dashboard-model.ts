@@ -1,4 +1,8 @@
 export type SupportOverview={contacts:{chatId:string;data:{name?:string;phone?:string;status?:string;serviceType?:string;priority?:string;directoryHidden?:boolean}}[];agents:{id:string;displayName:string;activityStatus?:'available'|'break'|'meeting'|'away'|'custom'|'onsite';activityNote?:string;activityUntil?:string|null}[];activity:{chatId:string;name?:string;incoming:string|null;outgoing:string|null;waitingSince:string|null;queueSince?:string|null;assigneeId?:string|null;assigneeName?:string|null;assignmentState?:'active'|'forwarded'|null;assignedAt?:string|null}[];completed?:{assigneeId:string|null;assigneeName:string;count:number;totalSeconds:string|number}[];onsiteActive?:{id:string;assigneeId:string;assigneeName:string;clientName:string;startedAt:string}[]};
 export const emptyOverview:SupportOverview={contacts:[],agents:[],activity:[],completed:[],onsiteActive:[]};
 export const elapsed=(timestamp:number,now:number)=>timestamp&&Number.isFinite(timestamp)?Math.max(0,Math.floor((now-timestamp)/1000)):null;
+export const serverAlignedNow=(serverNow:string,receivedAt:number,monotonicNow:number)=>{
+  const base=Date.parse(serverNow);
+  return Number.isFinite(base)?base+Math.max(0,monotonicNow-receivedAt):NaN;
+};
 export function clockDuration(seconds:number|null){if(seconds===null)return "—";const n=Math.max(0,Math.floor(seconds));return [Math.floor(n/3600),Math.floor(n%3600/60),n%60].map(v=>String(v).padStart(2,"0")).join(":");}
