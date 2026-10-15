@@ -65,7 +65,7 @@ test("em atendimento mostra só o primeiro nome do analista em conversas e visit
       contacts: [{ chatId, data: { status: "open" } }],
       agents: [
         { id: "agent-2", displayName: "Wesley - Coordenador de Suporte" },
-        { id: "agent-3", displayName: "Fabio - Estagiário" },
+        { id: "agent-3", displayName: "Fabio - Estagiário", activityStatus: "onsite", activityNote: "Cliente presencial" },
       ],
       activity: [], completed: [],
       onsiteActive: [{ id: "visit-1", assigneeId: "agent-3", assigneeName: "Fabio - Estagiário",
@@ -74,7 +74,12 @@ test("em atendimento mostra só o primeiro nome do analista em conversas e visit
     onOpen: () => {},
   }));
   const activeSection = html.slice(html.indexOf('id="active-heading"'), html.indexOf('id="queue-heading"'));
+  const analystSection = html.slice(html.indexOf('id="analyst-heading"'), html.indexOf('id="active-heading"'));
+  assert.match(analystSection, /title="Em cliente"><span class="board-activity-text">Em cliente<\/span>/);
+  assert.doesNotMatch(analystSection, /Em cliente · Cliente presencial/);
   assert.match(activeSection, /<td><strong title="Wesley - Coordenador de Suporte">Wesley<\/strong><\/td>/);
   assert.match(activeSection, /<td><strong title="Fabio - Estagiário">Fabio<\/strong><\/td>/);
+  assert.match(activeSection, /<td>Presencial<\/td>/);
+  assert.doesNotMatch(activeSection, /Presencial externo/);
   assert.doesNotMatch(activeSection, /<strong[^>]*>Wesley - Coordenador de Suporte<\/strong>/);
 });
