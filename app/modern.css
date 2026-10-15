@@ -3535,9 +3535,9 @@ body .active-panel th:nth-child(2) { width: 30%; }
 body .active-panel th:nth-child(3) { width: 17%; }
 body .active-panel th:nth-child(4) { width: 13%; }
 body .active-panel th:nth-child(5) { width: 20%; }
-body .queue-panel th:nth-child(1) { width: 45%; }
-body .queue-panel th:nth-child(2) { width: 25%; }
-body .queue-panel th:nth-child(3) { width: 30%; }
+body .queue-panel th:nth-child(1) { width: 40%; }
+body .queue-panel th:nth-child(2) { width: 28%; }
+body .queue-panel th:nth-child(3) { width: 32%; }
 body .operations-board th {
   font-size: clamp(15px, 1.15cqw, 20px);
   text-transform: uppercase;
@@ -3737,22 +3737,24 @@ body .board-queue-state.alert {
 body .board-queue-state.forwarded {
   background: #173f39;
   color: #a3ead8;
+  white-space: nowrap;
 }
-body .board-forwarded-to {
-  display: block;
-  margin-top: 5px;
-  color: #cbd5d9;
-  font-size: 13px;
-  line-height: 1.3;
+body .board-forwarded-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
 }
-body .board-forwarded-to strong {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+body .board-forwarded-inline .board-queue-state { flex: none; }
+body .board-forwarded-to { flex: none; color: #bfc1c5; }
+body .board-forwarded-name {
+  min-width: 0;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #fff;
-  font-size: clamp(16px, 1.05cqw, 20px);
+  font-size: clamp(15px, 1cqw, 18px);
   font-weight: 700;
 }
 body .board-customer-wait {
@@ -3824,11 +3826,16 @@ body .operations-board button:focus-visible {
     padding-left: 6px;
   }
   body .queue-panel table { font-size: 14px; }
+  body .queue-panel th:nth-child(1) { width: 30%; }
+  body .queue-panel th:nth-child(2) { width: 22%; }
+  body .queue-panel th:nth-child(3) { width: 48%; }
   body .queue-panel .board-queue-state {
     padding: 4px 5px;
     font-size: 11px;
     white-space: nowrap;
   }
+  body .board-forwarded-inline { gap: 4px; }
+  body .board-forwarded-name { font-size: 13px; }
 }
 @media (max-width: 400px) {
   body .queue-panel table { min-width: 370px; }
