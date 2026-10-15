@@ -3461,7 +3461,7 @@ body .board-grid {
   flex: 1;
   min-height: 695px;
   width: 100%;
-  max-width: 1750px;
+  max-width: 1880px;
   margin: 0 auto;
 }
 body .board-column {
@@ -3530,11 +3530,11 @@ body .analyst-panel th:nth-child(2) { width: 25%; }
 body .analyst-panel th:nth-child(3) { width: 15%; }
 body .analyst-panel th:nth-child(4) { width: 20%; }
 body .analyst-panel th:nth-child(5) { width: 22%; }
-body .active-panel th:nth-child(1) { width: 20%; }
-body .active-panel th:nth-child(2) { width: 30%; }
+body .active-panel th:nth-child(1) { width: 18%; }
+body .active-panel th:nth-child(2) { width: 29%; }
 body .active-panel th:nth-child(3) { width: 17%; }
-body .active-panel th:nth-child(4) { width: 13%; }
-body .active-panel th:nth-child(5) { width: 20%; }
+body .active-panel th:nth-child(4) { width: 17%; }
+body .active-panel th:nth-child(5) { width: 19%; }
 body .queue-panel th:nth-child(1) { width: 40%; }
 body .queue-panel th:nth-child(2) { width: 28%; }
 body .queue-panel th:nth-child(3) { width: 32%; }
@@ -3560,6 +3560,11 @@ body .analyst-panel td,
 body .active-panel th,
 body .active-panel td {
   padding: 8px 10px;
+}
+body .active-panel th:nth-child(4),
+body .active-panel td:nth-child(4) {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 body .operations-board td strong {
   font-weight: 650;
