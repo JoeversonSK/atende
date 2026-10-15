@@ -45,4 +45,5 @@ test("após assumir, deixa a fila e aparece em atendimento", () => {
   assert.doesNotMatch(html, /Nenhum atendimento em andamento/);
   assert.match(html, /Nenhum cliente na fila/);
   assert.match(html, /title="Abrir conversa com Cliente de teste e encaminhar atendimento"/);
+  assert.match(html, /title="Prioridade normal">Normal<\/span>/);
 });
