@@ -764,6 +764,7 @@ export default function Home() {
             chats={chats}
             owners={assignments}
             overview={overview}
+            activitySource={{ baseUrl: config.baseUrl, token: operatorToken, sessionId: config.sessionId }}
             onOpen={(id) => {
               const chat = chats.find((c) => c.id === id);
               if (chat) {
